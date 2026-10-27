@@ -1,14 +1,41 @@
 # LMS port on Enigma
 
-Updated 27 October 2026 (Africa/Johannesburg).
+Updated 27 October 2026 (Africa/Johannesburg), after `docs/LOCKED_DECISIONS.md` landed on main at 22:10 (Africa/Johannesburg) in commit `d19f4ea`.
 
-This is the interface the post-origination LMS needs from Enigma, plus the LMS-side session handling that sits on it. Interest, fees, in duplum, payment allocation, and early settlement stay in the calculation engine. The ledger is out of scope.
+This is the interface the post-origination LMS needs from Enigma, plus the LMS-side session handling that sits on it. Calculation, ledger, and servicing rules are not restated here. They live in `docs/LOCKED_DECISIONS.md`, which is the single source of truth. This document does not change those rules.
 
-The port operations are implemented as Python signatures in `src/lms/enigma/`. HTTP paths are still unbound: `eugene-ehlers/enigma` was not readable from this environment, and `UnboundEnigmaPort` raises if something tries to call a sketched URL.
+`src/lms/enigma/` is a **draft Layer 1 sketch**, not production code. HTTP paths are unbound. `UnboundEnigmaPort` raises if something tries to call a sketched URL. Do not extend that sketch until the conflicts in this document are closed in `docs/LOCKED_DECISIONS.md`.
 
-## Locked decisions
+The implementation checklist is `docs/enigma/LAYER1_IMPLEMENTATION_CHECKLIST.md`. It is a draft.
 
-Decisions taken 27 October 2026. The earlier option lists are closed.
+## What the locked file changes in this port
+
+Each row is a consequence for the Enigma port, or an explicit "no port change". No row adds a rule that `docs/LOCKED_DECISIONS.md` does not already contain.
+
+| Locked section | Effect on this port |
+| --- | --- |
+| 1. Value date is 00:00 on the system recognition date | No change to the Enigma session clock. Authority is still the result of the live call. The value date of a posting is an LMS fact. Whether a mandate is judged at 00:00 is not stated. See conflicts. |
+| 2. Initiation fee capitalised or due under section 126 | No port change. The port does not choose capitalisation. |
+| 3. Zero rates, zero fees, campaigns | No port change. The port does not store a campaign rate. |
+| 4. Laybye linked to a loan is one loan, parent/child, not security that would make the loan secured | The sketch code `lms.laybye_security` uses the word "security". That name is not in the locked file. See conflicts. Death, funeral, credit life, and section 124 are not Enigma calls in the locked file. |
+| 5. Day count is the credit provider's choice. Actual/actual is the recommendation for new products. 30/360 stays selectable. Accrual is daily. A 360-day year is not required for Day-1 | No port operation returns a day-count convention. Where the choice is stored is not stated. See conflicts. |
+| 6. One default definition. Leniency and the full-payment threshold are per customer. Unset values fail closed. Example numbers must not be hard-coded as defaults | No Enigma field for `leniency_days` or `full_payment_threshold_percent` is named. The sketch must not supply 4, 5, or 95 as defaults. See conflicts. |
+| 7. In-duplum episodes. Three section 103(5) edges stay unsigned and the clip stays off until counsel confirms | No port change. The port does not turn the clip on. |
+| 8. Section 126 order | No port change. `lms.allocation.run` only asks whether the actor may run allocation. The order is not an Enigma response. |
+| 9. Service-fee pro-rata and VAT | No port change. Rand maxima and the VAT election are not Enigma fields in the locked file. |
+| 10. Interest on a deferred initiation fee is a provider choice. Default in the locked file is no interest. The alternative is permitted. Stored per organisation or per product | The port does not store this choice. "Per organisation or per product" has no table in the locked file. See conflicts. |
+| 11. Rate after the repo rate falls is a provider choice. No platform default. Fail closed until the provider chooses. Stored per organisation or per product | Same storage gap as section 10. The port must not fill a missing choice with option A or option B. |
+| 12. One statement per client, all loans | The sketch action `lms.account.statement.read` is named per account. The locked rule is per client. See conflicts. |
+| 13. External decision engines must be accepted long-term. Instalment choices, restructure, and a further monthly fee are LMS behaviour. "Subsequent" short-term loan is counted per credit-provider organisation | The count key is `organisation_id`. The port does not define the counter. |
+| 14. Weekly, fortnightly, monthly, quarterly, bi-annual, and annual frequencies | No port change. |
+| 15. Enigma owns person identity, organisations, memberships, product enrolment, roles, and mandates. LMS stores only opaque `person_id` and `organisation_id`. LMS does not re-implement person or organisation identity. Fail closed on Enigma timeout or ambiguous status | This is the port boundary. It is repeated under Fixed LMS rules. It conflicts with other sentences in the same locked file and with port decisions 4 and 5 below. See conflicts. |
+| 16. Freeze name, ID number, and service address at booking. Later Enigma changes do not rewrite the concluded agreement | Already the identity-freeze section below. The three fields are the whole freeze. |
+| 17. Round half-up to cents on billing. Disclose the annual equivalent rate. The same rounding rule everywhere it is required. Rounding must not push an instalment above the affordability figure already aligned with the client | No port change. The sketch's ceiling comparison is integer cents and is not a billing round. Section 17 does not say to round the operational ceiling. |
+| 18. Default-administration and collection-cost tariffs fail closed until a tariff row exists | The port does not invent a tariff. A missing row stops the charge. The locked file does not say Enigma holds the tariff. |
+
+## Port decisions recorded in this design
+
+These six points were recorded in this design on 27 October 2026 from the Enigma brief. Points 1, 3, and 6 overlap the locked file. Points 2, 4, and 5 are not sentences in `docs/LOCKED_DECISIONS.md`. They are not deleted here. They are not promoted into that file by this document. The overlap and the absence are in the conflicts list.
 
 ### 1. Staff boarding follows the Academy pattern
 
@@ -67,7 +94,9 @@ Worked example. Thandi is booked at 10:00 Africa/Johannesburg as "Thandi Nkosi",
 
 ## Fixed LMS rules
 
-1. Enigma is the registry for persons, organisations, staff memberships, roles, mandates, and product enrolment. Cognito is the human authenticator behind Enigma.
+These follow `docs/LOCKED_DECISIONS.md` sections 15 and 16. Cognito, the cookie, and the audience check are port mechanics from this design. They are not new locked rules.
+
+1. Enigma is the registry for persons, organisations, memberships, product enrolment, roles, and mandates. LMS stores opaque `person_id` and `organisation_id`. LMS does not re-implement person or organisation identity. The agreement freeze in section 16 of the locked file is the named exception for name, ID number, and service address. Cognito is the human authenticator in this design. The locked file does not name Cognito.
 2. The browser receives an LMS cookie (`HttpOnly`, `Secure`, `SameSite`). The Enigma session reference stays on the server. Production storage encrypts it at rest. The in-memory store in the sketch does not.
 3. A session whose audience is not `lms` does not open an LMS session. The I-DIP audience `product-idip` is the case already seen in a sibling product.
 4. Every request introspects the session. The route declares an action and, except for an organisation switch, a product code. A missing action or product is ambiguous.
@@ -77,6 +106,8 @@ Worked example. Thandi is booked at 10:00 Africa/Johannesburg as "Thandi Nkosi",
 8. Timestamps from Enigma are absolute instants. LMS displays them in Africa/Johannesburg.
 
 ## Who owns which fact
+
+Rows for the NCR number, operational ceilings, the legal-name projection, and the session reference are port decisions in this design. Locked section 15 does not list them. See conflicts C1 and C2. The freeze row is locked section 16.
 
 | Fact | Authority | What LMS keeps |
 | --- | --- | --- |
@@ -342,11 +373,28 @@ Cache rules: session, membership, mandate, and enrolment authorise only inside t
 | `src/lms/enigma/regulatory.py` | Whether an NCR number is required for a communication |
 | `tests/test_enigma_session.py` | Session, freeze, ceiling, and NCR behaviour |
 
-`python3 -m pytest tests/test_enigma_session.py` covers the middleware and the locked rules. There is no UI in this change.
+`python3 -m pytest tests/test_enigma_session.py` covers the draft sketch. It does not certify `docs/LOCKED_DECISIONS.md`. There is no UI in this change.
+
+## Conflicts and technical gaps
+
+Nothing in this section chooses a winner. `docs/LOCKED_DECISIONS.md` is the source of truth. Closing a row means editing that file, not this one.
+
+| # | What is in tension | Why it is unresolved |
+| --- | --- | --- |
+| C1 | Locked section 15 says LMS stores only opaque `person_id` and `organisation_id`. Locked section 16 requires the agreement to keep name, ID number, and service address | Both sentences are locked. This design keeps the freeze because section 16 names those fields. It does not treat section 15's "only" as deleting section 16 |
+| C2 | This design's port decision 4 stores the NCR number on the LMS tenant. Port decision 5 stores operational rand ceilings on the LMS. The session row stores an Enigma session reference. The authority snapshot stores mandate and enrolment ids. A header projection stores legal name | None of those stores are listed in locked section 15. This design does not remove them and does not add them to the locked file |
+| C3 | This design stops a clear `suspended` or `absent` enrolment, including on a read. Locked section 15 fails closed on timeout or ambiguous status | A clear `suspended` is not an ambiguous status. The broader stop is a port decision in this design. The locked file does not say it |
+| C4 | Sketch product code `lms.laybye_security` | Locked section 4 says the linked Laybye is not security that would make the loan secured. The code is a sketch name. This document does not rename it |
+| C5 | Sketch action `lms.account.statement.read` | Locked section 12 is one statement per client for all loans. The action name is per account. This document does not invent a replacement action |
+| C6 | Locked sections 5, 10, and 11 store a provider choice per organisation or per product. Locked section 6 stores leniency and a threshold per customer | The locked file does not say whether those rows are LMS rows keyed by an opaque id, or Enigma attributes. This design does not create the tables |
+| C7 | Locked section 1 fixes the value date at 00:00 on the recognition date | It does not say the Enigma session, the mandate, or Cognito expiry moves to 00:00. The live authority call stays on its own clock until that is written into the locked file |
+| C8 | Locked section 4 names a beneficiary, credit life, funeral benefit, and a section 124 authority | It does not say the beneficiary is an Enigma `person_id`, or that the section 124 authority is an Enigma document. This design does not add those calls |
+| C9 | Port decision 2 (IAM machine exchange) and the staff-list admin role | Not stated in the locked file. Left in this design as port decisions. Not treated as section 15 wording |
+| C10 | Port decision 6 also reads email, mobile, and preferred channel from the live Enigma person at send time | Locked section 16 names only name, ID number, and service address. The preference read is not a locked sentence. This design does not add it to the freeze |
 
 ## Remaining Enigma API details
 
-These are the only items still needed from `STATUS.md`, the architecture docs, `consumer_contract.py`, the identity registry, mandates, and sessions. The six decisions above are not waiting on them.
+These are the unread Enigma wire details from `STATUS.md`, the architecture docs, `consumer_contract.py`, the identity registry, mandates, and sessions. They are separate from conflicts C1–C10. Closing C1–C10 is an edit to `docs/LOCKED_DECISIONS.md`, not a guess at these paths.
 
 1. HTTP paths, how LMS authenticates as a consumer, and the error-code map.
 2. Cognito callback shape. LMS expects a session reference. Confirm whether the callback is that reference or an authorization code to exchange, and the claim that carries audience `lms`.
@@ -361,6 +409,6 @@ These are the only items still needed from `STATUS.md`, the architecture docs, `
 
 ## Out of scope
 
-The calculation engine and the ledger. Statutory interest, fees, in duplum, allocation order, and early-settlement formulae are not in this port. Operational ceilings are authorization limits only.
+Calculation, the ledger, and servicing behaviour are specified in `docs/LOCKED_DECISIONS.md`. This port does not restate them and does not fill a gap in them.
 
-LMS does not register persons, does not register organisations, and does not edit the staff list or machine list.
+LMS does not register persons, does not register organisations, and does not edit the staff list or machine list. Those last two sentences are port decisions in this design. Locked section 15 does not name the staff-list editor.
