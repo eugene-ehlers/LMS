@@ -1,653 +1,448 @@
 # Account, balance and transaction model
 
-Day-1 ledger for a post-origination, white-label loan management service. Identity, organisations, memberships, product enrolment, roles and mandates stay in Enigma. This service stores Enigma identifiers and the financial facts of each agreement.
+Ledger and account structures for the Day-1 LMS. The source of truth for behaviour is [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) (last updated 2026-10-27). This file records how those locks sit on the data. It does not add, soften, or reinterpret a lock.
 
-This document is the implementation design for the ledger and the account. It defines tables and invariants. It does not implement the calculation engine or servicing workflows.
+If a sentence here is not a lock and not a technical gap, it is only a table shape. Technical gaps are section 8. They are unnamed on purpose: the locked file says not to invent a default. The calculation engine and servicing workflows are not implemented.
 
-Locked business decisions are **L1–L9** (decision log 1.2.3 and 1.2.4 are L2). They are fixed in the schema. Statutory caps remain versioned data. Items that still need a business or legal answer before coding the engine are listed in section 10 and are not given a silent default.
-
-Money is integer cents (ZAR). Sub-cent interest is integer micro-cents (1 cent = 1,000,000 micro-cents). No floating point.
-
-Figures cited from the regulations are the text in GN 1080, *Government Gazette* 39379, 6 November 2015, unless a later gazette is loaded into `statutory_parameter`. Checked 27 October 2026 (Africa/Johannesburg).
+Money is integer cents (ZAR) once an amount is billed. Sub-cent working storage is allowed only as an unbilled remainder. See T24.
 
 ---
 
-## 1. Locked decisions
+## 1. What each locked section does to the ledger
 
-### L1. Value date is the system recognition date
+### 1. Value date and day boundary
 
-`value_date` is the Africa/Johannesburg civil date of `recognised_at`, the timestamp at which the LMS commits the event. Allocation, accrual and reversals all use that date. A caller cannot supply a different value date.
+- An originating event’s `value_date` is the system recognition date.
+- The day boundary is 00:00. A loan, settlement or deposit concluded at any time on a calendar day is stored as 00:00 on that `value_date`.
+- A reversal’s `value_date` is the value date the system originally recognised on the reversed event. See T1.
+- A payment whose `value_date` is the default flag date is an input to the morning default check. See T3.
+- The civil timezone that defines “calendar day” and “00:00” is not named. See T29.
+- Several events on one value date are all 00:00. No order among them is locked. See T2.
 
-A reversal is a new transaction recognised on its own date. Its legs match the original amounts with the directions swapped, and `reversal_of` points at the original. The original row stays. History for an earlier value date is not rewritten. A correcting accrual is a new transaction recognised today, with `reason = interest_correction`.
+`recognised_at` is stored as the commit timestamp. It is not an allocation key, except that the originating event’s `value_date` is derived from it.
 
-Same-day order is recognition order (`recognised_at`, then `id`). The daily interest accrual is the last posting of that value date. A payment recognised today is allocated against interest already recognised on earlier value dates. Today's interest is recognised after that payment and is available to payments recognised on later dates.
+### 2. Initiation fee
 
-A settlement transaction is the exception required by section 125(2)(b): on the settlement's recognition date the engine accrues that day's interest first, then allocates the settlement payment.
-
-### L2. Initiation fee (decisions 1.2.3 and 1.2.4)
-
-`initiation_treatment` is `capitalised` or `separate_fee`.
-
-| Treatment | Decision | Ledger effect | Section 126 tier |
-| --- | --- | --- | --- |
-| `capitalised` | 1.2.3 | The fee is debited to `principal` on the disbursement value date. `capitalised_initiation_cents` stores the amount for disclosure and the cap test. The `initiation_fee` component stays zero. | Part of the principal debt. Allocated third. |
-| `separate_fee` | 1.2.4 | Debit `initiation_fee`, credit income, on the disbursement value date. The amount is due on that date. | A due fee. Allocated second, with the other section 101(1) fees. |
-
-The fee amount, whichever treatment is chosen, must be within regulation 42 Table B and regulation 43(3) (15% of the principal debt). A replacement agreement and a supplemental advance still carry a zero initiation fee (section 101(2), regulation 43(2) and 43(4)).
-
-Capitalising the fee on a short-term or unsecured agreement is stored by the schema and blocked at activation until the legal gate in section 10 is loaded. Section 102(1)(a) allows inclusion in the principal debt for an instalment agreement, a mortgage, a secured loan or a lease, where the consumer was offered the chance to pay the fee separately and declined. That offer-and-decline is stored on the agreement when treatment is `capitalised`.
-
-### L3. Zero rates, zero fees and campaigns
-
-A campaign is a discount off the contractual rate or fee. The charged value is `max(0, contractual − discount)`. A result of 0% or R0 is a normal value for the whole term or for any date range inside the term.
-
-The contractual rate is still capped by regulation 42 Table A. The discount cannot take the charged rate below zero, and it cannot be used to book a contractual rate above the cap. Fee campaigns work the same way against the contractual fee, which itself must sit at or under regulation 44 or Table B.
-
-The annuity formula is not used when the charged rate is zero. The instalment principal is the outstanding principal divided by the number of instalments. Daily interest multiplies by the charged rate, so a zero rate yields a zero amount and posts no interest entry. A zero fee posts no fee entry. No code path divides by the rate.
-
-### L4. Laybye linked to a loan
-
-A security lay-by is a child of exactly one parent loan. The parent is a `loan_account`. The child is a `laybye_account` with `purpose = loan_security` and `parent_loan_account_id` set. One open security lay-by per parent.
-
-The lay-by balance is a liability, `consumer_funds_held`. It is the consumer's property (CPA section 62(1)(a) and section 65). It is not a receivable and it is not negative principal.
-
-**Interest base.** Daily interest is calculated on the net principal:
-
-```
-net_principal_cents = max(0, loan.principal_cents − linked.consumer_funds_held_cents)
-```
-
-`principal_cents` includes a capitalised initiation fee. It excludes interest and non-capitalised fees. Unpaid interest is not part of the base, so daily accrual does not compound. When the hold exceeds principal, the base is zero and the day's interest is zero.
-
-The section 103(5) ceiling stays the unpaid principal of the loan, the gross principal, snapshotted when default opens. The hold reduces the interest that accrues. It does not reduce that ceiling until the hold is applied as a payment.
-
-**One service fee.** The parent carries the only service fee for the pair. The child accepts no `service_fee` debit. At most one service-fee levy is posted for the pair in a calendar month. Weekly or other instalment frequencies do not create extra service fees. Section 101(1)(c) allows a monthly or an annual service fee on a credit transaction; the pair still has a single schedule for that fee, on the parent.
-
-**Payments across both.** A payment instruction may name legs to the parent, the child, or both. An unnamed receipt is applied entirely to the parent loan. A lay-by increase is an explicit leg. Section 7 states the order.
-
-**Consolidate or settle.** The client operation `consolidate_settle` is available when `consumer_funds_held >= settlement_value` of the parent. It applies the settlement value to the loan through the section 126 order, refunds any surplus hold to the client, and closes both accounts. Below that threshold the operation is rejected. Ordinary legs still work below the threshold.
-
-**Credit life and funeral.** One policy row on the parent. Premiums that are a cost of credit post once, to the parent's `credit_insurance` component, and never on the child.
-
-| Preset | Proceeds | Linked lay-by | Loan after the event |
-| --- | --- | --- | --- |
-| `credit_life_settles_loan` | Posted to the parent as a payment, section 126 order, capped at the settlement value. Any proceeds above that settlement value are refunded to the estate. | After the proceeds, the hold is applied to any remaining settlement balance, in section 126 order. What remains of the hold is refunded to the estate. | Settled if proceeds plus hold cover the settlement value. Any shortfall stays owing by the estate. |
-| `funeral_to_beneficiary` | Paid to `beneficiary_person_id`. If none is stored, paid to the estate. Nothing is posted to the loan. | Unchanged. It remains the parent's security. | Unchanged by the funeral benefit. The estate may later use `consolidate_settle` when the hold covers the settlement value. |
-
-Death is recognised on the value date of the death instruction. Interest accrues through that date before proceeds are allocated. New disbursements on the parent are rejected once death is recognised.
-
-### L5. Day count
-
-The credit provider chooses `actual_actual` or `thirty_360` on the product. The agreement snapshots the choice. New products default to `actual_actual`.
-
-`actual_actual` uses the Actual/Actual ISDA day count for an annual rate: one calendar day's interest is `net_principal × annual_rate / days_in_the_calendar_year of that day` (365 or 366). A monthly short-term rate uses `net_principal × monthly_rate / days_in_that_calendar_month`.
-
-`thirty_360` uses the US NASD 30/360 day count. For dates `d1` then `d2`:
-
-```
-if d1.day == 31: d1.day = 30
-if d2.day == 31 and d1.day == 30: d2.day = 30
-days = 360*(y2−y1) + 30*(m2−m1) + (d2−d1)
-```
-
-The weight of calendar day T is `us360(disbursement_date, T) − us360(disbursement_date, T−1)`. Annual interest for that day is `net_principal × annual_rate × weight / 360`. Monthly short-term interest is `net_principal × monthly_rate × weight / 30`. A negative weight fails the accrual. European 30E/360 is not a third option.
-
-*Loan Company v NCR* [2025] ZASCA 40 still applies to both conventions. The sum of day-weights charged from disbursement through the earlier of settlement and contractual end is at most the number of calendar days in that span. A weight that would pass the cap is clipped. A 29-day agreement cannot be charged 30 days of a monthly rate.
-
-The day-count convention sizes interest. It does not move instalment due dates. Due dates follow L9.
-
-### L6. Accrual frequency
-
-Accrual is daily on every active loan, including days on which the charged rate is zero (that day posts nothing). There is one interest `accrual_decision` per loan per value date. The decision records the net principal used, the charged rate, the day weight, the micro-cent amount, and the cents posted.
-
-Whole cents are released from the accumulated micro-cents. The fraction stays in `accrual_remainder`. Over the life of the loan, posted interest cents converted back to micro-cents, plus the remainder, equal the sum of the daily computed micro-cents.
-
-The interest component increases on the value date of the accrual. The next day's base does not include that interest component. Regulation 40's "at most once a month" rule is about adding interest into the deferred amount. This model does not do that. The base stays net principal.
-
-### L7. Statements
-
-A statement is one document per client: the pair `(credit_provider_organisation_id, consumer_person_id)`. It lists every loan and every lay-by of that client that was open at any moment in the period, including a child under its parent, with a client total. There is no per-loan statement table.
-
-### L8. Decision engine and late disbursement
-
-`schedule_origin` is `platform_engine` or `external_engine`. A tenant setting `accept_external_schedules` defaults to false, which forces the platform engine. When the setting is true, an external engine may supply the schedule lines and the quoted terms. The LMS still owns daily accrual, balances, allocation and the section 103(5) counter. An external schedule is rejected when it fails the schedule invariants in section 8.
-
-`quote_date` and the disbursement `value_date` are both stored. When disbursement is recognised on the quote date, the quoted schedule is the first active schedule. When disbursement is recognised later, the agreement's `disbursement_adjustment` chooses one of:
-
-| Policy | Behaviour |
+| `initiation_treatment` | Effect |
 | --- | --- |
-| `recalculate_instalment` | Contractual end date stays the quoted end date. Due dates are the quoted due dates that fall after the disbursement value date. If none remain, one instalment falls on the contractual end date. Instalment amounts are recomputed from the actual principal, the charged rate, the day count, and that remaining term. A zero charged rate divides principal by the number of remaining instalments. |
-| `keep_instalment` | The quoted instalment amounts and the contractual end date stay. Interest starts on the disbursement value date, so the interest actually accrued is lower. If payments then clear the balance before the last instalment, the account settles early through the ordinary settlement path. |
+| `capitalised` | Amount is part of `principal`. It is allocated in the principal tier of section 126. A capitalised amount that was capitalised before the default date is inside the in-duplum ceiling. |
+| `separate_fee` | Amount is a due fee. It is allocated in the fees tier of section 126. |
 
-At the contractual end date, under `keep_instalment` only: if the account is not in default and `0 < customer_owes <= residual_write_off_cap_cents`, the LMS posts a `residual_write_off`. If the account is in default, no write-off is posted and the balance stays collectable. If the residual exceeds the cap, no write-off is posted. If the cap is null, no write-off is posted. The cap amount is still an open business number (section 10). The transaction kind and the rule are fixed.
+“The same logic applies to related fee points.” Those points are not listed. See T4. No other fee is given this treatment by this design.
 
-No interest is accrued on a value date before the disbursement value date.
+### 3. Zero rates, zero fees and campaigns
 
-### L9. Payment frequencies
+Store and display the base rate and the campaign discount separately. Charged rate = base rate minus discount, and a campaign may set that result to 0%. The same pattern applies to fees set to R0. A zero rate or a zero fee for the whole term, or for any portion of the term, is valid input. Calculations must not fail on zero.
 
-`payment_frequency` is one of `weekly`, `fortnightly`, `monthly`, `quarterly`, `bi_annual`, `annual`.
+Campaign fields on a concession row: `base_rate` (x %), `discount` (y %), `valid_from`, `valid_to`. Display is “x % with y % deducted”, not a single substituted rate.
 
-The anchor is `first_due_on`. Due date *k* (from zero) is the anchor plus *k* periods, clamped, not chained from the previous clamped date.
+- The discount remains in force through the leniency window.
+- The discount ends on the default flag date. From that date the charged rate is the base rate.
+- A later cure does not restore the discount.
+- Penalty interest may not exceed the contractual interest rate. See T5. This design does not create a rate above the base rate.
 
-| Frequency | Step |
-| --- | --- |
-| `weekly` | 7 calendar days |
-| `fortnightly` | 14 calendar days |
-| `monthly` | 1 calendar month |
-| `quarterly` | 3 calendar months |
-| `bi_annual` | 6 calendar months |
-| `annual` | 12 calendar months |
+Overlapping concessions are not locked. See T35.
 
-Month steps keep the anchor's day of month. When that day does not exist in the target month, the due date is the last day of that month. An anchor of 31 January yields 28 February in a non-leap year, then 31 March, then 30 April.
+### 4. Laybye linked to a loan
 
----
+- A linked lay-by is a child of a parent loan. The contract treats the pair as one loan. It is not modelled as security that would make the loan secured. See T7.
+- A payment instruction can name amounts to the loan and to the lay-by.
+- Interest for the pair uses the net balance: loan principal minus lay-by hold. The locked file states this is evidence that the hold is treated as a payment against the loan rather than a separate savings product. The parent and child balances are still stored separately, because payments are allocated across both and consolidation compares the hold with the settlement balance. See T6.
+- One monthly service fee, levied on the parent. The child has no service-fee posting.
+- The client can consolidate or settle when the lay-by hold is greater than or equal to the settlement balance.
+- Credit life pays the loan first. The lay-by covers any shortfall only when a section 124 authority was signed in life. Surplus goes to the estate when the lay-by is treated as a cash deposit. When the lay-by is structured as insurance, treatment follows whether a beneficiary was named. See T8.
+- A funeral benefit is paid to the named beneficiary. The loan and the lay-by are unchanged.
+- Without a section 124 authority signed in life, death does not apply the lay-by. The lay-by stays with the estate.
+- The arrangement is deposit-then-disburse: the client pays for a period, then the loan is disbursed. For Day-1 this is not deposit-taking under the Banks Act. Behaviour of fees and statements during the payment period is not locked. See T9.
 
-## 2. Statutory rules the locks do not switch off
+### 5. Day count and accrual
 
-These stay hard checks. Parameter rows carry the citation and the effective dates. A missing row for the value date fails the post.
+The provider chooses `actual_actual` or `thirty_360`. New products are recommended to default to `actual_actual`, with `thirty_360` selectable. Accrual is daily. A 360-day year is not a Day-1 requirement; Actual/360 is not added.
 
-Section 101(1) is the closed list of what a consumer can owe: principal, initiation fee, service fee, interest, credit insurance, default administration, collection costs. Section 100 forbids anything else and forbids amounts above the permitted maximum. A campaign may reduce a charge to zero. It may not add a charge the section does not list.
+The arithmetic inside each named convention is not locked. See T28. Daily accrual still runs. Leniency does not pause it and does not reduce it.
 
-Section 126(3) allocation on a loan leg, in order:
+### 6. Default definition
+
+One definition serves in-duplum and collections reporting.
+
+- `leniency_days` is configurable per customer and counts calendar days, including weekends and public holidays.
+- `leniency_days` unset, or `full_payment_threshold_percent` unset, fails closed. Example numbers are not defaults.
+- Automatic default is flagged only on `contractual due date + leniency_days`, and only when the amount received for that due date is below the threshold.
+- The instalment in the threshold test is the original principal slice plus levied charges that share that due date, including the monthly service fee, a non-capitalised initiation fee, and credit life. See T11.
+- Unbilled interest is excluded until it is debited. See T11.
+- How much of a section 126 payment counts as “received for that due date” is not locked. See T10.
+- Credit life is part of the loan instalment used for affordability.
+- The contractual instalment is preferred to stay the same during the term. See also section 13 and T19.
+- Interest continues daily on the outstanding balance through leniency. See T6 for the base.
+
+### 7. In-duplum
+
+- Ceiling = unpaid principal, including any pre-default capitalised initiation fee, at the date of the first default in that episode.
+- Post-default accruals count as charges even when a statement displays them as capitalised. They are not moved into the principal component by that display. See T13.
+- Charges that cause the default do not count toward the cap. Charges that accrue during the episode do.
+- A payment during the episode reduces what is owed and does not reset that episode’s counter.
+- A cure closes the episode.
+- A new default opens a new episode. The new ceiling is the unpaid principal at the start of that default.
+- This is not a single lifetime ceiling.
+- The three section 103(5) edges not decided by *Nedbank v NCR* [2011] ZASCA 35 remain unsigned. The clip stays off until counsel confirms. This design does not name those edges and does not turn the clip on.
+
+### 8. Payment allocation
+
+Section 126 order only:
 
 1. Due or unpaid interest.
-2. Due or unpaid fees and charges. Within this tier, the oldest due date is satisfied first. On the same due date the order is section 101(1)(b), then (c), then (e), then (f), then (g): initiation (when it is a separate fee), service fee, credit insurance, default administration, collection costs.
-3. Principal, which includes a capitalised initiation fee.
+2. Due or unpaid fees or charges.
+3. Principal.
 
-A non-capitalised initiation fee is due from the disbursement value date, so it sits in tier 2 from that date. A capitalised initiation fee sits in tier 3.
+No order inside tier 2 is locked. See T14. A capitalised initiation fee is principal (tier 3). A non-capitalised initiation fee is a fee (tier 2).
 
-Section 125 settlement value is unpaid principal, plus unpaid interest and other fees payable up to the settlement date, plus an early-termination charge only when the agreement is large. The lay-by hold is not subtracted inside that figure. `consolidate_settle` compares the hold with this figure and then pays it.
+### 9. Service fee pro-rata and VAT
 
-Section 103(5), as construed in *National Credit Regulator v Nedbank* [2011] ZASCA 35: section 101(1)(b) to (g) amounts that accrue while the consumer is in default may not, in aggregate, exceed the unpaid principal at the time default occurred. The counter is gross. A payment does not reduce it. Suppressed amounts are an `accrual_decision` with a reason and never a receivable. The episode boundaries (what falls inside the opening day, which charge takes the last rand of room, when a cured default opens a new ceiling) are still open in section 10. The columns for the ceiling and the counter exist so the engine can be coded once those three answers are signed. Until they are signed, the duplum clip is not activated; accruals post in full and each decision is stamped `duplum_policy = unsigned`. That is a deliberate fail-visible state, not a guess at the clip.
+- Pro-rata applies only in the opening month, described as disbursement to first payment due.
+- The stated fraction is inclusive days in the month / actual days in that month. See T15.
+- After the opening month the fee is the full monthly fee, including in the settlement month, subject to the R60 cap.
+- Settlement inside the opening month is not separately stated. See T16.
+- Rand maxima R60, R165 and R1 050 are excluding VAT by default (NCR January 2019 note). The provider may elect inclusive. See T17.
 
-Section 103(1): interest in default uses the same charged rate as the principal. There is no penalty rate.
+### 10. Interest on a deferred initiation fee
 
-Regulation 46 and regulation 47: default administration is the registered-letter tariff plus necessary delivery cost, and only for a letter. Collection costs are the external cost actually incurred, limited to the applicable court or debt-collector tariff. Both reference an external document id.
+Provider choice, stored per organisation or per product.
 
-Juristic consumers stay out of Day-1 booking (section 4 and section 6). `consumer_person_id` is required.
+- Default: no interest on a deferred initiation fee.
+- Alternative: interest permitted.
 
-A zero-cost BNPL or a CPA lay-by that is not security for a loan has a `laybye_account` with a null parent and no loan. CPA regulation 34 caps a cancellation penalty at 1% of the price, and section 62(5) bars the penalty on death, hospitalisation, or missing disclosure. Incidental credit under section 5 stays off unless `incidental_charges_enabled` is set on the product. That flag ships false.
+The alternative’s base is not specified. See T18. The default leaves the deferred initiation fee out of the interest base.
 
----
+### 11. Rate after the repo rate falls
 
-## 3. What is owed
+Provider choice, stored per organisation or per product. No platform default. Unset fails closed.
 
-For a loan:
-
-```
-customer_owes
-  = principal
-  + interest
-  + initiation_fee          -- zero when L2 treatment is capitalised
-  + service_fee
-  + credit_insurance
-  + default_admin
-  + collection_cost
-  − unapplied_credit
-
-net_principal = max(0, principal − linked_laybye.consumer_funds_held)
-
-settlement_value
-  = principal
-  + interest recognised through the settlement value date
-  + fees payable through that date
-  + early_termination_charge    -- only if agreement_size = large
-
-arrears = max(0, fallen_due(value_date) − satisfied(value_date))
-```
-
-`fallen_due` sums schedule portions and fee levies whose due date is on or before the value date, excluding suppressed amounts. `satisfied` sums allocations with `value_date` on or before that date. Arrears are this comparison. They are not a component and they are not a row in the ledger.
-
-`unapplied_credit` is a liability on the loan. It exists only when every receivable component is zero and a payment remainder is left. It is refundable.
-
-The linked lay-by's `consumer_funds_held` is outside `customer_owes`. A client-level amount owed, used on the statement, is the sum of `customer_owes` across the client's loans. Holds are shown beside that sum and are not deducted from it. The statement also shows net principal per linked pair, because that is the interest base.
-
----
-
-## 4. Entity relationship
-
-```mermaid
-erDiagram
-  LOAN_ACCOUNT ||--o| LAYBYE_ACCOUNT : "parent of security child"
-  LOAN_ACCOUNT ||--|{ AGREEMENT_VERSION : snapshots
-  AGREEMENT_VERSION ||--o{ PRICING_CONCESSION : discounts
-  AGREEMENT_VERSION ||--o{ SCHEDULE_VERSION : estimates
-  SCHEDULE_VERSION ||--|{ SCHEDULE_LINE : dates
-  LOAN_ACCOUNT ||--o{ LEDGER_TRANSACTION : posts
-  LAYBYE_ACCOUNT ||--o{ LEDGER_TRANSACTION : posts
-  LEDGER_TRANSACTION ||--|{ LEDGER_ENTRY : "balanced legs"
-  LOAN_ACCOUNT ||--o{ ACCRUAL_DECISION : "one per day"
-  LOAN_ACCOUNT ||--o{ DEFAULT_EPISODE : "gross cap"
-  LOAN_ACCOUNT ||--o| INSURANCE_POLICY : "credit life or funeral"
-  PAYMENT_INSTRUCTION ||--|{ PAYMENT_LEG : "loan, laybye, or both"
-  CLIENT_STATEMENT ||--|{ CLIENT_STATEMENT_ACCOUNT : "every account of the person"
-  PRODUCT_ELECTION ||--o{ AGREEMENT_VERSION : "snapshotted at booking"
-  STATUTORY_PARAMETER ||--o{ ACCRUAL_DECISION : "cap row used"
-```
-
-Enigma ids on the financial rows are `credit_provider_organisation_id`, `consumer_person_id`, `product_enrolment_id`, `mandate_ref`, and optionally `beneficiary_person_id`. The LMS does not store a person or organisation table. Row-level security on every financial table is:
-
-```sql
-using (credit_provider_organisation_id = current_setting('app.organisation_id')::uuid)
-```
-
-Child foreign keys include the organisation id, so a row cannot point at another tenant's account.
-
----
-
-## 5. Table designs
-
-Aurora PostgreSQL. Append-only, enforced by trigger: `agreement_version`, `pricing_concession`, `schedule_version`, `schedule_line`, `ledger_transaction`, `ledger_entry`, `accrual_decision`, `default_episode`, `default_episode_event`, `settlement_quote`, `insurance_policy`, `payment_instruction`, `payment_leg`. Status flags that must change are projected from an append-only event row; the mutable column is a cache of the latest event.
-
-`value_date` on every financial fact:
-
-```sql
-value_date date not null,
-recognised_at timestamptz not null,
-constraint value_date_is_recognition
-  check (value_date = (recognised_at at time zone 'Africa/Johannesburg')::date)
-```
-
-### 5.1 `product_election`
-
-The credit provider's choices for a product. Copied onto `agreement_version` at booking. Later edits do not change booked agreements.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `credit_provider_organisation_id` | uuid | Enigma organisation |
-| `product_code` | text | |
-| `effective_from` | date | Part of the primary key. A later row does not change booked agreements |
-| `agreement_kind` | text | `short_term`, `short_term_secured`, `unsecured_personal`, `layby_cpa`, `bnpl_zero` |
-| `day_count` | text | `actual_actual` (default for new products) or `thirty_360` |
-| `rate_basis` | text | `annual` or `monthly`. Short-term and incidental are `monthly` |
-| `nominal_interest_ppm` | bigint | Contractual rate before any campaign. 5% = 50000. Zero allowed |
-| `initiation_treatment` | text | `capitalised` or `separate_fee` |
-| `initiation_fee_cents` | bigint | Contractual fee before any campaign. Zero allowed |
-| `service_fee_cents` | bigint | Contractual monthly or annual fee. Zero allowed. Levied on the parent only |
-| `service_fee_period` | text | `monthly` or `annual` |
-| `payment_frequency` | text | L9 enum |
-| `disbursement_adjustment` | text | `recalculate_instalment` or `keep_instalment` |
-| `accept_external_schedules` | boolean | Default false |
-| `residual_write_off_cap_cents` | bigint null | Null disables the L8 write-off |
-| `incidental_charges_enabled` | boolean | Default false |
-
-Primary key `(credit_provider_organisation_id, product_code, effective_from)`.
-
-### 5.2 `statutory_parameter`
-
-Unchanged in role. One row per rule per effective interval: interest cap, initiation cap, service-fee cap, default-admin tariff, collection tariff, short-term amount and term thresholds, agreement-size threshold, lay-by penalty cap, and `initiation_capitalisation_permitted` per `agreement_kind`. `formula jsonb`, `citation text not null`, `effective_from`, `effective_to`. Insert fails when `citation` is blank.
-
-### 5.3 `reference_rate_observation`
-
-`rate_code` (`SARB_REPO`), `effective_from`, `ppm`, `source`. An RR-plus accrual on a value date with no row fails.
-
-### 5.4 `loan_account`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | uuid | |
-| `credit_provider_organisation_id` | uuid | Immutable |
-| `consumer_person_id` | uuid | Enigma person. Required |
-| `product_code` | text | |
-| `currency` | char(3) | Check `ZAR` |
-| `status` | text | Cache of the latest `account_event`: `pending`, `active`, `settled`, `written_off`, `cancelled` |
-| `opened_on` | date | Disbursement value date |
-
-No balance columns. Primary key `(credit_provider_organisation_id, id)`.
-
-### 5.5 `laybye_account`
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `id` | uuid | |
-| `credit_provider_organisation_id` | uuid | Same as the parent when linked |
-| `consumer_person_id` | uuid | Same person as the parent when linked |
-| `parent_loan_account_id` | uuid null | Required when `purpose = loan_security`. Null for a standalone CPA lay-by or zero-cost BNPL |
-| `purpose` | text | `loan_security`, `cpa_layby`, `bnpl_price` |
-| `price_cents` | bigint null | CPA or BNPL price. Null for a pure cash security |
-| `penalty_disclosed_cents` | bigint null | Must be ≤ 1% of `price_cents` when set |
-| `anticipated_completion_on` | date null | CPA section 62 |
-| `closed_on` | date null | |
-
-```sql
-create unique index one_open_security_laybye
-  on laybye_account (credit_provider_organisation_id, parent_loan_account_id)
-  where purpose = 'loan_security' and closed_on is null;
-```
-
-A check constraint rejects `purpose = loan_security` when `parent_loan_account_id` is null, and rejects a parent whose organisation id differs.
-
-### 5.6 `agreement_version`
-
-Immutable snapshot. Version 1 is booking. A later version is a section 116/117 change, a supplemental advance, or a late-disbursement adjustment. Partial unique index: one row per loan with `state = active`.
-
-Columns: `loan_account_id`, `version int`, `state`, `agreement_kind`, `agreement_size`, `replaces_loan_account_id`, `product_enrolment_id`, `quotation_ref`, `quote_date`, `day_count`, `rate_basis`, `nominal_interest_ppm`, `initiation_treatment`, `initiation_fee_cents`, `capitalised_initiation_cents`, `initiation_offer_declined boolean`, `service_fee_cents`, `service_fee_period`, `payment_frequency`, `first_due_on`, `contractual_end`, `schedule_origin`, `disbursement_adjustment`, `signed_on`, `s117_deliver_by`, `reason`.
-
-`accrual_frequency` is not a column. The table comment and a check on `accrual_decision` fix it as daily.
-
-### 5.7 `pricing_concession`
-
-A campaign. Append-only.
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `loan_account_id` | uuid | The parent. A concession is never attached to the child |
-| `kind` | text | `interest`, `service_fee`, `initiation_fee` |
-| `valid_from` | date | Inclusive |
-| `valid_to` | date | Exclusive. The range may be the whole term or a portion |
-| `discount_ppm` | bigint null | For `interest`. Charged ppm = `max(0, nominal_interest_ppm − discount_ppm)` |
-| `discount_cents` | bigint null | For a fee. Charged cents = `max(0, contractual_cents − discount_cents)` |
-| `campaign_code` | text | |
-
-An exclusion constraint rejects two concessions of the same kind on the same loan with overlapping `[valid_from, valid_to)`.
-
-### 5.8 `schedule_version` and `schedule_line`
-
-| `schedule_version` column | Notes |
+| Stored value | Behaviour |
 | --- | --- |
-| `origin` | `platform_engine` or `external_engine` |
-| `adjustment` | `none`, `recalculate_instalment`, `keep_instalment` |
-| `quote_date` | |
-| `disbursement_value_date` | |
-| `frequency` | L9 enum |
-| `day_count` | Copied from the agreement |
-| `regular_instalment_cents` | Level instalment. Null when the external schedule is not level |
-| `principal_assumption_cents` | The principal the lines amortise |
+| `contract_rate` | Continue at the contract rate. |
+| `lower_of_contract_and_statutory` | Accrue at the lower of the contract rate and the current statutory maximum, and issue the section 104 notice. |
 
-`schedule_line`: `sequence`, `due_on`, `principal_cents`, `interest_cents`, `service_fee_cents`. Interest on the line is an estimate. Creating the line posts nothing. The sum of `principal_cents` equals `principal_assumption_cents`. Every `due_on` is on or before `contractual_end` and is produced by the L9 step rule from `first_due_on`, except a single balloon created by `recalculate_instalment` when no quoted date remains.
+### 12. Statements
 
-### 5.9 `ledger_transaction` and `ledger_entry`
+One statement per client, listing all of that client’s loans. There is no per-loan statement. Period boundaries are not locked. See T33. Linked lay-bys are part of the parent loan’s picture because the pair is one loan.
 
-```sql
-ledger_transaction (
-  id uuid,
-  credit_provider_organisation_id uuid,
-  loan_account_id uuid null,
-  laybye_account_id uuid null,
-  kind text,
-  value_date date,
-  recognised_at timestamptz,
-  idempotency_key text,
-  correlation_id uuid,
-  reversal_of uuid null,
-  mandate_ref uuid null,
-  external_ref text null,
-  reason text null,
-  primary key (credit_provider_organisation_id, id),
-  unique (credit_provider_organisation_id, idempotency_key)
-)
+### 13. Decision engine, instalments and other fees
 
-ledger_entry (
-  id uuid,
-  transaction_id uuid,
-  credit_provider_organisation_id uuid,
-  account_kind text,             -- loan | laybye | clearing | income | expense
-  account_id uuid,
-  component text,
-  direction text,                -- debit | credit
-  amount_cents bigint,           -- check (amount_cents > 0)
-  primary key (credit_provider_organisation_id, id)
-)
-```
+- `accept_external_schedules` may be false, which forces the platform engine. The LMS must be able to accept an externally supplied schedule when that is turned on.
+- When disbursement is later than the quote date, the stored policy is one of:
+  - `recalculate_instalment`: adjust the instalment from the actual disbursement date and the remaining term.
+  - `keep_instalment`: keep the original instalment; the loan may settle early, or a small residual may be written off at contractual end. Write-off is not required when the account is already in default. “Small” is not quantified. See T31.
+- After a partial prepayment the provider chooses `shorten_term` or `drop_instalment`. See T19.
+- The contractual instalment is preferred to stay the same during the term.
+- Amounts other than interest, initiation, the monthly service fee and credit life (the locked example is certain collection costs) are added as a further monthly fee, fixed or variable. They are not capitalised into the amortisation schedule. See T21.
+- Restructuring creates a new instalment, pricing and term when other costs must be added during the term.
+- A subsequent short-term loan is counted per credit-provider organisation. See T20.
 
-`kind` is one of: `disbursement`, `initiation_fee`, `interest_debit`, `service_fee_debit`, `insurance_debit`, `default_admin_debit`, `collection_cost_debit`, `payment`, `laybye_receipt`, `laybye_refund`, `consolidate_settle`, `insurance_proceeds`, `funeral_payout`, `settlement`, `residual_write_off`, `write_off`, `cpa_penalty`, `reversal`, `interest_correction`.
+### 14. Payment frequencies
 
-A transaction balances: debit cents equal credit cents. At least one of `loan_account_id` and `laybye_account_id` is set. A `service_fee_debit` with a lay-by id and a null loan id is rejected. A `service_fee_debit` whose loan has a linked lay-by is still posted on the loan.
+`weekly`, `fortnightly`, `monthly`, `quarterly`, `bi_annual`, `annual`. The rule that turns an anchor day into the next date, including month-end, is not locked. See T34.
 
-Component codes on a loan receivable: `principal`, `interest`, `initiation_fee`, `service_fee`, `credit_insurance`, `default_admin`, `collection_cost`. Liability codes: `unapplied_credit`, `consumer_funds_held`. Plus `clearing`, `income`, `write_off_expense`.
+### 15. Enigma
 
-### 5.10 `accrual_decision` and `accrual_remainder`
+The LMS stores opaque `person_id` and `organisation_id` only, plus the frozen identity fields in section 16. It does not keep a person or organisation registry. Timeout or an ambiguous Enigma status fails closed. See T22.
 
-One interest decision per `(loan_account_id, value_date)`.
+### 16. Identity freeze
+
+At booking, store the name, ID number and service address returned for that person. Later Enigma changes do not update those three fields on the concluded agreement. See T23.
+
+### 17. Rounding
+
+Billing rounds half-up to the cent. The same rounding rule is used wherever rounding is required. The annual equivalent rate is disclosed. Rounding must not create a compliance breach. The locked example is an instalment rounded up above the affordability figure already aligned with the client. See T24, T25 and T26.
+
+### 18. Default-administration and collection tariffs
+
+No default-administration charge and no collection cost is posted unless a tariff row exists for that value date. Allowable extra costs are added as an additional monthly fee rather than capitalised into the schedule. See T21.
+
+---
+
+## 2. Tables
+
+Aurora PostgreSQL. Amounts that have been billed are `bigint` cents. `ppm` is parts per million (5% = 50000) so a zero rate is a normal zero. Every financial row carries `credit_provider_organisation_id`. Child foreign keys include it. Row-level security uses that id.
+
+Append-only: `agreement_version`, `pricing_concession`, `schedule_version`, `schedule_line`, `ledger_transaction`, `ledger_entry`, `accrual_decision`, `default_episode`, `default_episode_event`, `identity_freeze`, `section_124_authority`. Mutable caches are marked.
+
+### 2.1 `customer_default_terms`
+
+Per customer, as locked. Key: `(credit_provider_organisation_id, consumer_person_id)`.
 
 | Column | Notes |
 | --- | --- |
-| `net_principal_cents` | The L4 base used for this day |
-| `gross_principal_cents` | Stored so the duplum ceiling can be audited beside the base |
-| `charged_ppm` | After the campaign. Zero is valid |
-| `day_weight_ppm` | Actual/actual weight, or the 30/360 weight, scaled so the formula stays in integers |
-| `computed_micro` | Exact daily amount, zero when the charged rate is zero |
-| `posted_cents` | Whole cents released today |
-| `duplum_policy` | `unsigned`, `posted`, or `suppressed` |
-| `ledger_transaction_id` | Null when `posted_cents = 0` |
+| `leniency_days` | integer, null fails closed. Calendar days. Not defaulted |
+| `full_payment_threshold_percent` | numeric, null fails closed. Not defaulted |
 
-`accrual_remainder` is one mutable row per loan: `residual_micro bigint`. It is the only mutable financial amount, and it is a cache of the unposted fraction. Deleting and replaying decisions rebuilds it.
+### 2.2 `provider_election`
 
-### 5.11 `default_episode`
-
-Inserted when arrears move from zero to positive. `opened_on`, `principal_ceiling_cents` (gross unpaid principal, including capitalised initiation, not reduced by the lay-by), `gross_counter_cents` as a rebuildable cache. Closing inserts `default_episode_event (kind = closed)`. The counter cache is unused for clipping while `duplum_policy = unsigned`.
-
-### 5.12 `payment_instruction` and `payment_leg`
-
-The instruction is the inbound fact. Legs are the split across accounts. Both are append-only; posting status is an event.
-
-```sql
-payment_instruction (
-  id uuid,
-  credit_provider_organisation_id uuid,
-  consumer_person_id uuid,
-  amount_cents bigint,
-  currency char(3),
-  value_date date,
-  recognised_at timestamptz,
-  rail_event_id text,
-  unique (credit_provider_organisation_id, rail, rail_event_id)
-)
-
-payment_leg (
-  instruction_id uuid,
-  loan_account_id uuid null,
-  laybye_account_id uuid null,
-  amount_cents bigint,
-  check ((loan_account_id is null) <> (laybye_account_id is null))
-)
-```
-
-The sum of leg amounts equals the instruction amount. Zero legs means the whole amount is one implicit leg to the client's open parent loan. If the client has more than one open loan and no legs, the instruction is rejected rather than split by a guess.
-
-### 5.13 `settlement_quote`
-
-Append-only. `loan_account_id`, `settlement_date`, principal, interest, each fee component, `early_termination_cents`, `total_cents`, `linked_hold_cents`, `consolidate_available boolean` (`linked_hold_cents >= total_cents`). The quote does not post. A later payment allocates against the ledger as it stands at recognition.
-
-### 5.14 `insurance_policy`
+Key: `(credit_provider_organisation_id, product_code null, effective_from)`. A null `product_code` is the organisation row. A product row overrides it where the lock allows organisation or product storage (sections 10 and 11).
 
 | Column | Notes |
 | --- | --- |
-| `loan_account_id` | The parent. Unique while open |
-| `cover_kind` | `credit_life` or `funeral` |
-| `proceeds_preset` | `credit_life_settles_loan` or `funeral_to_beneficiary`. Must match `cover_kind` |
-| `counts_as_credit_cost` | When true, premiums debit `credit_insurance` on the parent |
-| `beneficiary_person_id` | Enigma person. Required for a funeral preset before the policy can activate |
-| `premium_cents` | Zero allowed |
-| `premium_frequency` | L9 enum |
+| `day_count` | `actual_actual` or `thirty_360`. Recommendation recorded for new products: `actual_actual` |
+| `interest_on_deferred_initiation` | boolean. Default false. True selects the permitted alternative |
+| `repo_rate_policy` | `contract_rate` or `lower_of_contract_and_statutory`. Null fails closed |
+| `vat_on_maxima` | `exclusive` (default) or `inclusive` |
+| `prepayment_schedule_policy` | `shorten_term` or `drop_instalment`. Null stays null. See T19 |
+| `disbursement_adjustment` | `recalculate_instalment` or `keep_instalment` |
+| `accept_external_schedules` | boolean. False forces the platform engine |
+| `calendar_zone` | text, null fails closed. See T29. Not a locked geography |
 
-### 5.15 `client_statement` and `client_statement_account`
+### 2.3 `statutory_parameter` and `tariff_row`
 
-| Header | One row per `(credit_provider_organisation_id, consumer_person_id, period_from, period_to)` |
+Parameter rows hold cited caps (interest, initiation, service fee, short-term thresholds, VAT rate when inclusive is elected). `citation` is required. A missing tariff row for default administration or collection costs fails the post. No rand amount is compiled into the service.
+
+### 2.4 `loan_account`
+
+| Column | Notes |
 | --- | --- |
-| Line | `loan_account_id` or `laybye_account_id`, opening and closing component totals, interest accrued in the period, payments in the period |
+| `id` | uuid |
+| `credit_provider_organisation_id` | Enigma organisation. The subsequent-loan count is per this id |
+| `consumer_person_id` | Enigma person |
+| `status` | Cache of `account_event`: `pending`, `active`, `settled`, `written_off`, `cancelled` |
+| `currency` | `ZAR` |
+| `opened_on` | Disbursement value date, null while only the deposit period has occurred |
 
-The header carries `client_owes_closing_cents`, the sum of loan `customer_owes`, and `client_holds_closing_cents`, the sum of lay-by liabilities. Building a statement is a read of the ledger. This design does not define delivery.
+No balance columns. The pair is one loan: there is no secured-loan kind.
 
-### 5.16 `balance_snapshot`
+### 2.5 `laybye_account`
 
-Cache. Primary key `(organisation_id, account_kind, account_id, value_date, component)`. A snapshot is stale, and must not be read, when a transaction for that account exists with `value_date <= snapshot.value_date` and `recognised_at > snapshot.built_at`. The source of truth is the sum of entries with `value_date` on or before the date.
-
----
-
-## 6. How a payment allocates when a lay-by is linked
-
-Recognition order on the value date:
-
-1. Explicit lay-by legs post `laybye_receipt`. Debit clearing, credit `consumer_funds_held`. The loan receivables do not move. Net principal for the end-of-day accrual falls by the receipt.
-2. Loan legs, and any implicit parent leg, post `payment` on the loan. Section 126 order, using amounts already recognised before this transaction. Capitalised initiation is inside principal. A separate initiation fee is a fee.
-3. After the last cash event of the date, one interest accrual runs on the closing net principal and the charged rate for that date.
-
-`consolidate_settle` is not a cash instruction. It is available only when the hold is at least the settlement value. One `correlation_id` covers three balanced transactions: a section 126 payment on the loan funded by a debit to `consumer_funds_held` for the settlement value, a `laybye_refund` of any surplus hold, and the close events. The loan payment inside it follows the same section 126 order.
-
-Credit-life proceeds are a loan payment with `kind = insurance_proceeds`, same section 126 order, capped at the settlement value recognised that day (accrual for that day runs first, as for settlement). The lay-by is then applied to whatever settlement balance remains. Surplus hold and surplus proceeds are refunded to the estate. A funeral payout debits clearing and credits a beneficiary-payable clearing account. It has no loan leg and no lay-by leg.
-
-### Worked allocation
-
-Parent disbursed 1 March. Cash principal R1,000.00. Initiation fee R150.00, treatment `separate_fee`, due 1 March. R150.00 is the regulation 43(3) cap of 15% of that principal; Table B on R1,000.00 is R165.00, so the 15% cap is the one that binds. Child lay-by funded R400.00 on 1 March. Charged rate 5% per month, `actual_actual`, March has 31 days. No campaign. Net principal on 1–14 March is R600.00. A full month of interest on R600.00 at 5% is R30.00. Each day is `R30.00 / 31`.
-
-After 14 days the posted interest is R13.54. The remaining fraction of a cent stays in `accrual_remainder` and is not yet a receivable.
-
-On 15 March a R500.00 instruction is recognised with two legs: R200.00 to the lay-by, R300.00 to the loan.
-
-| Step | Account | Effect |
-| --- | ---: | --- |
-| Lay-by leg R200.00 | Child | `consumer_funds_held` R400.00 → R600.00 |
-| Loan leg, interest | Parent | R13.54 clears the posted interest |
-| Loan leg, fees | Parent | R150.00 clears the initiation fee |
-| Loan leg, principal | Parent | R136.46 reduces principal to R863.54 |
-| End-of-day accrual | Parent | Base is `max(0, 863.54 − 600.00) = R263.54`. The day's interest is `263.54 × 0.05 / 31` |
-
-The service fee, if the contractual fee is R60.00, is levied once on the parent at month-end. The child has no service-fee transaction. A campaign with `discount_ppm = 50000` on this term sets the charged rate to 0. The daily computed amount is 0, no interest row is posted, and four weekly instalments on a R1,000.00 principal are R250.00 each.
-
-### Consolidate
-
-At a later date the parent owes principal R200.00, interest R10.00 and a service fee R60.00. Settlement value R270.00. The child holds R300.00. `consolidate_settle` posts:
-
-| Leg | Amount | Section 126 tier |
-| --- | ---: | --- |
-| Interest | R10.00 | First |
-| Service fee | R60.00 | Second |
-| Principal | R200.00 | Third |
-| Lay-by refund | R30.00 | Surplus hold, returned to the client |
-
-Both balances are zero. The loan is `settled`. The lay-by `closed_on` is that value date.
-
-If the hold were R200.00, the operation would be rejected. The client could still pay the loan by a loan leg, or increase the hold by a lay-by leg.
-
-### Credit life and funeral on these balances
-
-Settlement value R270.00, hold R100.00, credit-life proceeds R150.00.
-
-1. Proceeds allocate interest R10.00, service fee R60.00, principal R80.00. Principal left R120.00.
-2. The hold of R100.00 then allocates to that principal. Principal left R20.00. Hold left R0.00.
-3. The estate owes the remaining R20.00. No funeral-style payment to a beneficiary occurs.
-
-The same balances with a funeral preset and a R10,000.00 benefit: the beneficiary is paid R10,000.00, the loan stays at R270.00, and the hold stays at R100.00.
-
----
-
-## 7. Other posting rules the tables have to support
-
-**Booking.** Resolve organisation, person, enrolment and mandate in Enigma. Snapshot `product_election` into `agreement_version` 1. Reject a null L5, L8 or L9 choice. Reject a contractual rate or fee above the parameter. Allow zero. Post `disbursement` for the cash principal. If treatment is `capitalised` and the legal gate permits it, the principal debit includes `capitalised_initiation_cents`. If treatment is `separate_fee` and the charged fee is above zero, post `initiation_fee`. Open the child lay-by when the product kind is `short_term_secured`.
-
-**Schedule.** Platform origin builds lines from the frequency rule, the day count and the charged rate, including the zero-rate division by instalment count. External origin inserts the supplied lines and then runs the same invariants. Late disbursement applies L8 before the schedule becomes active. A prepayment or a campaign change inserts a new `schedule_version` for the remaining estimates. Past lines and posted entries stay.
-
-**Top-up.** A supplemental advance is a new agreement version and a `disbursement` on the same loan. Initiation fee amount is zero. A replacement is a new loan whose disbursement funds a section 126 payment of the old loan, initiation fee zero. Neither moves interest or fees into principal. A top-up that would take a short-term agreement outside the R8,000 or six-month parameter fails the transaction.
-
-**Restructure.** A new agreement version and a new schedule. No ledger movement unless cash moves. No fee kind exists for it.
-
-**Residual write-off.** Only the L8 `keep_instalment` path, only on the contractual end value date, only when the account is not in default, only within the cap.
-
-**Backdated rail files.** The value date is the recognition date of the file, including when the rail's own timestamp was the previous civil day. Section 126(3) speaks of the date of receipt. L1 is the locked operational rule. Counsel's acceptance of that gap is recorded in section 10; the schema does not carry a second date.
-
----
-
-## 8. Invariants
-
-A posting transaction that would break one of these rolls back. A nightly rebuild reports any breach it finds.
-
-**Scope and identity**
-
-1. Every financial row has `credit_provider_organisation_id`, and every child foreign key includes it.
-2. `value_date` equals the Africa/Johannesburg civil date of `recognised_at`.
-3. A loan has `consumer_person_id` and no juristic consumer.
-4. `currency = ZAR`.
-5. A `loan_security` lay-by has a parent loan in the same organisation, for the same person, and it is the only open security lay-by of that parent.
-
-**Closed list and campaigns**
-
-6. Loan receivable components are only the seven section 101 codes.
-7. Charged interest ppm equals `max(0, nominal_interest_ppm − discount_ppm)` and is ≤ the Table A parameter. Charged fees equal `max(0, contractual − discount)` and are ≤ the fee parameter.
-8. A zero charged rate and a zero charged fee insert no ledger entry with that component.
-9. No formula divides by the charged rate.
-10. `initiation_treatment = capitalised` implies the `initiation_fee` balance is zero and `capitalised_initiation_cents` is included in the principal balance. `separate_fee` implies `capitalised_initiation_cents = 0` and the fee, when non-zero, is an `initiation_fee` balance due from the disbursement value date.
-11. A replacement or a supplemental advance has no initiation amount.
-12. Short-term and unsecured agreements cannot become active with `initiation_treatment = capitalised` unless `initiation_capitalisation_permitted` is true for that kind and value date.
-
-**Net interest and the single fee**
-
-13. Each interest `accrual_decision.net_principal_cents` equals `max(0, gross principal − linked consumer_funds_held)` as at the recognition instant before that accrual, and the accrual is the last financial fact of its value date other than a settlement or insurance-proceeds transaction, which accrues first.
-14. There is at most one interest `accrual_decision` per loan per value date, and none on a lay-by.
-15. The interest base of a day does not include the interest component.
-16. No `service_fee` entry is posted on a lay-by. A parent and its linked child together have at most one `service_fee_debit` in a calendar month.
-17. Credit-insurance premiums post on the parent only.
-
-**Lay-by and allocation**
-
-18. `consumer_funds_held >= 0`. Each loan receivable component is `>= 0`. `unapplied_credit >= 0`, and it is positive only when every receivable component is zero.
-19. A loan payment's cents to principal are zero whenever due interest or due fees remain unpaid after that payment.
-20. A separate initiation fee is allocated in the fee tier. A capitalised initiation fee is allocated in the principal tier.
-21. An instruction with no legs posts to one open parent loan of that client. Zero or several open parent loans reject the instruction.
-22. `consolidate_settle` is inserted only when `consumer_funds_held >= settlement_value` immediately before it, and the loan leg of that correlation equals the settlement value and obeys invariant 19.
-23. A funeral payout has no loan entry and no lay-by entry. A credit-life proceeds entry is a loan payment capped at the settlement value, followed by a lay-by application to any remainder and a refund of what is left to the estate.
-
-**Day count, frequency, disbursement**
-
-24. `day_count` is `actual_actual` or `thirty_360`.
-25. The sum of day-weights from disbursement through the earlier of settlement and contractual end is ≤ the number of calendar days in that span.
-26. No interest `accrual_decision` has a value date before the disbursement value date.
-27. `payment_frequency` is one of the six L9 values, and each schedule due date matches the anchor-plus-period rule.
-28. Schedule principal portions sum to the schedule's principal assumption.
-29. `accept_external_schedules = false` rejects `schedule_origin = external_engine`.
-30. A `residual_write_off` exists only for `keep_instalment`, only on the contractual end value date, only when no default episode is open, and only for an amount ≤ `residual_write_off_cap_cents`. A null cap means the write-off is absent.
-
-**Duplum columns, while the policy remains unsigned**
-
-31. `principal_ceiling_cents` on an episode equals the gross unpaid principal when the episode opened, and no later hold or payment updates that stored ceiling.
-32. While every decision on the loan has `duplum_policy = unsigned`, the clip does not change `posted_cents`. A future signed policy may set `suppressed` only by inserting new decisions, not by updating old ones.
-
-**Ledger mechanics**
-
-33. Debit cents equal credit cents on every transaction.
-34. Updating or deleting an append-only row fails.
-35. A reversal's component amounts equal the original, directions swapped, `reversal_of` set, and its own `value_date` is its own recognition date.
-36. `(organisation, idempotency_key)` is unique.
-37. A client statement header is unique on organisation, person and period. Its lines cover every loan and lay-by of that person open during the period. No statement table is keyed by a single loan.
-
----
-
-## 9. What changed from the unsigned draft
-
-| Earlier item | Now |
+| Column | Notes |
 | --- | --- |
-| Value date was the rail receipt date, with backdated replay | L1. Recognition date. No replay of an earlier value date |
-| Initiation fee kept out of principal for short-term and unsecured | L2. Treatment is an election. Activation of `capitalised` on those kinds waits on the legal gate |
-| Interest base was unpaid principal, hold ignored until applied | L4. Daily interest uses net principal. The duplum ceiling still uses gross principal |
-| Hold application was a general section 124 debit | Living client applies the hold only through `consolidate_settle` once the hold covers the settlement value. Credit life applies it on death as defined in L4 |
-| Day count was "30 or actual" as a regulation quote | L5. Provider chooses `actual_actual` (default) or `thirty_360` |
-| Accrual could be folded on the debit date | L6. Daily |
-| Statements were left to a later design | L7. One statement per client |
-| Schedules were platform-built only | L8. Platform engine forced until the tenant accepts external schedules. Two late-disbursement policies |
-| Frequencies were unspecified | L9. Six frequencies |
+| `parent_loan_account_id` | Required for a linked lay-by |
+| `structure` | `cash_deposit` or `insurance` |
+| `closed_on` | null while open |
+
+One open linked lay-by per parent. Unique index on `(organisation, parent)` where `closed_on` is null.
+
+### 2.6 `section_124_authority`
+
+| Column | Notes |
+| --- | --- |
+| `laybye_account_id` | |
+| `signed_in_life` | boolean. Death may apply the lay-by only when this is true |
+| `evidence_ref` | Opaque reference. What counts as signed is not defined. See T27 |
+
+### 2.7 `identity_freeze`
+
+One row per agreement version, written at booking and never updated.
+
+| Column | Notes |
+| --- | --- |
+| `full_name` | text |
+| `id_number` | text |
+| `service_address` | text |
+
+Missing source values: see T23. These three fields are a snapshot, not an identity service.
+
+### 2.8 `agreement_version`
+
+Immutable terms. Holds `quote_date`, `nominal` base rate ppm, `rate_basis` (`annual` or `monthly`), `initiation_treatment`, `initiation_fee_cents`, `service_fee_cents`, `payment_frequency`, `first_due_on`, `contractual_end`, `schedule_origin` (`platform_engine` or `external_engine`), `disbursement_adjustment`, `product_enrolment_id`, `quotation_ref`, and the elections copied from `provider_election` at booking. `annual_equivalent_rate_ppm` is the disclosed figure. See T26.
+
+### 2.9 `pricing_concession`
+
+`kind` `interest` or `fee`, `base_ppm` or `base_cents`, `discount_ppm` or `discount_cents`, `valid_from`, `valid_to`, `campaign_code`. Charged value is base minus discount, floored at zero only in the sense that a campaign may state a discount that brings the result to zero. A discount larger than the base is not given a rule. See T35.
+
+The concession stays effective through leniency. It is not effective on or after the flag date of an episode. A closed episode does not reactivate it.
+
+### 2.10 `schedule_version` and `schedule_line`
+
+A version records `origin`, `adjustment` (`none`, `recalculate_instalment`, `keep_instalment`, `shorten_term`, `drop_instalment`, `restructure`), `frequency`, and `principal_assumption_cents`.
+
+A line has `due_on`, `principal_slice_cents`, `service_fee_cents`, `initiation_fee_cents`, `credit_life_cents`, `other_monthly_fee_cents`. Interest on a line, if present, is an estimate. `other_monthly_fee_cents` is the further monthly fee from locks 13 and 18. It is not added into `principal_slice_cents`.
+
+Creating a line posts nothing. Due-date generation beyond the six frequency names is T34.
+
+### 2.11 `ledger_transaction` and `ledger_entry`
+
+```text
+ledger_transaction
+  id, organisation_id
+  loan_account_id null
+  laybye_account_id null
+  kind
+  value_date          -- originating event: recognition date; reversal: original value date
+  recognised_at       -- commit timestamp, not the allocation key
+  reversal_of null
+  idempotency_key
+  correlation_id
+  mandate_ref null
+  external_ref null
+
+ledger_entry
+  transaction_id, organisation_id
+  component, direction, amount_cents > 0
+```
+
+`kind`: `disbursement`, `initiation_fee`, `interest_debit`, `service_fee_debit`, `credit_life_debit`, `other_monthly_fee_debit`, `default_admin_debit`, `collection_cost_debit`, `payment`, `laybye_receipt`, `laybye_refund`, `consolidate_settle`, `insurance_proceeds`, `funeral_payout`, `settlement`, `residual_write_off`, `reversal`.
+
+Loan receivable components, matching section 101 and the locks: `principal`, `interest`, `initiation_fee`, `service_fee`, `credit_life`, `other_monthly_fee`, `default_admin`, `collection_cost`. `credit_life` is the section 101(1)(e) cost. `other_monthly_fee` is the locked further monthly fee and is not capitalised into principal. Whether `default_admin` and `collection_cost` are also represented only as `other_monthly_fee` is T21. Until that is answered, both component names exist and nothing is posted to `default_admin` or `collection_cost` without a tariff row, and nothing is posted into `principal` from those charges.
+
+Lay-by component: `consumer_funds_held` (liability). Loan liability: `unapplied_credit`.
+
+A transaction balances. A `service_fee_debit` on a lay-by is rejected.
+
+### 2.12 `accrual_decision`
+
+One row per loan per `value_date`. Columns: `net_principal_cents`, `gross_principal_cents`, `base_ppm`, `discount_ppm`, `charged_ppm`, `day_count`, `computed_unbilled`, `duplum_policy`. While the clip is unsigned, `duplum_policy = unsigned` and the decision does not reduce the computed amount. `computed_unbilled` may be sub-cent. Billing posts cents under lock 17. See T24 and T28.
+
+### 2.13 `default_episode`
+
+Opened only by the section 6 test. Columns: `flag_date`, `due_date`, `leniency_days` (copied), `threshold_percent` (copied), `principal_ceiling_cents`, `gross_counter_cents` (cache, unused for clipping while policy is unsigned). Close is a `default_episode_event` of kind `cured`. The ceiling column is the locked formula, stored for the day the clip is allowed. It does not clip while unsigned.
+
+### 2.14 `payment_instruction` and `payment_leg`
+
+An instruction has an amount, a `value_date` at 00:00 on the recognition date, and optional legs. A leg is either the loan or the lay-by, with an amount. Legs may cover both. The sum of legs equals the instruction. No legs, and exactly one open loan for that client, is the loan. No legs and any other number of open loans fails closed rather than by a split rule (no split rule is locked). See T2 for ordering against other same-day events.
+
+### 2.15 `client_statement`
+
+Unique on `(organisation_id, consumer_person_id, period_from, period_to)`. Lines are the client’s loans (and the linked lay-by balances of those loans). No table is keyed as one statement per loan. See T33.
+
+### 2.16 `balance_snapshot`
+
+Cache of component sums. Not a source of truth. Stale when a later-recognised transaction has a `value_date` on or before the snapshot date, which includes a reversal that reuses an earlier value date.
 
 ---
 
-## 10. Open points before coding the engine
+## 3. Balances the locks define
 
-The tables in section 5 can be migrated with these unresolved. The behaviour each one controls must stay disabled until the answer is loaded. None of them reopen L1–L9.
+```text
+principal            includes a capitalised initiation fee
+initiation_fee       only when treatment is separate_fee
+net_balance          loan principal − laybye hold          (interest base named in lock 4)
+customer_owes        sum of loan receivable components − unapplied_credit
+settlement_balance   the figure compared with the lay-by hold for consolidate/settle
+```
 
-| # | Question | What stays disabled |
-| --- | --- | --- |
-| O1 | May `short_term` and `unsecured_personal` use `initiation_treatment = capitalised`? Section 102(1)(a) lists instalment agreements, mortgages, secured loans and leases. `short_term_secured` may fall inside "secured loan" if counsel classifies it that way. | `initiation_capitalisation_permitted` stays false for a kind, and activation with `capitalised` fails for that kind |
-| O2 | What is `residual_write_off_cap_cents`? | The write-off transaction is never posted. `keep_instalment` still keeps the instalment and still settles early when payments clear the balance |
-| O3 | Is a funeral premium a section 101(1)(e) credit-insurance cost, or a policy outside the credit agreement? | `counts_as_credit_cost` stays false, so no funeral premium is debited to the loan. The payout preset itself is defined |
-| O4 | Does the credit-life lay-by application on death need a section 124 authorisation signed in life, or is the L4 preset enough? | Death processing can be switched on only after this answer. The transaction shapes are already defined |
-| O5 | Section 103(5) episode edges. Which charges on the opening day count toward the gross counter? Which component takes the last rand of room? When a cured default opens a new ceiling? *Nedbank* decides the gross counter and that a payment does not refill it. It does not decide these three edges | `duplum_policy` stays `unsigned` and the clip does not run |
-| O6 | On a settlement before the service-fee levy date, is that month's service fee inside the section 125 total? Regulation 41(2) levies a monthly fee at month-end. Regulation 44(4) pro-rates the opening month and does not mention the closing month | Settlement quotes for a date before the levy date are not issued |
-| O7 | The pro-rata fraction for a service fee in the month the agreement is concluded (regulation 44(4) requires pro rata and does not define the numerator) | A monthly service fee posts only when the conclusion value date is the first of the month, or when the fee is zero |
-| O8 | Counsel acceptance that a rail file recognised on the next civil day is credited on the recognition date (L1), which can differ from the date of receipt in section 126(3) | No schema change. This is a compliance acceptance, not a second date field |
-| O9 | Whether holding the linked lay-by cash is deposit-taking under the Banks Act. The ledger already records a liability either way | `short_term_secured` and any other product that holds cash stay inactive |
+`settlement_balance` is the amount the client must pay to settle. Lock 4 uses it as the consolidate threshold and does not restate its addends. Section 125 of the Act is the statutory composition (unpaid principal, unpaid interest and other fees and charges payable up to the settlement date, and an early-termination charge only on a large agreement). This design does not add a second composition. The opening-month and settlement-month service-fee locks in section 9 are inputs to “fees payable”. See T15 and T16.
+
+Arrears for collections use the same default flag as in-duplum (lock 6). There is no arrears component in the ledger.
+
+The in-duplum ceiling is unpaid principal at the first default in the episode, including pre-default capitalised initiation. It is not reduced by the lay-by hold. The hold reduces the net balance on which interest is calculated. Those are different locked quantities.
 
 ---
 
-## 11. Out of scope for this design
+## 4. Payment when a lay-by is linked
 
-The calculation engine, statement delivery, section 129 notices, origination, debt-review workflow, and Enigma itself are out of scope. The ledger stores `quotation_ref`, `product_enrolment_id`, `mandate_ref`, `s117_deliver_by`, and external letter and cost ids so those workflows can post into these tables later.
+This is the locked order, not a worked example with invented cents.
 
-The model does not post a charge outside section 101, does not keep an arrears component, does not apply the common-law in-duplum rule, does not move arrears into principal on a restructure or a top-up, and does not hard-code a cap.
+1. A lay-by leg increases `consumer_funds_held`. It does not post section 126 tiers on the loan.
+2. A loan leg allocates in section 126 order: due or unpaid interest, then due or unpaid fees, then principal.
+3. `consolidate_settle` is available when `consumer_funds_held >= settlement_balance`. It applies the hold to the loan through that same section 126 order.
+4. Credit-life proceeds pay the loan first, through section 126, up to the settlement balance. The lay-by is applied to a shortfall only when `section_124_authority.signed_in_life` is true. If the lay-by is a `cash_deposit`, surplus after that application goes to the estate. If it is `insurance`, the destination follows whether a beneficiary was named (T8). If `signed_in_life` is false, the lay-by is not applied and stays with the estate.
+5. A funeral payout pays the named beneficiary and posts nothing to the loan or the lay-by.
+
+Same-day ordering against the daily accrual is T2. The threshold test’s use of “amount received for that due date” is T10.
+
+---
+
+## 5. Invariants
+
+These restate locks. A post that would break one rolls back.
+
+1. An originating transaction’s `value_date` is its system recognition date, stored at 00:00 of that calendar day.
+2. A reversal’s `value_date` equals the original transaction’s `value_date`, and the original row remains.
+3. `leniency_days` and `full_payment_threshold_percent` are null or set. A default test with either null fails. No code constant is substituted.
+4. A default episode opens only on `due_date + leniency_days` calendar days, and only when the received amount for that due date is below the threshold. Leniency days include weekends and public holidays.
+5. The discount on a concession is still applied on every value date from `valid_from` through the leniency window, and is not applied on or after the episode `flag_date`. Cure does not turn it back on.
+6. Charged interest after the flag date is the base rate, and no posted interest rate exceeds the contractual rate. See T5 before comparing “contractual” with “base”.
+7. `net_balance` used for a daily interest decision is loan principal minus the linked hold, when that is the base selected for the decision. See T6 before using any wider “outstanding balance”.
+8. A linked pair posts at most one `service_fee_debit` in a calendar month, and only on the parent.
+9. `consolidate_settle` requires `consumer_funds_held >= settlement_balance` immediately before the post.
+10. A death event does not reduce `consumer_funds_held` unless `signed_in_life` is true. A funeral payout does not reduce the loan or the hold.
+11. The in-duplum clip does not change a posted amount while `duplum_policy = unsigned`.
+12. An episode ceiling, once stored, equals unpaid principal at that episode’s first default, including pre-default capitalised initiation, and is not rewritten by later payments.
+13. A payment does not decrease `gross_counter_cents` of an open episode.
+14. Charges that the default test treats as the cause of the default are stored with `counts_toward_duplum = false`.
+15. A cure inserts a close event. A later default inserts a new episode.
+16. Loan allocation of a single loan leg pays due or unpaid interest before fees, and fees before principal.
+17. A capitalised initiation fee has a zero `initiation_fee` balance and a principal balance that includes it. A separate initiation fee has a zero capitalised-initiation amount.
+18. `repo_rate_policy` null fails the accrual. `calendar_zone` null fails value-date derivation.
+19. No `default_admin` or `collection_cost` entry exists without a tariff row covering its value date.
+20. No `other_monthly_fee`, `default_admin`, or `collection_cost` amount is included in `principal_slice_cents` or posted as a principal debit.
+21. A zero charged rate and a zero charged fee do not require a non-zero divisor. The schedule builder’s zero-rate path divides principal by the instalment count only. That divisor is the count, not the rate.
+22. Billing cents are half-up. One rounding implementation is used at every billing site.
+23. `identity_freeze` is insert-only. Enigma updates do not change it.
+24. Enigma timeout or ambiguous status aborts the transaction that needed Enigma.
+25. Subsequent short-term counting, when implemented, groups by `credit_provider_organisation_id` only. It does not group across organisations. See T20 before adding consumer or year.
+26. Debits equal credits on every transaction. Append-only tables reject update and delete. `(organisation, idempotency_key)` is unique.
+27. One statement header per organisation, person and period. It is not unique per loan.
+
+---
+
+## 6. Readings withdrawn from the earlier draft
+
+These were in the previous version of this file and are not locks. They are withdrawn.
+
+| Withdrawn reading | Why it is withdrawn |
+| --- | --- |
+| Reversal receives the recognition date of the reversal itself | Lock 1: the reversal uses the value date originally recognised |
+| Same-day order is recognition timestamp, with accrual last | Lock 1: every event on the day is 00:00. Order is T2 |
+| Intra-fee allocation by due date then section 101 listing order | Lock 8 states only the three tiers. T14 |
+| US NASD 30/360 and Actual/Actual ISDA formulae | Lock 5 names the conventions and does not give the formulae. T28 |
+| Month-end due-date clamp from the anchor | Not locked. T34 |
+| Linked lay-by makes the loan `short_term_secured` | Lock 4: the pair is one loan, not security that makes it secured |
+| Banks Act custody left open for Day-1 | Lock 4: not deposit-taking for Day-1 purposes |
+| Death always applies the lay-by after credit life | Lock 4: not without a section 124 authority signed in life |
+| Surplus lay-by always refunded to the estate | Lock 4: estate if cash deposit; insurance follows whether a beneficiary was named |
+| Service fee excluded from a mid-month settlement | Lock 9: full monthly fee in the settlement month after the opening month |
+| Opening-month pro-rata left unsigned | Lock 9 gives a fraction. Numerator detail remains T15 |
+| Residual write-off cap as a product setting | Lock 13 says “small” and does not define it. T31 |
+| Interest base silently equal to net principal with no outstanding-balance question | Both phrases are locked. T6 |
+| Duplum edge policy left for this file to choose | Lock 7: three edges stay unsigned and the clip stays off |
+| Names fetched from Enigma at statement time | Lock 16: freeze name, ID number and service address at booking |
+
+---
+
+## 7. Act constraints already reflected by the locks
+
+The engine still cannot post a consumer charge outside section 101’s list. Section 126’s three tiers are lock 8. The section 103(5) clip stays off (lock 7). Tariff absence fails closed (lock 18). VAT-exclusive maxima are the default (lock 9). Nothing in this section adds a rule on top of those.
+
+---
+
+## 8. Technical gaps
+
+No default is chosen for any of these.
+
+| Id | Gap |
+| --- | --- |
+| T1 | Lock 1 sets the value date to the system recognition date, and sets a reversal’s value date to the date originally recognised. A reversal committed on a later civil day cannot have both dates. The table stores both `recognised_at` and `value_date`, and copies `value_date` from the original. No further replay rule is added. |
+| T2 | Every event on a calendar day is 00:00. The order of two payments, or of a payment and the daily accrual, or of a settlement and that day’s interest, is not locked. |
+| T3 | A flag-date payment is visible to the morning default check. The lock does not say whether that check runs before later same-day recognitions that carry that flag date. |
+| T4 | “Related fee points” that share the initiation-fee capitalise-or-section-126 treatment are not named. |
+| T5 | “Contractual interest rate” in the penalty cap is not defined as the base rate or the discounted rate. The flag-date rule sets the charged rate to the base rate. No higher penalty rate is stored. |
+| T6 | Interest is “loan principal minus lay-by hold” (lock 4) and also “the outstanding balance” (lock 6). The daily decision cannot pick a wider base than net principal, and cannot ignore the phrase “outstanding balance”. Accrual waits on a lock update if these differ. |
+| T7 | The pair is one loan and is not a secured loan. The NCA category (short-term, unsecured, or other) is not named. |
+| T8 | Insurance-structured lay-by proceeds “follow whether a beneficiary was named.” The destination in each of those two cases is not stated. Cash-deposit surplus to the estate is stated and can be posted. |
+| T9 | The client pays for a period, then the loan is disbursed. Fees, interest and statements during that period are not locked. Whether the parent row must already exist is not locked. |
+| T10 | The default test needs the amount received for a specific due date. Section 126 allocation is by interest, fees and principal, not by due date. No attribution rule is locked. |
+| T11 | The threshold instalment lists principal slice, service fee, non-capitalised initiation and credit life. A further sentence excludes unbilled interest until it is debited. Whether debited interest then joins that instalment is not stated. |
+| T13 | Post-default accruals count toward the cap even if a statement shows them as capitalised. The statement columns for that display are not specified. The ledger does not move those accruals into `principal`. The three unsigned section 103(5) edges stay unnamed. |
+| T14 | No tie-break inside section 126’s fee tier. |
+| T15 | The opening-month numerator is “inclusive days in the month”, in a sentence that also says “disbursement to first payment due”. The day count to use is not pinned down. |
+| T16 | A settlement that falls inside the opening month matches both the opening-month pro-rata rule and the “full fee in the settlement month” rule. |
+| T17 | Inclusive VAT has no locked rate, and no locked rule for whether R60, R165 and R1 050 are grossed up or treated as all-in. Exclusive is the default and can be applied to ex-VAT amounts. Inclusive fails closed until a rate row and a comparison rule exist. |
+| T18 | When interest on a deferred initiation fee is permitted, the lock does not say whether that fee is added to the net-principal base. |
+| T19 | `shorten_term` and `drop_instalment` have no fail-closed rule and no platform default. “Prefer keeping the contractual instalment” is not recorded here as an automatic choice. |
+| T20 | Subsequent short-term loans are counted per credit-provider organisation. Regulation 42 Table A also limits the 3% rate to subsequent loans within a calendar year. The lock does not mention the consumer or the year. The counter is not implemented. |
+| T21 | A further monthly fee is fixed or variable and is not capitalised. The lock’s example is certain collection costs. It does not say to collapse `default_admin` and `collection_cost` into that fee or to keep them as their own section 101 components. Both names exist. Posts into the schedule’s principal slice are rejected either way. |
+| T22 | Fail closed on Enigma timeout or ambiguous status. The timeout duration and the ambiguous statuses are not defined. |
+| T23 | Name, ID number and service address are frozen at booking. The lock does not say whether a missing field aborts booking. |
+| T24 | Half-up to cents is on billing. It does not say that each daily accrual is a billing event. Daily sub-cent storage versus a billed cent is unresolved. |
+| T25 | Half-up must not push an instalment above the affordability figure already aligned with the client. The resolution (block the booking, round down, or something else) is not locked. |
+| T26 | The annual equivalent rate must be disclosed. The conversion from the stored base rate is not locked. |
+| T27 | “Signed in life” has no evidence standard. The ledger stores a boolean and an opaque reference only. |
+| T28 | `actual_actual` and `thirty_360` have no locked day-weight formula. A 360-day year is not required. No formula is coded as if it were standard. |
+| T29 | “00:00” and “calendar day” need a timezone. None is locked. `calendar_zone` null fails closed. |
+| T31 | “Small” residual is not an amount. `residual_write_off` is not posted. Early settlement from `keep_instalment` does not need that amount. |
+| T33 | The client statement has no locked period (calendar month, statement date, or other). |
+| T34 | Next due date after an anchor, including a 31st in a short month, is not locked. |
+| T35 | Two concessions of the same kind overlapping in dates, and a discount larger than the base, are not locked. |
+
+---
+
+## 9. Out of scope
+
+No calculation engine, no morning-check job, no statement delivery, no origination, no Enigma implementation. The draft checklist of structures and signatures is [ledger-implementation-checklist.md](ledger-implementation-checklist.md). That checklist is a draft. It is not a lock.
