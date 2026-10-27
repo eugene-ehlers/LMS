@@ -6,6 +6,13 @@ Do not re-open a locked decision without an explicit change request.
 
 Last updated: 2026-10-27
 
+## Standing instruction for all agents
+
+Before proposing or implementing any calculation, ledger, servicing or configuration behaviour:
+1. Read this document and follow all locked decisions.
+2. If you find a gap, conflict, or uncertainty between this document and the Act, regulations, case law, or another design, raise it explicitly.
+3. Do not invent a default or silently choose a reading. Flag the point so the locked decisions can be updated and all agents can see the change.
+
 ## 1. Value date and day boundary
 
 - System recognition date is the value date for all allocation and reversals.
@@ -51,12 +58,15 @@ Last updated: 2026-10-27
 - “Full payment” threshold is configurable per customer (example: 95 % or more of the instalment received = not a default).
 - Interest continues to be calculated daily on the outstanding balance. Leniency does not pause or reduce interest.
 
-## 7. In-duplum base
+## 7. In-duplum base and episodes
 
-- Unpaid principal (including any pre-default capitalised initiation fee) as at the date of first default.
+- Ceiling = unpaid principal (including any pre-default capitalised initiation fee) as at the date of first default in that episode.
 - Post-default accruals count as charges even if displayed as capitalised on statements.
-- A payment reduces what is owed but does not reset the counter.
-- Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35.
+- A payment during the default reduces what is owed but does not reset the counter for that episode.
+- A cure (account brought out of default) closes the episode.
+- A new default starts a fresh episode with a new ceiling based on the unpaid principal at the start of the new default.
+- This is not an absolute single-lifetime ceiling; the law provides for the rule to halt and start anew on a subsequent default.
+- Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the fresh-episode rule above.
 
 ## 8. Payment allocation
 
@@ -108,8 +118,3 @@ Last updated: 2026-10-27
 
 - Freeze name + ID number + service address at booking.
 - Subsequent changes in Enigma do not rewrite the concluded agreement.
-
----
-
-**Usage rule for agents**
-Before proposing or implementing any calculation, ledger, servicing or configuration behaviour, read this document and follow the locked decisions. If a new decision is required, flag it explicitly and do not invent a default.
