@@ -19,12 +19,14 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Start of the day is treated as 00:00.
 - A loan, settlement or deposit concluded at any time on a calendar day is treated as having occurred at 00:00 on that day.
 - Reversals use the same value date the system originally recognised.
+- A payment received on a flag date is treated as 00:00 on that day and is visible to the morning default check.
 
 ## 2. Initiation fee treatment
 
 - If capitalised → part of the principal debt.
 - If not capitalised → treated as a due fee/charge under section 126.
 - Same logic applies to related fee points.
+- A capitalised initiation fee that was capitalised before the default date sits inside the in-duplum ceiling.
 
 ## 3. Zero rates, zero fees and campaigns
 
@@ -32,39 +34,51 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A campaign that sets interest to 0 % or fees to R0 is treated as the real rate less discount = 0 %.
 - Calculations must not fail when rates or fees are zero for the full term or any portion of the term.
 - Campaign pricing must be stored and displayed as base rate (x %) with a campaign discount (y %) deducted.
-- If the discount falls away on non-payment, the penalty rate becomes the base rate (x %).
+- Discount stays in place through the leniency window.
+- Discount falls away on the default flag date; the rate becomes the base rate.
+- Discount does not return on a later cure.
 - Penalty interest may not exceed the contractual interest rate.
 
 ## 4. Laybye linked to a loan (parent/child)
 
-- Parent/child relationship required.
+- Parent/child relationship required. Contracts must treat the pair as one loan (not as security that would make the loan secured).
 - Payments can be allocated across both the loan and the linked Laybye.
-- Interest is calculated on the net balance (loan principal minus Laybye hold).
-- Only one monthly service fee.
+- Interest is calculated on the net balance (loan principal minus Laybye hold). This is evidence that the hold is treated as a payment against the loan rather than a separate savings product.
+- Only one monthly service fee (levied on the parent).
 - Client can consolidate or settle when Laybye ≥ settlement balance.
-- Credit life / funeral treatment of the linked Laybye must be defined (estate vs direct to beneficiary, and effect on the outstanding loan that credit life is meant to settle).
+- Credit life pays the loan first; Laybye covers any shortfall; surplus goes to the estate if treated as a cash deposit. If structured as insurance, treatment follows whether a beneficiary was named.
+- Funeral benefit is paid to the named beneficiary and leaves the loan and Laybye as they are.
+- Death may not apply the Laybye without a section 124 authority signed in life; otherwise the Laybye stays with the estate.
+- Structured as a deposit-insurance style arrangement (client pays for a period, then loan is disbursed). Not deposit-taking under the Banks Act for Day-1 purposes.
 
 ## 5. Day count and accrual
 
 - Both actual/actual and standard 30/360 must be available. Credit provider chooses.
 - Recommendation for new products: default to actual/actual; keep 30/360 as a selectable option.
 - Accrual frequency is daily.
+- A 360-day year is not required for Day-1.
 
 ## 6. Default definition (aligned for in-duplum and collections)
 
 - Single definition used for both in-duplum and collections/reporting.
-- Leniency period is configurable per customer (example: 4 or 5 days).
-- Default is only automatically flagged on the contractual payment date + leniency days if the full payment is not received.
-- “Full payment” threshold is configurable per customer (example: 95 % or more of the instalment received = not a default).
+- Leniency period is configurable per customer and counts calendar days (including weekends and public holidays).
+- Unset leniency_days or full_payment_threshold_percent fails closed. Do not hard-code example values as defaults.
+- Default is only automatically flagged on the contractual payment date + leniency days if the amount received for that due date is below the threshold.
+- The instalment used for the threshold test is the original principal slice plus levied charges that share that due date (including monthly service fee, non-capitalised initiation fee, and credit life). Unbilled interest is excluded until it is debited.
+- Credit life instalment must be included in the loan instalment for affordability calculations under the Act.
+- Prefer keeping the contractual instalment the same during the loan term.
 - Interest continues to be calculated daily on the outstanding balance. Leniency does not pause or reduce interest.
+- A payment received on the flag date is treated as 00:00 on that day and is seen by the morning check.
 
 ## 7. In-duplum base and episodes
 
 - Ceiling = unpaid principal (including any pre-default capitalised initiation fee) as at the date of first default in that episode.
 - Post-default accruals count as charges even if displayed as capitalised on statements.
+- Charges that cause the default do not count toward the cap; only charges that accrue during the default episode.
 - A payment during the default reduces what is owed but does not reset the counter for that episode.
 - A cure (account brought out of default) closes the episode.
 - A new default starts a fresh episode with a new ceiling based on the unpaid principal at the start of the new default.
+- Three section 103(5) edges not decided by Nedbank remain unsigned; the clip stays off until counsel confirms.
 - This is not an absolute single-lifetime ceiling; the law provides for the rule to halt and start anew on a subsequent default.
 - Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the fresh-episode rule above.
 
@@ -72,10 +86,12 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - Section 126 order: due or unpaid interest, then due or unpaid fees or charges, then principal.
 
-## 9. Service-fee pro-rata
+## 9. Service-fee pro-rata and VAT
 
 - Pro-rata only in the opening month (disbursement to first payment due).
+- Opening-month fraction = inclusive days in the month / actual days in that month.
 - Full monthly fee thereafter, including the settlement month, subject to the R60 cap.
+- Rand maxima (R60, R165, R1 050) are excluding VAT by default (NCR January 2019 note). Provider may elect inclusive if required.
 - Consistent with regulation 44(4) and the Micro Finance South Africa judgment.
 
 ## 10. Interest on deferred initiation fee
@@ -90,18 +106,24 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Option A: continue at the contract rate.
   - Option B: accrue at the lower of contract rate and current statutory maximum, and issue the section 104 notice.
 - Choice stored per organisation or per product.
+- No platform default; fails closed until the provider chooses.
 
 ## 12. Statements
 
 - One statement per client showing all loans (not a separate statement per loan).
 
-## 13. Decision engine and instalments
+## 13. Decision engine, instalments and additional fees
 
 - Initially the platform’s own engine can be forced; long-term the LMS must accept loans from external decision engines.
 - Two options must be supported when disbursement occurs later than the quote date:
   - (a) adjust the instalment based on actual disbursement date and remaining term, or
   - (b) keep the original instalment and either settle early or write off a small residual at contractual end
     (write-off not required if the account is already in default).
+- After a partial prepayment the provider chooses whether to shorten the term or drop the instalment.
+- Prefer keeping the contractual instalment the same during the loan term.
+- Additional fees outside interest, initiation, monthly service fee and credit life (for example certain collection costs) should be added as a further monthly fee (fixed or variable), not capitalised into the amortisation schedule.
+- A loan restructuring capability exists so that other costs can be added during the term by creating a new instalment, pricing and term when required.
+- “Subsequent” short-term loan is counted per credit-provider organisation.
 
 ## 14. Payment frequencies
 
@@ -118,3 +140,15 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - Freeze name + ID number + service address at booking.
 - Subsequent changes in Enigma do not rewrite the concluded agreement.
+
+## 17. Rounding
+
+- Round half-up to cents on billing.
+- Disclose the annual equivalent rate.
+- The same rounding rule must be applied everywhere rounding is required.
+- Proviso: rounding must not create a compliance issue (example: an instalment rounded up above the affordability figure previously aligned with the client).
+
+## 18. Default administration and collection-cost tariffs
+
+- Fail closed until a tariff row exists.
+- Prefer adding allowable extra costs as an additional monthly fee rather than capitalising them into the schedule.
