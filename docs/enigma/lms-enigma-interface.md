@@ -1,575 +1,366 @@
 # LMS port on Enigma
 
-Date: 26 October 2026 (Africa/Johannesburg).
+Updated 27 October 2026 (Africa/Johannesburg).
 
-This is the interface the post-origination LMS needs from Enigma. It covers organisation context, membership, session validation, role and mandate lookup, and product enrolment. It does not specify interest, fees, in duplum, payment allocation, or early settlement. Those stay in the LMS calculation engine.
+This is the interface the post-origination LMS needs from Enigma, plus the LMS-side session handling that sits on it. Interest, fees, in duplum, payment allocation, and early settlement stay in the calculation engine. The ledger is out of scope.
 
-The contract has two layers. The LMS port is the exact set of operations LMS code will call. The wire binding (HTTP paths, JSON names, event names, error codes) is unbound until `eugene-ehlers/enigma` is readable. Sketches in the wire section are proposals for Enigma to accept or replace. Do not generate a client from them.
+The port operations are implemented as Python signatures in `src/lms/enigma/`. HTTP paths are still unbound: `eugene-ehlers/enigma` was not readable from this environment, and `UnboundEnigmaPort` raises if something tries to call a sketched URL.
 
-## Source status
+## Locked decisions
 
-`eugene-ehlers/enigma` was not readable from this environment. The GitHub installation used by this run can see `eugene-ehlers/LMS` only. A request for `eugene-ehlers/enigma` came back as not found, which is also what GitHub returns for a private repository the caller cannot see. The account's public repositories do not contain `STATUS.md`, `consumer_contract.py`, an identity registry, mandates, or sessions.
+Decisions taken 27 October 2026. The earlier option lists are closed.
 
-Sibling-consumer evidence, which is not Enigma's contract: an I-DIP review dated 23 October 2026 (Africa/Johannesburg) says that product keeps only an Enigma session reference, turns Enigma on with `IDIP_ENIGMA_ENABLED` and `IDIP_OWNED_PASSPORT_AUTH`, and uses rails named `product-idip`, `org-tsdg`, and `idip-production`. Those rail names belong to that product. LMS must not copy them until Enigma's architecture docs confirm the rail scheme.
+### 1. Staff boarding follows the Academy pattern
 
-Fill the "Enigma actual" column in the reconciliation checklist from these files, in this order:
+Enigma owns the organisation and its staff list, including roles and mandates. An admin role amends that list in Enigma. Human sign-on is Cognito, fronted by Enigma. LMS trusts the membership and the role Enigma returns on `membership.validate` and the allow or deny from `mandate.lookup`.
 
-1. `STATUS.md` — what is already implemented.
-2. Architecture docs — sessions, sync calls, events, rails.
-3. `consumer_contract.py` — operations, authentication of a consumer, errors.
-4. Identity registry — person identifier stability, attributes, search, deletion.
-5. Mandates — decision versus data, limits, versions, machine actors.
-6. Sessions — opaque reference versus token, organisation binding, expiry, revocation.
+LMS does not keep a staff table that can grant access. LMS does not amend the list. The next request after an admin change sees the new membership because every request asks Enigma again.
+
+A person operates only in organisations where that answer is an active membership with at least one role. An active membership with an empty role list is ambiguous and stops the request.
+
+### 2. Machines use an IAM role, exchanged by Enigma
+
+Human path: Cognito authenticates the person, Enigma maps them to membership and roles.
+
+Machine path: the job's AWS IAM role authenticates the process, Enigma maps the role ARN to a machine member, and the same five operations run with that machine session. The machine's allowed actions are a short list on the Enigma registration. Allocation is `lms.allocation.run`. A write-off call from that job is denied by `mandate.lookup`.
+
+Comparison and the rejected alternatives are in [Machine identity](#machine-identity).
+
+### 3. Suspended or unclear means stop
+
+Servicing reads and money movement both stop unless sign-in, organisation status, membership, role, and enrolment are each a clear active answer, and `mandate.lookup` is a clear allow for the declared action.
+
+`suspended`, `absent`, `closed`, a timeout, an HTTP 5xx, an unknown status, a missing role, or an enrolment answer for a different product all stop the request. Nothing in that set falls through to a cached role.
+
+### 4. NCR number lives in LMS
+
+Enigma does not hold the credit provider's NCR number. LMS stores it as a tenant regulatory attribute.
+
+It is required later, on NCA compliance extracts and on communications for products that fall under the NCA. For the day-1 catalogue that means `lms.micro_short_term` and `lms.unsecured_personal`, unless the tenant is marked pure hosting. It is not required for pure hosting, `lms.bnpl_laybye`, or `lms.laybye_security`.
+
+A blank number refuses the NCA communication or extract. It does not refuse booking. `ncr_number_required` in `src/lms/enigma/regulatory.py` is the gate.
+
+### 5. Rand ceilings are adjustable data, evaluated by LMS
+
+These are operational ceilings (for example a write-off ceiling). They are not the statutory NCA maxima. Those stay in the calculation engine.
+
+- TSDG, the platform owner, adjusts solution-wide ceilings through an interface. The actor must hold Enigma role `lms.ceiling.platform.write` in the platform organisation.
+- A company adjusts its own ceilings through an interface. The actor must hold Enigma role `lms.ceiling.company.write` in that company. The platform organisation cannot use the company screen to write a company's row.
+- LMS stores the amounts. The next command reads the current rows. No deploy is required.
+- The effective ceiling is the platform amount, or the lower of the platform and company amounts when the company has set one. A company figure above the platform ceiling does not raise the limit.
+- A missing platform ceiling, a non-ZAR currency, or a negative amount is ambiguous and stops the command.
+- An amount equal to the limit is inside the ceiling. One cent over is `mandate_denied`.
+
+Role strings above are port names. The adapter maps them to Enigma's real role ids. See the remaining-details list.
+
+Worked example. Platform write-off ceiling R10 000. Cape Credit sets R1 000. A clerk whose Enigma role allows `lms.account.write_off` submits R1 500 (`amount_cents` 150000). `mandate.lookup` returns allow. LMS then applies the ceiling and denies. R1 000.00 (`amount_cents` 100000) is allowed. If Cape Credit instead saves R50 000, the effective ceiling stays R10 000 until TSDG raises the platform row.
+
+### 6. Identity freeze at booking
+
+At booking LMS reads the live Enigma person and snapshots three fields onto the agreement: name, ID number, and service address. A later change in Enigma does not rewrite that agreement. A correction is a new LMS command with a new snapshot.
+
+Communication preferences (email, mobile, preferred channel) are read from the live Enigma person at send time. They are not part of the frozen agreement.
+
+A blank name, ID number, or service address refuses booking (`attributes_unavailable`). The booking command is not committed.
+
+Worked example. Thandi is booked at 10:00 Africa/Johannesburg as "Thandi Nkosi", ID number `8001015009087`, service address "12 Loop Street, Cape Town". She later changes her name and address in Enigma. The concluded agreement still shows Loop Street. A statement email uses the email address on the live record.
 
 ## Fixed LMS rules
 
-These are LMS behaviour. They hold whichever wire Enigma exposes.
-
-1. Enigma is the registry for persons, organisations, memberships, product enrolment, roles, and mandates. LMS calls the port. LMS has no local table that can say yes to those questions.
-2. Enigma collects the authenticator. LMS receives a session reference and keeps it on the server. The browser receives an LMS cookie (`HttpOnly`, `Secure`, `SameSite`).
-3. A session whose audience is another product (the I-DIP rail is the example already in use) does not authorize LMS. The adapter rejects it before any LMS data is read.
-4. Every regulated mutation asks Enigma for a decision on that action, then writes an authority snapshot. A menu built from an earlier lookup is a display hint.
-5. An event clears a cache. An event is never the grant of a permission.
-6. When the port cannot return a decision (timeout, 5xx, unauthenticated response, unknown payload), the mutation is refused. The caller sees `authority_unavailable`. There is no local role to fall back to.
-7. After the caller is allowed to act in the active organisation, an account that belongs to another organisation is answered the same way as an account that does not exist.
-8. Timestamps from Enigma are absolute instants. LMS displays them in Africa/Johannesburg and stores them as instants. The call budget is configuration. When the budget is spent, the result is a refusal, not an implicit allow.
-
-A regulated mutation is any LMS command that opens or changes an account, captures or allocates money, quotes or accepts a settlement, writes off, restructures, exports borrower data, or reads identity attributes beyond a display name. Reads of an account the caller already may see still require a live session and a live membership. They reuse the mandate decision only inside that same request.
+1. Enigma is the registry for persons, organisations, staff memberships, roles, mandates, and product enrolment. Cognito is the human authenticator behind Enigma.
+2. The browser receives an LMS cookie (`HttpOnly`, `Secure`, `SameSite`). The Enigma session reference stays on the server. Production storage encrypts it at rest. The in-memory store in the sketch does not.
+3. A session whose audience is not `lms` does not open an LMS session. The I-DIP audience `product-idip` is the case already seen in a sibling product.
+4. Every request introspects the session. The route declares an action and, except for an organisation switch, a product code. A missing action or product is ambiguous.
+5. Events clear caches. An event never grants a permission.
+6. Timeout, HTTP 5xx, and an unrecognised payload become `authority_unavailable` or `authority_ambiguous`. The command is not committed.
+7. After the caller may act in the active organisation, an account in another organisation is answered the same way as a missing account.
+8. Timestamps from Enigma are absolute instants. LMS displays them in Africa/Johannesburg.
 
 ## Who owns which fact
 
 | Fact | Authority | What LMS keeps |
 | --- | --- | --- |
-| Person identifier | Enigma | The opaque `person_id` on the account and on the audit row |
-| Legal name, identity number, contact, address | Enigma | A frozen attribute bag on the credit agreement, and only the fields counsel confirms the agreement must show. Later changes in Enigma leave the bag as concluded |
-| Display name for the staff UI | Enigma | A projection with `fetched_at`. Rebuilt any time. Never used as the agreement name |
-| Organisation identifier | Enigma | The opaque `organisation_id` on every LMS row. It is the tenant key |
-| Legal name, trading name, registration | Enigma, if Enigma holds them | Projection for the header. Frozen legal name on the agreement |
-| NCR registration number of the credit provider | Unbound. See open question 4 | Frozen on the agreement once the source of the number is chosen |
-| Membership, role, mandate | Enigma | The mandate id, version, and Enigma request id on the authority snapshot for that command. No role table |
-| Product enrolment | Enigma | Nothing authoritative. A positive cache may drive the product menu and must be ignored by account-opening |
-| Session | Enigma | LMS session row: LMS session id, Enigma session reference, `person_id`, active `organisation_id`, organisation generation, expiry |
-| Loans, balances, statements, allocation, settlement maths | LMS | The servicing record |
-| Which of the four day-1 products an organisation may service | Enigma enrolment. Proposed codes below, unbound | LMS configuration (statement template, fee set, product parameters) is inert unless enrolment for that code is active |
-
-LMS does not keep passwords, password hashes, MFA secrets, a membership table, or a searchable index of identity numbers. If a servicing search by identity number is required, that search is an Enigma call. See open question 6.
+| Person identifier | Enigma | Opaque `person_id` on the account and the audit row |
+| Name, ID number, service address | Enigma at booking | Frozen `AgreementIdentity`. Not updated from later Enigma reads |
+| Email, mobile, channel preference | Enigma, live | Nothing on the agreement. Read again when sending |
+| Organisation identifier | Enigma | Tenant key on every LMS row |
+| Legal name, trading name | Enigma | Header projection |
+| NCR number | LMS | Tenant regulatory attribute. Blank blocks NCA communications and extracts only |
+| Staff list, roles, mandates | Enigma | Mandate id and version on the command snapshot. No staff table |
+| Operational rand ceilings | LMS values, Enigma role gate | Platform row and per-company row, with versions on the snapshot |
+| Product enrolment | Enigma | Menu cache only. Account routes call `enrolment.check` |
+| Session | Enigma, after Cognito | LMS session id, session reference, person id, active organisation, generation |
+| Loans, balances, allocation, settlement maths | LMS | Servicing record |
 
 ### Authority snapshot
 
-Written in the same transaction as the regulated command.
+Written in the same transaction as a regulated command that commits.
 
 | Field | Meaning |
 | --- | --- |
-| `command_id` | LMS id of the command |
-| `person_id` | Actor |
+| `command_id` | LMS command |
+| `person_id` | Actor, or the machine id Enigma returned |
 | `organisation_id` | Active tenant |
-| `session_ref_hash` | Hash of the Enigma session reference. The raw reference is a bearer secret and stays in the session store |
-| `action` | Port action name, for example `lms.account.write_off` |
-| `product_code` | Enrolment code of the account |
-| `mandate_id` | From the decision |
-| `mandate_version` | From the decision |
-| `enrolment_id` | From the enrolment check |
-| `enrolment_version` | From the enrolment check |
-| `enigma_request_id` | Correlation id returned by Enigma |
+| `session_ref_hash` | Hash of the Enigma session reference |
+| `action` | For example `lms.account.write_off` |
+| `product_code` | Enrolment code |
+| `mandate_id`, `mandate_version` | From a clear allow |
+| `enrolment_id`, `enrolment_version` | From a clear active enrolment |
+| `platform_ceiling_version`, `company_ceiling_version` | Present when an amount was checked. Company version is empty when the company has not tightened the platform ceiling |
+| `enigma_request_id` | Correlation id |
 | `decided_at` | Instant of the decision |
 
-A later revocation leaves the snapshot in place. Unwinding the command is an LMS decision and is outside this contract. Retention of the snapshot follows the LMS audit record. The retention period is open question 11.
+A later revocation leaves the snapshot in place. Retention follows the audit record. The retention period is still a compliance decision and is not set here.
 
 ### Session row
 
 | Field | Meaning |
 | --- | --- |
-| `lms_session_id` | What the cookie names |
-| `session_ref` | Enigma reference. Encrypted at rest. Server only |
+| `lms_session_id` | Cookie name |
+| `session_ref` | Enigma reference. Server only |
 | `person_id` | Actor |
 | `active_organisation_id` | Tenant currently selected |
-| `organisation_generation` | Increments on every organisation switch. A request that still carries the previous generation gets `organisation_context_stale` |
-| `expires_at` | The earlier of the LMS idle limit and the Enigma session expiry |
+| `organisation_generation` | Increments when the active organisation changes. A mismatch is HTTP 409 |
+
+Switching to the organisation that is already active does not increment the generation, so other tabs stay valid.
 
 ## Port operations
 
-LMS calls these. Names are the port. They are not yet Enigma paths.
+Python: `EnigmaClient` in `src/lms/enigma/client.py`. The five methods are the port. They are not yet Enigma URLs.
 
-Every call sends a correlation id (`request_id`) and the consumer name `lms`. Every successful decision returns `enigma_request_id`, which the snapshot stores.
+Every call takes a `request_id`. Decisions carry `enigma_request_id`.
 
-### 1. `session.introspect`
+### `introspect(session_ref, *, request_id) -> SessionView`
 
-Validate the session reference.
+`session.introspect`. LMS proceeds only when `audience == "lms"`, `status == "active"`, `sign_in_clear` is true, and `person_id` is present. Expired or revoked, or a foreign audience, is `reauthenticate` (401). Any other shape is `authority_ambiguous` (503).
 
-Request: `session_ref`.
+`bound_organisation_id`, when set, must match the organisation LMS is about to use. A mismatch is ambiguous. LMS calls `session.bind_organisation` only if Enigma's real introspect includes that field. The method is not in the five.
 
-Response:
+### `organisation_context(session_ref, organisation_id, *, request_id) -> OrganisationContext`
 
-- `status`: `active`, `expired`, or `revoked`
-- `person_id`
-- `audience`: must be the LMS product audience. Any other audience is `session_wrong_audience` and LMS stops
-- `expires_at`
-- `bound_organisation_id`: present when Enigma itself binds the session to one organisation. Absent when the session is person-scoped and the organisation list follows
-- `organisations`: only when there is no bound organisation. Each entry is `organisation_id` plus membership `status`
-- `authenticator_level`: unbound. LMS will require a floor for account-opening once Enigma defines the scale. See open question 7
+Proceeds only for `status == "active"` on that organisation id. `suspended` and `closed` are `organisation_unavailable` (403). Anything else is ambiguous.
 
-LMS behaviour: `expired`, `revoked`, unknown, or wrong audience ends the LMS session and the browser is sent back through Enigma. LMS does not offer a password form.
+### `validate_membership(session_ref, person_id, organisation_id, *, request_id) -> Membership`
 
-### 2. `organisation.context`
+Proceeds only for `status == "active"` and a non-empty `roles` tuple. `suspended` and `absent` are `not_a_member` (403). An active membership with no role is ambiguous. LMS authorises from this answer and from `lookup_mandate`. It does not map a local role table.
 
-Load the tenant header and the status gate.
+### `lookup_mandate(query, *, request_id) -> MandateDecision`
 
-Request: `organisation_id`, `session_ref`.
+`query` carries session, person, organisation, action, and product code. `allow` with a mandate id and version is the only yes, and only for that action. `deny` is `mandate_denied` (403). Any other payload is ambiguous.
 
-Response:
+Rand ceilings are not decided here. After a clear allow, LMS calls `enforce_amount` when the command has an amount.
 
-- `organisation_id`
-- `status`: `active`, `suspended`, or `closed`
-- `legal_name`
-- `trading_name`
-- `registration_number` when Enigma holds it
-- `country`
-- `brand` when Enigma holds the white-label mark (logo reference, display name). When Enigma does not, brand is LMS configuration keyed by `organisation_id`. See open question 5
+Day-1 actions:
 
-LMS behaviour: `closed` refuses every call. `suspended` refuses regulated mutations. Whether servicing reads continue is open question 3. LMS never creates an organisation Enigma did not return.
+| Action | Who |
+| --- | --- |
+| `lms.account.read` | Staff |
+| `lms.account.statement.read` | Staff |
+| `lms.account.open` | Staff, at booking |
+| `lms.payment.capture` | Staff |
+| `lms.allocation.run` | Machine member |
+| `lms.settlement.quote` | Staff. Arithmetic is LMS |
+| `lms.settlement.accept` | Staff |
+| `lms.account.write_off` | Staff, then the rand ceiling |
+| `lms.account.restructure` | Staff |
+| `lms.party.attributes.read` | Staff, to freeze or to read live preferences |
+| `lms.export.borrower_data` | Staff |
+| `lms.ceiling.platform.write` | TSDG role, platform organisation only |
+| `lms.ceiling.company.write` | Company role, that company only |
 
-### 3. `membership.validate`
+### `check_enrolment(session_ref, organisation_id, product_code, *, request_id) -> Enrolment`
 
-Confirm the actor belongs to the organisation right now.
+Proceeds only for `status == "active"` on the requested product code, with an enrolment id. `suspended` and `absent` are `enrolment_denied` (403), including on reads. A different product code in the answer is ambiguous.
 
-Request: `session_ref`, `person_id`, `organisation_id`.
+Proposed codes, still to be confirmed against Enigma's catalogue:
 
-Response:
-
-- `status`: `active`, `suspended`, or `absent`
-- `membership_id`
-- `membership_version`
-- `role_labels`: display only. LMS does not authorize from a label
-
-LMS behaviour: anything other than `active` refuses the call. A role name cached at login cannot fill the gap.
-
-### 4. `mandate.lookup`
-
-Ask for a decision on one action in context. The port passes the context so an amount limit, if Enigma has one, is applied by Enigma.
-
-Request:
-
-- `session_ref`
-- `person_id`
-- `organisation_id`
-- `action`
-- `product_code`
-- `context`: optional, for example `{ "amount_cents": 150000, "currency": "ZAR" }`
-
-Response:
-
-- `decision`: `allow` or `deny`
-- `reason`: `ok`, `mandate_absent`, `mandate_expired`, `scope_mismatch`, `limit_exceeded`
-- `mandate_id`, `mandate_version` when a mandate was considered
-- `enigma_request_id`
-
-LMS behaviour: `allow` is the only result that proceeds, and only for this action and this context. A decision for `lms.account.read` does not cover `lms.account.write_off`. LMS does not re-compare a copied limit. If Enigma's real contract returns the limit and expects the consumer to compare, that is a binding change and belongs in the reconciliation checklist before any limit is coded twice.
-
-Day-1 action names the port will send:
-
-| Action | Who | When |
+| Code | Day-1 product | NCR number on communications |
 | --- | --- | --- |
-| `lms.account.read` | Staff | Open an account in the active organisation |
-| `lms.account.statement.read` | Staff | Statement |
-| `lms.account.open` | Staff | Accept a boarded account into servicing |
-| `lms.payment.capture` | Staff | Capture a receipt |
-| `lms.allocation.run` | Machine membership | Allocation batch |
-| `lms.settlement.quote` | Staff | Produce an early-settlement quote. The arithmetic is LMS |
-| `lms.settlement.accept` | Staff | Accept it |
-| `lms.account.write_off` | Staff | Write off |
-| `lms.account.restructure` | Staff | Restructure |
-| `lms.party.attributes.read` | Staff | Pull agreement-time attributes from Enigma |
-| `lms.export.borrower_data` | Staff | Export |
+| `lms.micro_short_term` | Micro / short-term | Required when the tenant is not pure hosting |
+| `lms.unsecured_personal` | Unsecured personal | Required when the tenant is not pure hosting |
+| `lms.bnpl_laybye` | BNPL / laybye, zero cost | Not required |
+| `lms.laybye_security` | Laybye as zero-interest security or deposit | Not required |
 
-### 5. `enrolment.check`
+Enrolment and role are both required. A director role does not enrol the organisation.
 
-Confirm the organisation is enrolled for one product code.
+## Identity freeze
 
-Request: `session_ref` or machine credential, `organisation_id`, `product_code`.
+`freeze_at_booking` in `src/lms/enigma/identity_freeze.py` reads `PersonDirectory.read_live_identity` and returns an `AgreementIdentity` with `person_id`, `name`, `id_number`, `service_address`, `frozen_at`, and `source_request_id`.
 
-Response:
+`communication_preferences` reads the same live person and returns email, mobile, and preferred channel. Callers must not write those fields onto the agreement.
 
-- `status`: `active`, `suspended`, or `absent`
-- `enrolment_id`
-- `enrolment_version`
-- `product_code`
+Timeout and HTTP 5xx on the read are `authority_unavailable`. Booking waits.
 
-LMS behaviour: account-opening requires `active` for that code. A suspended enrolment refuses new accounts and refuses money movement. Existing-account reads follow open question 3.
+## Session middleware
 
-Proposed product codes, unbound until Enigma's catalogue is read:
+`src/lms/enigma/middleware.py`.
 
-| Code | Day-1 product |
-| --- | --- |
-| `lms.micro_short_term` | Micro / short-term |
-| `lms.unsecured_personal` | Unsecured personal |
-| `lms.bnpl_laybye` | BNPL / laybye, zero cost |
-| `lms.laybye_security` | Laybye held as zero-interest security or deposit for a high-risk short-term loan |
+`establish_session` runs after the Cognito/Enigma callback. It introspects, checks organisation and membership, and stores generation `1`.
 
-Enrolment and mandate are both required. A director's mandate does not enrol the organisation. An enrolment does not grant the staff member the action.
+`handle_request` on every later call:
 
-### Conditional operations
+1. Load the LMS session. A missing cookie is 401.
+2. `introspect`. Timeout or 5xx is 503 `authority_unavailable`. Unclear sign-in is 503 `authority_ambiguous`.
+3. Compare the cookie generation to the server session. A mismatch is 409 `organisation_context_stale`, with the current organisation id and generation, and the loan is not read.
+4. Organisation switch, when asked: `organisation_context` and `validate_membership` for the target. On success the generation increments and the cookie must be replaced. A stale tab cannot switch.
+5. Otherwise require a product code, an active organisation, an active membership with a role, an active enrolment, and a mandate allow. An amount then goes through `enforce_amount`.
 
-These are part of the port only if the matching open question is resolved that way. They are not in the minimum set yet.
+The edge returns `HttpResult`. Enigma response bodies stay in the server log beside `enigma_request_id`.
 
-| Operation | Add it when |
-| --- | --- |
-| `session.bind_organisation` | Introspect returns `bound_organisation_id`. Switching organisation is then an Enigma call. The returned reference replaces the one in the session row |
-| `party.usable` | Enigma models "this person may be a party of this organisation". Boarding calls it before attaching `person_id` to an account. See open question 1 |
-| `person.attributes` | The agreement must freeze fields Enigma holds. Request is `person_id`, `organisation_id`, `purpose`. Day-1 purposes: `display`, `agreement_conclusion`. The response is the attribute bag and an `attributes_version` |
-| `machine.session` | Batches run without a person session. Enigma issues a machine membership and a session for `lms.allocation.run` only |
+## Machine identity
 
-## Events LMS receives
+Allocation and other non-human jobs have no staff cookie. Four patterns:
 
-Invalidation hints. At least once. Signed. LMS deduplicates on `event_id`. A lower `subject_version` after a higher one has been seen is ignored for the cache, and the next mutation still calls the port.
+| Pattern | Authentication | How the mandate is limited | Credential on the job | Verdict |
+| --- | --- | --- | --- | --- |
+| Enigma + AWS IAM | The task role presigns `sts:GetCallerIdentity`. Enigma verifies it with AWS and returns a machine session | Enigma machine member lists the actions. LMS then calls the same `lookup_mandate` and `check_enrolment` | No long-lived access key. The role is the identity | Recommended. Same shape as Enigma + Cognito for humans |
+| Cognito client credentials | App client id and secret. Enigma maps the client to a machine member | Same Enigma action list | Long-lived secret | Simpler only while Enigma cannot verify IAM. Interim: secret in Secrets Manager, rotation, private subnet. Not the target |
+| Network location or mTLS only | Being inside the VPC, or holding a client certificate | No per-action mandate | Certificate | Rejected for allocation. Any process on that network could call write-off |
+| Copied staff session | A person's Enigma session stored for the job | Whatever that person can do, including after they leave | The session | Rejected |
 
-| Event | LMS does |
-| --- | --- |
-| `session.revoked` | Delete LMS sessions holding that reference |
-| `membership.changed` | Drop cached membership for that person and organisation. End LMS sessions for that pair when status is no longer `active` |
-| `mandate.changed` | Drop cached menu data for that person and organisation |
-| `enrolment.changed` | Drop cached enrolment. In-flight account-opening that has not committed re-checks |
-| `organisation.status_changed` | Drop the organisation projection. Apply the `closed` / `suspended` gate on the next request |
+### Recommended registration
 
-A `mandate.changed` that grants a new mandate does not let the next request skip `mandate.lookup`.
+The machine list lives in Enigma and is amended by the same admin role that amends the staff list. LMS does not store a second copy. `MachineRegistration` in `src/lms/enigma/models.py` is the record Enigma holds.
 
-Ordering across event types is not assumed. The mutation path is the authority.
+1. Create an IAM role, for example `lms-allocation-cape-credit`, trusted only by the ECS task or Lambda service. No human principal. No access keys.
+2. An Enigma admin adds a machine member: display name, `organisation_id`, IAM role ARN, AWS account, and allowed actions. For the nightly allocation job the list is `{lms.allocation.run}`.
+3. The job runs as that task role. It presigns `GetCallerIdentity` and passes the proof to LMS.
+4. LMS calls `MachineIdentityPort.exchange`. Enigma checks the signature, the role ARN, and the machine member, and returns a session reference.
+5. LMS runs `introspect`, `organisation_context`, `validate_membership`, `check_enrolment`, and `lookup_mandate` for `lms.allocation.run`. Unclear answers fail closed and the batch posts nothing.
+6. Removing the machine member, or deleting the IAM role, stops the next run. A bug that asks for `lms.account.write_off` is denied at mandate lookup.
 
-## Wire sketches (unbound)
+`UnboundMachineIdentity` raises `wire_unbound` until Enigma exposes the exchange. The presigned URL is the proof. LMS does not mint keys and does not verify AWS itself.
 
-Replace this section from `consumer_contract.py`. Shapes are here so the mapping is reviewable. Paths are placeholders of the form `POST /enigma/v1/...`.
-
-Authentication of LMS as a consumer is unbound. The sketch assumes a service credential plus the user session reference on user calls, and a machine credential on `lms.allocation.run`. A session reference for product I-DIP presented to these routes is `session_wrong_audience`.
-
-```json
-{
-  "operation": "session.introspect",
-  "request": { "session_ref": "sess_9c2" },
-  "response": {
-    "status": "active",
-    "person_id": "per_12",
-    "audience": "lms",
-    "expires_at": "2026-10-26T14:10:00Z",
-    "bound_organisation_id": null,
-    "organisations": [
-      { "organisation_id": "org_a", "status": "active" },
-      { "organisation_id": "org_b", "status": "active" }
-    ],
-    "enigma_request_id": "req_4401"
-  }
-}
-```
-
-```json
-{
-  "operation": "mandate.lookup",
-  "request": {
-    "session_ref": "sess_9c2",
-    "person_id": "per_12",
-    "organisation_id": "org_a",
-    "action": "lms.account.write_off",
-    "product_code": "lms.micro_short_term",
-    "context": { "amount_cents": 150000, "currency": "ZAR" }
-  },
-  "response": {
-    "decision": "deny",
-    "reason": "limit_exceeded",
-    "mandate_id": "man_88",
-    "mandate_version": 4,
-    "enigma_request_id": "req_4402"
-  }
-}
-```
-
-```json
-{
-  "operation": "enrolment.check",
-  "request": {
-    "session_ref": "sess_9c2",
-    "organisation_id": "org_b",
-    "product_code": "lms.micro_short_term"
-  },
-  "response": {
-    "status": "absent",
-    "enrolment_id": null,
-    "enrolment_version": null,
-    "product_code": "lms.micro_short_term",
-    "enigma_request_id": "req_4403"
-  }
-}
-```
-
-Event envelope, unbound:
-
-```json
-{
-  "event_id": "evt_17",
-  "type": "membership.changed",
-  "occurred_at": "2026-10-26T12:10:00Z",
-  "subject_version": 9,
-  "person_id": "per_12",
-  "organisation_id": "org_a",
-  "status": "suspended"
-}
-```
+Worked example. At 02:00 Africa/Johannesburg the Cape Credit allocation job exchanges its task role. Enigma returns a machine session whose only action is `lms.allocation.run`. The job allocates. A remainder that the job tries to write off is `mandate_denied`. If the exchange times out, the run is `authority_unavailable` and posts nothing.
 
 ## Sequences
 
 ### Login
 
-Two shapes are both implementable on the port. The adapter follows whichever one `session.introspect` actually returns. LMS does not call `session.bind_organisation` unless `bound_organisation_id` exists in the introspect result.
-
 ```mermaid
 sequenceDiagram
   actor Staff
-  participant Browser
-  participant LMS
+  participant Cognito
   participant Enigma
-  Staff->>Browser: Open LMS
-  Browser->>Enigma: Authenticate
-  Note over Browser,Enigma: LMS never receives the authenticator
-  Enigma-->>Browser: Redirect to LMS with session reference
-  Browser->>LMS: Callback(session_ref)
-  LMS->>Enigma: session.introspect
+  participant LMS
+  Staff->>Cognito: Sign on
+  Cognito-->>Enigma: Authenticated person
+  Enigma-->>LMS: Callback with session reference
+  LMS->>Enigma: introspect
   alt Audience is not lms, or session is not active
-    Enigma-->>LMS: wrong audience, expired, or revoked
-    LMS-->>Browser: End session, send Staff back to Enigma
-  else Person-scoped session, one organisation
-    Enigma-->>LMS: person_id, organisations[org_a]
-    LMS->>Enigma: membership.validate(org_a)
-    LMS->>Enigma: enrolment.check(org_a, each day-1 code)
-    LMS-->>Browser: LMS cookie, active organisation org_a
-  else Person-scoped session, several organisations
-    Enigma-->>LMS: person_id, organisations[org_a, org_b]
-    LMS-->>Browser: Organisation picker
-    Browser->>LMS: Choose org_b
-    LMS->>Enigma: membership.validate(org_b)
-    LMS->>Enigma: enrolment.check for org_b
-    LMS-->>Browser: LMS cookie, generation 1, active organisation org_b
-  else Organisation-bound session
-    Enigma-->>LMS: person_id, bound_organisation_id
-    LMS->>Enigma: membership.validate + enrolment.check for the bound organisation
-    LMS-->>Browser: LMS cookie bound to that organisation
+    LMS-->>Staff: 401 reauthenticate
+  else Sign-in flag unclear
+    LMS-->>Staff: 503 authority_ambiguous
+  else One clear organisation
+    LMS->>Enigma: organisation_context and validate_membership
+    LMS-->>Staff: LMS cookie, generation 1
+  else Several organisations
+    LMS-->>Staff: Picker
+    Staff->>LMS: Chosen organisation
+    LMS->>Enigma: validate_membership for that organisation
+    LMS-->>Staff: LMS cookie, generation 1
   end
 ```
-
-Worked example, one organisation. Thandi authenticates at 09:00 Africa/Johannesburg. Introspect returns `per_12`, audience `lms`, and only `org_7f3` (Cape Credit), membership `active`. Enrolment for `lms.micro_short_term` and `lms.unsecured_personal` is `active`. LMS stores the session reference server-side and sets the cookie. The header name "Cape Credit" comes from `organisation.context`. Her menu calls `mandate.lookup` for the read action. A write-off at 09:12 calls `mandate.lookup` again with the amount.
-
-Worked example, wrong product. The same callback presents the session reference I-DIP issued her. Introspect returns audience `product-idip`. LMS ends the callback and does not open a Cape Credit session.
 
 ### Organisation switch
 
 ```mermaid
 sequenceDiagram
   actor Staff
-  participant Browser
   participant LMS
   participant Enigma
-  Browser->>LMS: Switch to org_b (cookie generation 1, current org_a)
-  LMS->>Enigma: session.introspect
-  alt Session expired or revoked during the switch
-    LMS-->>Browser: Reauthenticate. Active organisation stays unchanged until a new session exists
-  else Enigma binds the organisation on the session
-    LMS->>Enigma: session.bind_organisation(org_b)
-    Enigma-->>LMS: session still active, bound_organisation_id org_b
-    LMS->>Enigma: membership.validate(org_b)
-    LMS->>Enigma: enrolment.check for org_b
-    LMS-->>Browser: Cookie generation 2, active organisation org_b
-  else Enigma does not bind the organisation
-    LMS->>Enigma: membership.validate(org_b)
-    LMS->>Enigma: enrolment.check for org_b
-    LMS-->>Browser: Cookie generation 2, active organisation org_b
+  Staff->>LMS: Switch to org_b, cookie generation 1
+  LMS->>Enigma: introspect
+  alt Timeout or 5xx
+    LMS-->>Staff: 503 authority_unavailable. Organisation unchanged
+  else Cookie generation is not 1
+    LMS-->>Staff: 409 organisation_context_stale
+  else Membership in org_b is active and has a role
+    LMS-->>Staff: Cookie generation 2, active organisation org_b
+  else Membership unclear
+    LMS-->>Staff: 403 or 503. Generation stays 1
   end
-  Browser->>LMS: Request still stamped generation 1
-  LMS-->>Browser: organisation_context_stale
+  Staff->>LMS: Tab still on generation 1
+  LMS-->>Staff: 409. Loan is not read
 ```
 
-Worked example. Johan is a member of North Bridge Loans (`org_a`) and has a read mandate at Harbour Finance (`org_b`). He switches to Harbour at 11:00 Africa/Johannesburg. LMS validates membership in `org_b` before it drops `org_a`. A tab that still shows a North Bridge loan id then calls LMS with generation 1. LMS answers `organisation_context_stale` and does not look up the loan. After the browser retries with generation 2, Johan is allowed to act in Harbour. The North Bridge loan id is answered as not found. It is not answered as forbidden, because a forbidden would tell him the loan exists in the other book.
+Worked example. Johan is a member of North Bridge (`org_a`) and Harbour (`org_b`). He switches to Harbour at 11:00 Africa/Johannesburg. Generation becomes 2. A North Bridge tab still presenting generation 1 receives 409. After the browser retries with generation 2, a North Bridge loan id is answered as not found.
 
-Worked example, dying session. Introspect during the switch returns `expired`. LMS does not move him to Harbour on the old cookie. He authenticates again, then picks the organisation.
-
-### Regulated action (error path)
+### Write-off
 
 ```mermaid
 sequenceDiagram
   actor Staff
   participant LMS
   participant Enigma
-  Staff->>LMS: Write off R1 500 on a micro account
-  LMS->>Enigma: session.introspect
-  LMS->>Enigma: membership.validate
-  LMS->>Enigma: enrolment.check(lms.micro_short_term)
-  LMS->>Enigma: mandate.lookup(write_off, amount_cents 150000, ZAR)
-  alt Decision allow
-    Enigma-->>LMS: allow, mandate_version
-    LMS->>LMS: Commit command and authority snapshot
-  else Decision deny
-    Enigma-->>LMS: deny, limit_exceeded
-    LMS-->>Staff: mandate_denied. No snapshot of a success. Denial is audited
-  else Port cannot answer
-    Enigma-->>LMS: timeout or 5xx
-    LMS-->>Staff: authority_unavailable. Command not committed
+  Staff->>LMS: Write off R1 500
+  LMS->>Enigma: introspect, membership, enrolment, mandate.lookup
+  alt Enigma role denies the action
+    LMS-->>Staff: 403 mandate_denied
+  else Enigma allows, ceiling is not a clear ZAR pair
+    LMS-->>Staff: 503 authority_ambiguous. Not committed
+  else Enigma allows, amount is inside the tighter ceiling
+    LMS-->>Staff: Commit command, snapshot mandate and ceiling versions
+  else Enigma allows, amount is over the tighter ceiling
+    LMS-->>Staff: 403 mandate_denied. Not committed
   end
 ```
 
-Worked example, limit. Mandate `man_88` version 4 allows write-off up to R1 000. The clerk submits R1 500 (`amount_cents` 150000). Lookup returns `deny` / `limit_exceeded`. LMS does not keep a local copy of the R1 000 ceiling and compare it itself.
+## Errors
 
-Worked example, stale menu. At 09:00 the menu showed write-off because version 4 allowed it. At 09:10 Enigma revokes the mandate and emits `mandate.changed`. The 09:12 submit calls lookup and is denied even if the event has not arrived yet. A write-off that committed at 09:05 remains, with version 4 on its snapshot.
+The adapter maps Enigma's codes onto these. `HttpResult.error` is the code.
 
-Worked example, enrolment. Harbour Finance is enrolled in `lms.bnpl_laybye` and `lms.laybye_security`. Enrolment for `lms.micro_short_term` is `absent`. A staff member whose mandate would allow `lms.account.open` still cannot board a micro account. The check that fails is enrolment, and the mandate is not a substitute.
-
-## Error handling
-
-The adapter maps Enigma's real codes onto these port results. The UI receives the LMS error only. Enigma response bodies stay in the server log, tied to `enigma_request_id`.
-
-| Port result | When | LMS HTTP | What the user can do |
-| --- | --- | --- | --- |
-| `reauthenticate` | Session missing, expired, revoked, or wrong audience | 401 | Return through Enigma |
-| `not_a_member` | Membership `absent` or `suspended` | 403 | Nothing in this organisation |
-| `organisation_unavailable` | Organisation `closed`, or unknown to Enigma | 403 | Nothing in this organisation |
-| `enrolment_denied` | Enrolment `absent` or `suspended` on a mutation or on account-opening | 403 | Servicing reads follow open question 3 |
-| `mandate_denied` | Lookup `deny` | 403 | The denial names the action, not the raw Enigma payload |
-| `organisation_context_stale` | Cookie generation does not match the session row | 409 | Reload. LMS returns the current organisation id |
-| `cross_tenant` | Caller may act in the active organisation, and the account is not in it | 404 | Same body as a missing account |
-| `authority_unavailable` | Timeout, 5xx, connection failure, bad signature, payload the adapter does not recognise | 503 | Retry later. The command is not committed. `Retry-After` is forwarded when Enigma sent one |
-| `attributes_unavailable` | `person.attributes` cannot be completed for `agreement_conclusion` | 409 on boarding | Boarding of that account waits. LMS does not invent the identity fields |
-
-Idempotency: `session.introspect`, `membership.validate`, `mandate.lookup`, `enrolment.check`, and `organisation.context` are safe to retry with the same `request_id`. `session.bind_organisation`, if it exists, is idempotent for the same session reference and organisation: a repeat leaves the binding on that organisation and returns the current reference.
-
-Cache rules:
-
-| Data | May be cached | May authorize a mutation |
+| Code | HTTP | When |
 | --- | --- | --- |
-| Session status | For the rest of the same request | Only inside that request, then the snapshot records the request id |
-| Membership | For the rest of the same request | Only inside that request |
-| Mandate decision | Menu display, labelled with `fetched_at` | No. The next mutation calls lookup |
-| Enrolment | Product menu | No for account-opening or money movement |
-| Organisation legal name, brand | Header projection | No decision depends on it |
-| Person display name | Staff UI | No. The agreement uses the frozen bag |
+| `reauthenticate` | 401 | Missing session, expired, revoked, or audience other than `lms` |
+| `not_a_member` | 403 | Membership `absent` or `suspended` |
+| `organisation_unavailable` | 403 | Organisation `suspended`, `closed`, or a different id |
+| `enrolment_denied` | 403 | Enrolment `absent` or `suspended`, on reads and on mutations |
+| `mandate_denied` | 403 | Lookup `deny`, or amount over the effective ceiling, or a ceiling edit without the role |
+| `organisation_context_stale` | 409 | Cookie generation does not match. Body includes the current organisation and generation |
+| `attributes_unavailable` | 409 | Booking is missing name, ID number, or service address, or a send has no live channel |
+| `authority_unavailable` | 503 | Timeout, HTTP 5xx, or connection failure. Command not committed |
+| `authority_ambiguous` | 503 | Unclear sign-in, empty role, unknown status, missing platform ceiling, or a payload the client does not recognise |
+| `wire_unbound` | 503 | The placeholder adapter was called |
 
-A negative cache (remembering `absent` so we skip the call) is not used. A just-completed enrolment or membership must be visible on the next attempt.
+`introspect`, `organisation_context`, `validate_membership`, `lookup_mandate`, and `check_enrolment` are safe to retry with the same `request_id`.
 
-Machine path: the nightly allocation job uses `machine.session` when that operation exists, then `enrolment.check` and `mandate.lookup` for `lms.allocation.run`. It does not reuse a staff session reference. If Enigma has no machine membership, the job cannot run under a copied human session. See open question 2.
+Cache rules: session, membership, mandate, and enrolment authorise only inside the request that fetched them. A menu may show a stale action. The command calls lookup again. A negative cache is not used.
 
-## Open questions
+## LMS modules
 
-Each one blocks a binding choice. The recommendation is what LMS will assume if Enigma's owners confirm it. Worked examples use rands and Africa/Johannesburg.
+| Module | Responsibility |
+| --- | --- |
+| `src/lms/enigma/client.py` | Five operations and fail-closed mapping |
+| `src/lms/enigma/errors.py` | Error types and HTTP statuses |
+| `src/lms/enigma/models.py` | Port value types, including the Enigma-held `MachineRegistration` |
+| `src/lms/enigma/port.py` | `EnigmaPort`, `PersonDirectory`, `MachineIdentityPort`, `UnboundEnigmaPort` |
+| `src/lms/enigma/middleware.py` | Establish session, switch, generation 409, per-request introspect |
+| `src/lms/enigma/identity_freeze.py` | Booking snapshot and live communication preferences |
+| `src/lms/enigma/ceilings.py` | Role gate for edits, tighter-of platform and company |
+| `src/lms/enigma/machine.py` | Unbound IAM exchange |
+| `src/lms/enigma/regulatory.py` | Whether an NCR number is required for a communication |
+| `tests/test_enigma_session.py` | Session, freeze, ceiling, and NCR behaviour |
 
-### 1. Is a borrower an Enigma person, and what stops cross-tenant attachment?
+`python3 -m pytest tests/test_enigma_session.py` covers the middleware and the locked rules. There is no UI in this change.
 
-The task says LMS does not re-implement person identity. Post-origination boarding therefore arrives with an Enigma `person_id` already chosen by the originating system.
+## Remaining Enigma API details
 
-- **Option A. Enigma proves the person may be a party of this organisation.** Boarding calls `party.usable(person_id, organisation_id, product_code)`. A no rejects the row. Recommendation: this option, if the registry already has a relationship that can answer it.
-- **Option B. Enigma only proves the person exists.** The originating system presents a signed assertion, produced by Enigma, that `person_id` was released to `organisation_id` for `lms`. LMS verifies the signature. LMS does not keep a customer registry of its own.
-- **Option C. LMS collects the identity document.** This rebuilds person identity inside LMS. It conflicts with the task. It is listed so the rejection is explicit.
+These are the only items still needed from `STATUS.md`, the architecture docs, `consumer_contract.py`, the identity registry, mandates, and sessions. The six decisions above are not waiting on them.
 
-Worked example. A boarding file for Harbour Finance (`org_b`) contains `per_12`, who is a Cape Credit consumer, because of a bad join. Option A or B rejects the row before an agreement snapshot is written. A bare "person exists" check would let Harbour staff retrieve Cape Credit's customer's agreement attributes.
-
-Blocker: which Enigma call or signed assertion the originating system already uses. Read the identity registry and `consumer_contract.py`.
-
-### 2. How does a batch act with no human session?
-
-Allocation and statement jobs have no staff cookie.
-
-- **Option A. Machine membership.** Enigma issues a non-human member of the organisation whose only mandate action is `lms.allocation.run` (and a separate one for statement generation if that is a different action). Recommendation.
-- **Option B. A staff session is stored for the job.** A revoked human mandate would keep authorizing the batch, or a resignation would stop the batch. Rejected.
-
-Worked example. At 02:00 Africa/Johannesburg the allocation job for Cape Credit runs. The machine mandate allows `lms.allocation.run` and lookup denies `lms.account.write_off`. The job allocates. It cannot write off a remainder it does not like.
-
-### 3. What may LMS still do when enrolment or the organisation is `suspended`?
-
-Money movement and account-opening stop. Existing borrowers may still need statements and receipts recorded.
-
-- **Option A. Fail closed on every route, including reads.** Simplest reading of a single `suspended` flag. Recommendation until Enigma grows a more precise status, because this contract must not invent a servicing exemption.
-- **Option B. Enigma adds `suspended_servicing_only`.** Reads, statements, and receipt capture stay available. New accounts, write-off, restructure, and settlement acceptance stop. LMS will implement this the day the port grows that status. It will not infer it from `suspended`.
-
-Worked example. Cape Credit's enrolment goes `suspended` at 14:00. A disbursement-equivalent boarding at 14:01 is refused under both options. A balance enquiry at 14:02 is refused under Option A and allowed under Option B. The 14:02 behaviour waits on the status Enigma actually has.
-
-### 4. Where does the credit provider's NCR registration number live?
-
-Agreements and statements need the provider's registration number. This contract does not decide the statutory wording.
-
-- **Option A. Enigma holds it on the organisation and `organisation.context` returns it.** Recommendation when the organisation registry already stores regulatory identifiers.
-- **Option B. LMS stores it as a regulatory attribute of the tenant, keyed by `organisation_id`.** It is not a person registry and not a second organisation registry. It is one regulated number Enigma does not have. Changes are audited in LMS.
-
-Worked example. Cape Credit's NCR number changes after a new registration certificate. Under Option A, LMS reads the new value from Enigma and freezes the value current at each new agreement; old agreements keep the bag they concluded with. Under Option B, the same freeze happens from the LMS attribute.
-
-### 5. Where does white-label brand live?
-
-- **Option A. Brand is organisation context in Enigma** (trading name, logo reference). LMS renders it and does not keep a second brand record.
-- **Option B. Brand is LMS configuration** keyed by `organisation_id`. Enigma remains the tenant key. Recommendation if Enigma's organisation record is legal identity only. Confirm against the architecture docs.
-
-### 6. May LMS search by identity number?
-
-- **Option A. Enigma search, purpose-limited.** LMS sends the number, Enigma returns `person_id` values the caller may use for this organisation. LMS does not index the number. Recommendation.
-- **Option B. No search in servicing.** Staff work from account numbers and `person_id` values already on LMS accounts. Stronger, and acceptable for a post-origination book if the boarding source always supplies `person_id`.
-
-Worked example. A consumer quotes an identity number on a call. Under Option A the clerk's action `lms.party.attributes.read` plus a search purpose returns at most the `person_id` values already usable for Harbour Finance, and the clerk opens those accounts. Under Option B the clerk searches the LMS account number only.
-
-### 7. Does a mandate carry amount and time limits, and who evaluates them?
-
-The port sends `context` and expects `allow` or `deny`, so the ceiling lives in one place.
-
-- **Option A. Enigma evaluates.** Recommendation. `limit_exceeded` is a reason on an otherwise identified mandate.
-- **Option B. Enigma returns the ceiling and LMS compares.** Acceptable only if `consumer_contract.py` already says so. The comparison (inclusive bound, per-command versus per-day aggregate, currency) would then have to be specified by Enigma in writing before LMS copies it.
-
-Worked example. Ceiling R1 000. Command R1 000.00 (`amount_cents` 100000). Option A returns `allow` or `deny` with the bound defined by Enigma. LMS does not guess whether R1 000.00 is inside the ceiling. Command R1 000.01 returns `deny` / `limit_exceeded` under a "ceiling inclusive, cents exact" rule. That rule is Enigma's to state.
-
-A mandate also needs an effective interval. A command is judged at `decided_at`. A backdated receipt uses the mandate that is valid at decision time, not a mandate that was valid on the receipt's value date, unless Enigma's contract says the lookup accepts a value date. See the next question.
-
-### 8. Which instant does `mandate.lookup` use?
-
-- **Option A. Enigma uses the time of the call.** Recommendation. The snapshot's `decided_at` matches the decision. Value date of a payment stays an LMS fact and does not select the mandate.
-- **Option B. LMS passes `effective_at`.** Needed only if a supervisor may act under a mandate as it stood on a previous day. Enigma would have to define it. LMS will not send it until then.
-
-Worked example. A mandate expires at 16:00 Africa/Johannesburg. A receipt valued yesterday is captured at 16:05. Option A denies the capture. The cashier's earlier capture at 15:50 remains, with that version on the snapshot.
-
-### 9. Session binding
-
-Resolved at runtime by the introspect shape, restated here so the adapter test is obvious.
-
-- Introspect includes `bound_organisation_id`: switch calls `session.bind_organisation`. LMS does not silently keep a local organisation the session is not bound to.
-- Introspect includes `organisations` and no binding: switch calls `membership.validate` and stores the choice in the LMS session row.
-
-Worked example of the mismatch. LMS assumes a local switch while Enigma has the session bound to `org_a`. The next introspect snaps the user back to `org_a` after they believed they were in `org_b`, and a mutation can land in the wrong book. The generation counter does not save this. The bound organisation, when present, wins.
-
-### 10. Attribute bag on the agreement
-
-LMS can freeze a bag. The fields are a legal question, not an Enigma invention and not an NCA calculation.
-
-Need a written list before `purpose=agreement_conclusion` is coded: which of legal name, identity number or passport number, juristic registration, address, and contact must be frozen, and which must stay display-only. The bag is immutable after conclusion. A later correction is a new LMS command with a new snapshot, not an edit of the old bag.
-
-### 11. Audit retention, POPIA, and deletion
-
-I-DIP's review described rails that forbid person deletes. If Enigma tombstones a person, LMS still has agreements and snapshots that cite `person_id`.
-
-- LMS keeps the snapshot for the life of the audit record. The period itself needs a compliance decision. This document does not set a number of years.
-- A tombstone event, if Enigma emits one, clears display projections. It does not delete agreement bags or authority snapshots.
-- Confirm the event name and whether a tombstoned `person_id` still resolves for audit reads by the credit provider.
-
-### 12. Consumer authentication, environments, and rails
-
-Need from the architecture docs and `consumer_contract.py`:
-
-- How LMS authenticates as a consumer (shared secret, mTLS, signed JWT, network policy).
-- The audience string for LMS. Do not reuse `product-idip`.
-- The environment rail names for production and sandbox. Proposed labels, unbound: audience `lms`, environment `lms-production` and `lms-sandbox`.
-- Whether sandbox organisations can be told apart in `organisation.context`, so a sandbox session cannot introspect into a production organisation.
-
-Worked example. A sandbox session reference for a test organisation is presented to production LMS. The adapter's audience or environment check fails with `session_wrong_audience` before any production account is read.
-
-### 13. Status of the modules this contract must still be checked against
-
-| Source file | Question the file answers | Enigma actual |
-| --- | --- | --- |
-| `STATUS.md` | Which of the five operations exist on the day LMS integrates | Unread |
-| Architecture docs | Sync only, or events as well. Rail and audience scheme | Unread |
-| `consumer_contract.py` | Paths, auth, error codes, idempotency | Unread |
-| Identity registry | `person_id` stability, party-to-organisation relationship, attributes, search, tombstone | Unread |
-| Mandates | Decision versus ceiling data, versions, machine members, effective time | Unread |
-| Sessions | Opaque reference versus token, organisation binding, revocation, expiry | Unread |
+1. HTTP paths, how LMS authenticates as a consumer, and the error-code map.
+2. Cognito callback shape. LMS expects a session reference. Confirm whether the callback is that reference or an authorization code to exchange, and the claim that carries audience `lms`.
+3. Real role ids for staff admin, `lms.ceiling.platform.write`, and `lms.ceiling.company.write`.
+4. IAM exchange. The request Enigma will accept (presigned `GetCallerIdentity` or another SigV4 call), the checks on account and role ARN, and the machine session reference it returns.
+5. Live person field names for name, ID number, service address, email, mobile, and preferred channel.
+6. Whether `session.introspect` returns `bound_organisation_id`. If it does, switch must call Enigma's bind operation and LMS must not keep a local organisation the session is not bound to.
+7. Catalogue strings for the four product codes.
+8. Event signature, delivery, and the tombstone event if a person can be closed. A tombstone clears display projections and does not delete frozen agreement identity or authority snapshots.
+9. Sandbox versus production audience, so a sandbox session cannot introspect into a production organisation.
+10. How the admin staff-list screen is reached. LMS does not implement the amendment. Confirm whether the UI deep-links into Enigma or calls an Enigma API.
 
 ## Out of scope
 
-The calculation engine is out of scope: interest caps, initiation and service fees, in duplum, the order of payment allocation, and the early-settlement formula. The port only decides whether the actor may run those LMS commands.
+The calculation engine and the ledger. Statutory interest, fees, in duplum, allocation order, and early-settlement formulae are not in this port. Operational ceilings are authorization limits only.
 
-LMS does not register persons, does not register organisations, and does not edit mandates.
+LMS does not register persons, does not register organisations, and does not edit the staff list or machine list.
