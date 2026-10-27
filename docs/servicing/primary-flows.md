@@ -6,7 +6,7 @@ This note specifies how servicing books an activated agreement, takes payments, 
 
 Enigma (`eugene-ehlers/enigma`) was not readable from this workspace. The Enigma calls below are the consumer port servicing needs. They are not a claim about Enigma's current API.
 
-No NCA rule is invented below. Where the Act, the regulations, a judgment, and an NCR circular do not settle a point, the point is marked **Ambiguity** and given options with worked numbers. A recommendation is an implementation default for the rule pack, not a statement of law. Counsel signs each election before the rule pack is activated. The agreement stores the election ids that were in force when it was booked.
+No NCA rule is invented below. Five elections were locked on 27 October 2026 (Africa/Johannesburg). They are L1 to L5 in section 4. Each one has a worked example. The agreement stores the resolved values, and every Calculation Engine call receives them. Choices that are still open stay marked as such. The implementation contracts, state machine, and sequences are in [implementation-design.md](implementation-design.md).
 
 ## 1. Boundaries
 
@@ -55,7 +55,7 @@ Caps are data in the rule pack, each row carrying its gazette and effective date
 
 Section 101(1) allows only: principal debt (the amount deferred, plus s 102 items); an initiation fee; a service fee; interest; cost of credit insurance under s 106; default administration charges; collection costs. Section 100 makes a charge outside that list, or above the permitted amount, unlawful. There is no separate "late fee" on an NCA agreement.
 
-Section 102 lets a credit provider include an initiation fee in the principal only for an instalment agreement, a mortgage, a secured loan, or a lease, and only if the consumer was offered the chance to pay it separately and declined. Day-1 unsecured and short-term agreements are not in that list. A deferred initiation fee on those products stays in its own bucket. See Ambiguity E4.
+Section 102 lets a credit provider include an initiation fee in the principal only for an instalment agreement, a mortgage, a secured loan, or a lease, and only if the consumer was offered the chance to pay it separately and declined. Day-1 unsecured and short-term agreements are not in that list. On those products a deferred initiation fee stays in its own bucket. Whether that separate fee bears interest is L2.
 
 ### 3.2 Caps in the rule pack
 
@@ -77,7 +77,7 @@ Unsecured, regulation 39(3): the debt is not supported by any pledge or other ri
 
 Initiation fee, GN R.1080 Table B, for a short-term or unsecured agreement: R165 plus 10% of the amount in excess of R1 000, never more than R1 050. Regulation 42 says the amount of the agreement for this table is the amount deferred. Regulation 43(3) still says the initiation fee may never exceed 15% of the principal debt. Both limits apply; the lower one binds. Regulation 43, as amended, also says an initiation fee is charged only when a new credit agreement is established, not on a transactional basis. Incidental credit: initiation fee nil.
 
-Service fee: GN R.1080 sets the maximum monthly service fee at R60. Regulation 44(1) and (2) still limit an annual fee to the monthly maximum times the number of months, and limit transaction-based fees (credit facilities only, s 101(1)(c)) to that same monthly or annual ceiling. Regulation 44(4), added by GN R.1080: a service fee is charged for a calendar month in which it is due, and on a pro rata basis where the agreement was concluded during that calendar month. The retrieved text of 44(4) stops there. It does not define the pro rata fraction, and it does not mention the month in which the agreement ends. See Ambiguity E8.
+Service fee: GN R.1080 sets the maximum monthly service fee at R60. Regulation 44(1) and (2) still limit an annual fee to the monthly maximum times the number of months, and limit transaction-based fees (credit facilities only, s 101(1)(c)) to that same monthly or annual ceiling. Regulation 44(4) requires pro rata where the agreement is concluded during the calendar month. *MFSA v NCR* order 2 holds that this pro rata applies to the opening month and that the fee is not required to be pro-rated in the month the agreement terminates. The operational rule is L4.
 
 Interest maths is regulation 40, owned entirely by the Calculation Engine:
 
@@ -103,7 +103,7 @@ Section 103(5):
 - once that total equals the unpaid principal, no further charges may be levied;
 - a later payment during the same default does not restart those charges.
 
-The subsection says it applies despite the common law. Servicing does not also run the common-law in duplum rule (interest stops at the capital, and starts again after a payment) on an in-scope agreement. Charges that accrued before default are outside the aggregate. They remain payable. They do not fill the cap, and they do not raise it. See Ambiguity E13 for what "principal debt" includes once interest has been capitalised into the deferred amount.
+The subsection says it applies despite the common law. Servicing does not also run the common-law in duplum rule (interest stops at the capital, and starts again after a payment) on an in-scope agreement. Charges that accrued before default are outside the aggregate. They remain payable. They do not fill the cap, and they do not raise it. What counts as unpaid principal on the day default occurs is L3.
 
 ### 3.4 Payments and early settlement
 
@@ -113,7 +113,7 @@ Section 126:
 2. The provider must accept a payment when it is tendered, including before the due date.
 3. The provider must credit each payment as of the date of receipt, first to due or unpaid interest, second to due or unpaid fees or charges, third to principal.
 
-Section 112(2): a credit takes effect on the date the consumer makes the payment, or otherwise earns the credit. Section 112(3) allows a later adjustment so the account reflects the legal obligations. Section 112(2) and s 126(3) do not use the same date. See Ambiguity E1.
+Section 112(2) dates a credit on the day the consumer makes the payment. Section 112(3) allows a later adjustment. The locked value date for allocation is the system's recognition of receipt, which is the operational reading of s 126(3). See L1. A reversal uses s 112(3) to undo that allocation on the same recognition date.
 
 Section 125(1): the consumer or a guarantor may settle at any time, with or without notice. Section 125(2): the settlement amount is the unpaid principal at that time, plus unpaid interest and all other fees and charges payable up to the settlement date, plus an early-termination charge only in the case of a large agreement. Day-1 principals are far below the large-agreement threshold, and none of the products is a mortgage, so s 125(2)(c) does not apply. Future instalments are not added. Unaccrued future interest is not added.
 
@@ -149,23 +149,40 @@ Section 106(8) allows the Minister to cap the cost of credit insurance. The cap 
 
 Default administration charges (reg 46) and collection costs (reg 47) are not levied by these flows. They are posted later by collections, into the buckets the waterfall already has, and they count toward s 103(5) if they accrue during default. Regulation 46 limits default administration charges to letters necessarily written under Part C of Chapter 6, at the magistrates' court registered-letter tariff plus reasonable delivery cost. An ordinary missed instalment does not create one.
 
-## 4. Ambiguities
+## 4. Elections
 
-Each election is stored on the agreement. The engine receives the election; it does not choose a different one per call.
+L1 to L5 are locked. L1, L3, and L4 are platform rules. L2 and L5 are chosen per organisation, with an optional per-product override. Booking freezes the resolved set onto the agreement. Later edits to the organisation or product do not change agreements already booked. Every engine call receives the frozen set. The engine does not substitute a different value.
 
-### E1. Value date: s 112(2) versus s 126(3)
+The subsections marked E are not locked. A recommendation there is the earlier design position. It is not in the rule pack, and the engine must not apply it, until it is locked in the same way as L1 to L5.
 
-Section 112(2) credits the account on the date the consumer makes the payment. Section 126(3) credits it as of the date of receipt.
+### L1. Value date is the system recognition date
 
-Worked example. The consumer pays R500 at a retailer on Friday 3 April. The credit provider's account is credited on Tuesday 7 April. The short-term balance that morning is R5 000 at 5% per month, and the agreement uses a 30-day month. One day's interest on R5 000 is `5000 × 0.05 / 30 = R8.333…`. Four days is about R33.33, before rounding.
+The value date for allocation is the Africa/Johannesburg civil date on which servicing recognises the payment. That is the date of the commit that first posts the payment to unallocated receipts, unless the intake carries an explicit `recognition_date` that is not in the future. The date the consumer tendered the money is stored as `tendered_on`. It is not the value date.
 
-| Option | Interest value date | Cash date | Effect in the example |
+A reversal removes the allocation on that same recognition date. The day the reversal message arrives is `reversed_on`. It is not a second value date.
+
+Worked example. Short-term balance R5 000 at 5% per month, 30-day month. One day of interest is `5000 × 0.05 / 30 = R8.333…`.
+
+| Event | Civil date | Effect |
+| --- | --- | --- |
+| Consumer pays R500 at a retailer | Friday 3 April 2026 | Stored as `tendered_on`. No allocation |
+| Servicing posts the receipt | Tuesday 7 April 2026 | Recognition date and allocation value date. Interest has run through 7 April. The R500 is allocated on 7 April |
+| Rail reverses the receipt | Wednesday 15 April 2026 | Allocation is undone with value date 7 April. 15 April is `reversed_on` only |
+
+The four days from 3 April to 6 April are not credited as an earlier receipt. A payment recognised on 7 April does not get a value date of 3 April.
+
+### L2. Interest on a deferred initiation fee is a provider choice
+
+Default, when neither the organisation nor the product has a row: no interest on a deferred initiation fee. The alternative, stored per organisation or overridden per product, permits interest. That alternative is the reading in *MFSA v NCR*: regulation 39 includes the fee in the deferred amount, and regulation 40 calculates interest on the deferred amount. The fee stays out of the principal bucket on a short-term or unsecured agreement, because s 102 does not list those agreements.
+
+Worked example. Cash advanced R5 000. Initiation fee R565. Monthly rate 5%. The fee is unpaid for a 30-day month.
+
+| Resolved choice | Interest base | Interest for the month | Principal bucket |
 | --- | --- | --- | --- |
-| A | 3 April, the day the consumer paid | 7 April | Consumer is not charged for the rail's float |
-| B | 7 April, the day funds are received | 7 April | Literal "date of receipt"; consumer bears about R33 |
-| C | 7 April, unless the agreement defines receipt as the collection agent | 7 April | Depends on a sentence in the agreement |
+| `no_interest` (platform default) | R5 000 | R250.00 | R5 000. Fee stays R565 |
+| `interest_permitted` | R5 565 | R278.25 | R5 000. Fee stays R565 and is inside the deferred amount |
 
-Recommendation: A. Store both civil dates on every intake. The engine accrues and allocates on `consumer_payment_date`. The ledger's bank leg uses `receipt_date`. The float stays with the provider. Counsel confirms this before the pack is activated, because it prefers s 112(2) where the two sections differ.
+`interest_permitted` does not, by itself, capitalise the fee into principal. Booking rejects `capitalised_into_principal` for a short-term or unsecured subsector. A product type that s 102 allows to include the fee in principal can capitalise it, and L3 then picks that amount up in the duplum base.
 
 ### E2. "Due or unpaid" before the charge may be debited
 
@@ -193,19 +210,6 @@ Worked example. All of the following are already due: service fee R60 (due 31 Ma
 | C. A published order that is not in the Act | Whichever order was published; it is a convention |
 
 Recommendation: A. Where two fee amounts share a due date, a stable order is disclosed on the agreement and in the rule pack: unpaid initiation, service fee, credit life, default administration, collection costs. That tie-break is a convention. It is not s 126. Changing it does not change the interest-then-fees-then-principal order.
-
-### E4. Interest on a deferred initiation fee
-
-NCR Circular 15 of 2016 says that on an unsecured or short-term loan the deferred initiation fee is shown separately and does not bear interest. The circular says it is not a binding ruling. *MFSA v NCR* held that regulation 39(1) includes the initiation fee in the deferred amount and regulation 40 calculates interest on the deferred amount, so a deferred fee may bear interest, and that s 102 only stops the fee being folded into principal. The judgment is a single-judge Gauteng decision marked not reportable.
-
-Worked example. Cash advanced R5 000. Initiation fee R565 (see E5 for the cap arithmetic). Monthly rate 5%, 30-day convention, fee unpaid for a full 30-day month.
-
-| Option | Interest base for the month | Interest for the month | Principal bucket |
-| --- | --- | --- | --- |
-| A. Circular 15 | R5 000 | R250.00 | R5 000. Fee stays R565, no interest on it |
-| B. MFSA | R5 565 | R278.25 | R5 000. Fee stays R565, and it is inside the deferred amount |
-
-Recommendation: no platform default. `initiation_fee_treatment` is required when the fee is deferred: `deferred_separate_no_interest` or `deferred_separate_with_interest`. The provider's signed election is copied onto the agreement. Absent the field, booking returns 422. In both options the fee is not principal, so it is not the s 103(5) base and it is a fee for s 126.
 
 ### E5. Base used to calculate the initiation-fee maximum
 
@@ -249,37 +253,44 @@ Worked example. Consumer takes R2 000 for one month from provider A on 10 Januar
 | A. Same credit provider, calendar year of the agreement date | 3% | Nothing about A; B may charge 5% if B has no earlier short-term for this person in that year |
 | B. Any short-term in the market | 3% | Only whatever the decision engine's bureau evidence says, which is incomplete |
 
-Recommendation: A for the check this LMS can actually perform. The engine counts short-term agreements on this platform for the same Enigma person and the same Enigma organisation whose agreement date falls in that calendar year, excluding agreements that never disbursed. The decision engine may send the ids it relied on; the engine recomputes from the ledger of bookings and ignores a higher rate. A 5% rate on a subsequent same-provider loan is a 422. Option B is not enforceable here without treating bureau data as fact. If counsel requires B, the payload must include the evidence, and the agreement stores it.
+Earlier position, not locked: count short-term agreements on this platform for the same Enigma person and the same Enigma organisation whose agreement date falls in that calendar year, excluding agreements that never disbursed. Until E7 is locked, `validate_booking` does not receive that id list as a settled rule, and a 5% rate is not rejected on the strength of this paragraph alone. Option B would need bureau evidence on the agreement. A loan booked in one calendar year does not change rate on 1 January.
 
 The rate is fixed at inception for a fixed-rate agreement. A loan booked in December at 5% does not become 3% in January.
 
-### E8. Service fee in the inception month and the exit month
+### L4. Service fee is pro-rated only in the opening period
 
-Regulation 44(4) requires pro rata for the calendar month in which the agreement is concluded. It does not, in the text retrieved, require pro rata for the month of settlement, and it does not define the fraction.
+Pro rata applies only to the opening period, from the disbursement date up to and not including the first payment due date. After that due date the engine levies the full contractual monthly fee, including in the month of settlement. The amount charged to the consumer on any one levy is not above the contractual monthly fee and not above R60.
 
-Worked example. Agreement concluded 15 January, settled 15 February. Contractual monthly service fee R60. January has 31 days.
+The opening charge is `monthly_fee × opening_days / month_length`, rounded by E15 when that charge becomes due. `opening_days` counts the disbursement date and stops the day before the first due date. `month_length` is the agreement's month-day count (30, or the actual days of the first full instalment period when the agreement does not use 30). If `opening_days` is greater than or equal to `month_length`, the opening charge is one full monthly fee, not more than one. Settlement before the first due date shortens `opening_days` to the settlement date and does not add a second full fee. This is the operational form of regulation 44(4) and of *MFSA v NCR* order 2, which refused a compulsory pro rata in the termination month. The judgment describes that opening month as the calendar month of conclusion. The locked window is disbursement to first due date, including where that window crosses a calendar-month boundary. There is one opening charge, not a calendar-month stub plus another stub.
 
-| Month | Option | Amount |
+Worked example. Contractual service fee R60. Disbursement 16 March 2026. First due date 31 March 2026. Month length 30.
+
+| Charge | Calculation | Amount |
 | --- | --- | --- |
-| January | Actual days from the 15th to the 31st, inclusive, 17/31 × R60 | R32.90 |
-| January | Half month | R30.00 |
-| February | Full fee, because 44(4) does not mention settlement | R60.00 |
-| February | Same day-count method, 15/28 × R60, by analogy | R32.14 |
+| Opening period, 16 March inclusive through 30 March | 15/30 × R60 | R30.00 |
+| Settlement on 15 April 2026, which is after the first due date | Full monthly fee | R60.00 |
 
-Recommendation: the agreement states `actual_days_in_month` for the inception month, counting from the disbursement date to the end of that month, inclusive, over the actual number of days in that month. The same fraction method is used for the settlement month, as a consumer-protective policy, and the agreement says so. That exit-month pro rata is a policy. It is not a sentence in the retrieved regulation 44(4). A provider who wants the full exit month must send that election and have counsel sign it. Rounding of the pro rata amount is the engine's published rounding rule (E15).
+Service fees levied are R90. Neither levy is above R60. A settlement on 15 April does not reduce the April fee to R30.
 
-### E9. A fixed contractual rate after RR moves
+### L5. Rate after a repo fall is a provider choice
 
-Section 101(1)(d)(ii) and s 100(1)(c) prohibit interest above the applicable maximum. Section 104(1) prohibits a unilateral increase except for a variable rate. NCR Circular 8 of 2016 says the 2016 fee review is not retrospective. A moving RR is not the same thing as that review.
+Stored per organisation, or overridden per product:
 
-Worked example. Unsecured agreement, fixed contractual rate 24% per year. Cap is RR + 21%. RR at booking is 7%, so the cap is 28%. The contractual rate is lawful at booking. RR later falls to 2%. The cap becomes 23%.
+| Value | Accrual after RR falls | Notice |
+| --- | --- | --- |
+| `contract_rate_continues` | The contractual rate continues | No s 104 notice for this fall |
+| `lower_of_contract_and_cap` | The lower of the contractual rate and the statutory maximum on that day | s 104(2) notice, at least five business days, because the amount the consumer pays changes |
 
-| Option | Rate accrued after the fall |
+There is no platform default. An RR-linked product (unsecured personal, cap RR + 21%) fails booking with `election_required` until the organisation or the product has a row. A short-term monthly rate is not an RR formula. Booking stores `not_applicable` for that field, and a later fall in RR does not change the contractual 5% or 3% per month.
+
+A fixed contractual rate never increases because RR rises. Section 104(1) still forbids that unilateral increase. An agreement priced as a margin over RR uses the variable-rate path in section 6.4, and the same stored choice caps the result when the choice is `lower_of_contract_and_cap`.
+
+Worked example. Unsecured agreement, fixed contractual rate 24% per year. RR at booking is 7%, so the cap is 28%. The contractual rate is lawful at booking. RR later falls to 2%. The cap becomes 23%.
+
+| Resolved choice | Rate accrued after the fall |
 | --- | --- |
-| A. Cap tested at inception only | 24%, which is then above the formula |
-| B. Continuing ceiling | min(24%, 23%) = 23%, and a s 104 notice is sent because the amount the consumer pays changed |
-
-Recommendation: B. The engine accrues at most the cap in force on that day. A fixed rate never increases. A reduction is notified under s 104(2) (at least five business days) when it is a change to a fixed contractual charge, and the variable-rate path in section 6.4 is used when the agreement itself is priced as RR plus a margin. Counsel confirms B, because Circular 8 shows that "not retrospective" is the Regulator's approach to a regulation change, and a falling RR is not that event.
+| `contract_rate_continues` | 24% |
+| `lower_of_contract_and_cap` | 23%, and the s 104(2) notice is issued |
 
 ### E10. In duplum headroom after a payment
 
@@ -297,20 +308,26 @@ Worked example. Unpaid principal when the missed instalment fell due: R300. Cap 
 | Payment of R100 during month 5 | Applied by s 126 to unpaid interest, then fees. No new charge | Stays frozen |
 | 6, still in default | R0 | R300 |
 
-The initiation fee levied at disbursement is not in the R300. It accrued before default. If the consumer later pays everything that is overdue, the default ends and the freeze ends. A later default takes a new base equal to the unpaid principal at that new default. The amounts that accrued during the first default are not refunded.
+If that R300 already includes an initiation fee capitalised into principal before the default, the fee is inside the cap, as L3 requires. A fee that was never capitalised into principal is outside the R300 and outside the aggregate: it accrued before default. Post-default interest and the service fee count toward the R300 even when the statement shows them added to the balance. Clearing the arrears ends the episode. The next default snapshots a new base on its own first day. Amounts accrued during the first episode are not refunded.
 
-### E13. What the in-duplum base is made of
+### L3. In-duplum base is unpaid principal at the date of first default
 
-Section 103(5) uses "the unpaid balance of the principal debt … as at the time that the default occurs." Section 101(1)(a) defines principal as the amount deferred plus s 102 items. Regulation 39's deferred amount includes fees and interest once they are deferred. Regulation 40 adds interest to the deferred amount monthly. If "principal" for the cap follows that expanded deferred amount, capitalised interest enlarges the cap.
+The base is the unpaid principal on the date that default occurs, including any initiation fee that was capitalised into principal before that date. The date is the first day of that default episode. It is not a later day inside the episode, and it is not recomputed because a payment later reduces principal.
 
-Worked example. Cash advanced R1 000. Before any default, one month's interest of R50 is added to the deferred amount for the next interest calculation. The consumer then misses a payment. Unpaid cash principal is R1 000. Unpaid interest is R50.
+Post-default accruals of the s 101(1)(b) to (g) amounts are charges. They increment the in-duplum aggregate. A statement may display them as capitalised into a single balance. That display does not move them into the principal bucket and does not increase the base. *Nedbank v NCR* order 11(c) still applies: once the aggregate equals the base, a payment during that same default does not restart the charges.
 
-| Option | Cap for this default | What a payment does to the base |
+When the arrears are cleared, the episode ends. Section 103(5) constrains amounts that accrue "during the time that a consumer is in default", and the SCA order limits the freeze to the period "while such default persists". A later default is a new occurrence and snapshots a new base on that later date.
+
+On a day-1 short-term or unsecured agreement the initiation fee is not capitalised into principal (L2), so the base is the unpaid cash principal. The separate initiation fee stays collectable and does not enter the base or the aggregate.
+
+Worked example. Cash advanced R1 000 on 1 March. The instalment due 31 March is unpaid at the end of that day. `default_occurred_on` is 31 March.
+
+| Facts on 31 March | Duplum base | April interest R50 and service fee R60 |
 | --- | --- | --- |
-| A | R1 000 | Later principal reductions do not shrink the cap. The text fixes it at the time default occurs. Capitalised interest is not principal |
-| B | R1 050 | The cap grows by the interest that was capitalised before default, and can grow again if interest capitalised during default is treated as principal |
+| Initiation fee R150 was capitalised into principal before 31 March. Unpaid principal R1 150 | R1 150 | Aggregate becomes R110. Base stays R1 150. The statement may show the R110 inside the balance. The R110 remains a charge |
+| L2 default: fee R150 is a separate bucket and was not capitalised. Unpaid principal R1 000. Pre-default interest of R40 is also unpaid | R1 000 | The R40 stays collectable and does not consume the cap. The April R110 consumes it. Base stays R1 000 |
 
-Recommendation: A. The ledger never journals interest into the principal bucket. "Added to the deferred amount" is an input the engine uses when it calculates the next day's interest. It is not a reclassification. The duplum base is the principal bucket at the start of default, and it is stored as a memo that does not change until that default ends. Pre-default unpaid interest stays collectable and does not consume the cap.
+Interest that regulation 40 adds to the deferred amount for the next day's calculation is an engine input. It is not a journal from the interest bucket into principal. Post-default interest therefore cannot enlarge the base by being displayed as capitalised.
 
 ### E11. Zero-cost BNPL or lay-by, and a later late fee
 
@@ -416,8 +433,11 @@ Caller: the decision engine, with an Enigma mandate `agreement.book` for this or
   "money": {
     "currency": "ZAR",
     "principal_cents": 500000,
-    "initiation_fee_cents": 56500,
-    "initiation_fee_treatment": "deferred_separate_with_interest"
+    "initiation_fee_cents": 56500
+  },
+  "disclosed": {
+    "initiation_fee_interest": "no_interest",
+    "rate_after_repo_fall": "not_applicable"
   },
   "interest": {
     "structure": "fixed_monthly",
@@ -429,9 +449,7 @@ Caller: the decision engine, with an Enigma mandate `agreement.book` for this or
   },
   "service_fee": {
     "basis": "monthly",
-    "amount_cents": 6000,
-    "inception_proration": "actual_days_in_month",
-    "settlement_proration": "actual_days_in_month"
+    "amount_cents": 6000
   },
   "credit_life": null,
   "term": {
@@ -453,7 +471,7 @@ Caller: the decision engine, with an Enigma mandate `agreement.book` for this or
 }
 ```
 
-The R5 000 initiation-fee figure in the sample is illustrative only if it matches Table B and regulation 43(3) for that principal: R165 + 10% × R4 000 = R565, and 15% × R5 000 = R750, so R565 binds. The engine recomputes it. The sample instalment is not a servicing calculation; the engine either accepts the schedule or returns the schedule it is prepared to maintain.
+The normative request and response schemas are in the implementation design. The R5 000 initiation-fee figure above is lawful only if it matches Table B and regulation 43(3): R165 + 10% × R4 000 = R565, and 15% × R5 000 = R750, so R565 binds. The engine recomputes it. The sample instalment is not a servicing calculation. L4, not the caller, decides service-fee pro rata. L2 and L5 are resolved from the organisation or product and then frozen; `disclosed` must match that resolution or the call returns 422.
 
 `POST /v1/payment-plans` is the same shape with `nca.form = non_nca_payment_plan`, fees and interest required to be zero, and no duplum fields. A non-zero charge on that endpoint is 422 with `reclassify_required`.
 
@@ -462,8 +480,8 @@ The R5 000 initiation-fee figure in the sample is illustrative only if it matche
 1. Authenticate the caller. `check_mandate` and `get_product_enrolment`. Organisation and person must be active.
 2. Insert the idempotency row. Lock it.
 3. Check the product catalogue. `short_term_v1` may produce subsector `short_term` only. Servicing does not switch the loan to unsecured inside this product, because the organisation may not be enrolled for that product.
-4. Call `CalculationEngine.validate_booking`. The engine checks regulation 39(2) or 39(3), both initiation-fee caps, the service-fee cap, the interest cap including E7 and E9, credit-life cap if a premium is present, the day-count elections against regulation 40, the schedule, the size thresholds, and the presence of every required election.
-5. Persist the agreement as `pending_disbursement` with the rule-pack version, the elections, and the engine's schedule. Do not post consumer charges yet.
+4. Resolve L2 and L5 (implementation design, section 1) and call `CalculationEngine.validate_booking` with the frozen elections. The engine checks regulation 39(2) or 39(3), both initiation-fee caps, the service-fee cap and L4, the interest cap including the still-open E7 test and the resolved L5 choice, the credit-life cap if a premium is present, the day-count convention against regulation 40, the schedule, and the size thresholds.
+5. Persist the agreement as `pending_disbursement` with the rule-pack version, the frozen elections, and the engine's schedule. Do not post consumer charges yet.
 6. Return 201 with `agreement_id` and `status`.
 
 Disbursement, `POST /v1/agreements/{id}/disbursements`:
@@ -494,7 +512,8 @@ Disbursement, `POST /v1/agreements/{id}/disbursements`:
 | Idempotency key reused with a different body | 409 |
 | Subsector does not match the product, amount above R8 000, term over six months, disbursement not to the consumer, second same-provider short-term loan priced at 5% | 422 `classification_rejected` or `cap_exceeded`, with the engine's rule id. No silent reclassification |
 | Initiation fee above the lower of Table B and 15% | 422 `initiation_fee_cap` |
-| Deferred initiation fee with no E4 election | 422 `election_required` |
+| Disclosed L2 or L5 value differs from the resolved organisation or product policy | 422 `election_mismatch` |
+| RR-linked product and neither organisation nor product has an L5 row | 422 `election_required` |
 | Size would be large | 422 `out_of_day1_scope` |
 | Deposit linked as a non-refundable fee | 422 `prohibited_charge` |
 | Engine timeout | 503. Idempotency row stays in progress so a retry does not double-book |
@@ -502,7 +521,7 @@ Disbursement, `POST /v1/agreements/{id}/disbursements`:
 | Rail reports payment failed after `instruct` | Status `disbursement_failed`. Contra any journals. No interest |
 | `confirm` arrives for an agreement that failed validation and was never created | 404, plus the ops item if the caller sets `funds_already_sent: true` |
 
-Variable rate, when the agreement is `fixed_margin_over_rr` rather than fixed. A reference-rate feed supplies the new RR. The engine returns the new rate, capped by E9. Servicing stores it and sends the s 104(3) notice no later than 30 business days after the change takes effect, with the content regulation 36 requires: the effective date, and the rand interest if ascertainable. A change that reduces a fixed rate under E9 uses the five-business-day notice in s 104(2). Notice delivery is an outbox record. Failure to deliver retries. It does not roll back a rate the law already changed.
+Variable rate, when the agreement is `fixed_margin_over_rr` rather than fixed. A reference-rate feed supplies the new RR. The engine applies the frozen L5 choice and returns the new rate. Servicing stores it and, when the rate changes, sends the s 104(3) notice no later than 30 business days after the change takes effect, with the content regulation 36 requires: the effective date, and the rand interest if ascertainable. A fixed-rate agreement whose L5 choice is `lower_of_contract_and_cap` uses the five-business-day notice in s 104(2) when a fall in RR reduces the rate the consumer pays. `contract_rate_continues` leaves the fixed rate unchanged and sends no notice for that fall. Notice delivery is an outbox record. Failure to deliver retries. It does not roll back a rate the engine has already returned.
 
 Section 121 rescission is an instruction from origination, `POST /v1/agreements/{id}/rescission`. Servicing does not decide if the section applies. If origination says it applies, servicing unwinds disbursement and fees with contra journals dated on the rescission value date and sets `rescinded`.
 
@@ -521,8 +540,8 @@ Rails for day-1: DebiCheck collection result, EFT credit, PayShap, retail cash (
   "collection_account_ref": "cpacc_01J0",
   "amount_cents": 50000,
   "currency": "ZAR",
-  "consumer_payment_date": "2026-10-24",
-  "receipt_date": "2026-10-26",
+  "tendered_on": "2026-10-24",
+  "recognition_date": "2026-10-26",
   "instrument": "debicheck_collection",
   "mandate_reference": "man_01J0",
   "agreement_id": "agr_01J0",
@@ -539,12 +558,12 @@ Provisional rail states (`submitted`, `tracking`) are stored and not allocated. 
 ### 7.2 Happy path
 
 1. Verify the signature. Resolve the organisation from the collection account. Insert intake as `received`.
-2. Post the suspense journal: bank (or clearing) against unallocated receipts, cash date = `receipt_date`. This commit is the point at which the payment is "accepted" for s 126(2). If the ledger cannot post it, return 503 and let the rail retry. Do not acknowledge acceptance before the suspense journal exists.
+2. Post the suspense journal: bank (or clearing) against unallocated receipts. The value date is the recognition date from L1. If the ledger cannot post it, return 503 and let the rail retry. Do not acknowledge acceptance before the suspense journal exists. That commit is the recognition of receipt for s 126(2) and s 126(3).
 3. Lock the agreement. If `agreement_id` is missing, match `payer_reference` or the DebiCheck mandate to one agreement. Zero matches or more than one match: leave the funds unallocated, set intake `unapplied`, emit `payment.unapplied`, return 202. Do not split across agreements. There is no statutory cross-agreement order to invent.
 4. If the prescription flag is set, do not allocate. Intake stays `prescription_review`.
-5. Engine `prepare(agreement, value_date = consumer_payment_date)`. It returns the due buckets after posting any charges that become due on that value date, the memo accruals, and the duplum flag. Servicing posts those due-debits first, in the same transaction as the allocation, so the waterfall sees them.
+5. Engine `prepare(agreement, value_date = recognition_date, elections)`. It returns the due buckets after posting any charges that become due on that recognition date, the memo accruals, and the duplum flag. Servicing posts those due-debits first, in the same transaction as the allocation, so the waterfall sees them.
 6. Engine `allocate(amount, due_buckets, elections)`. It returns lines that sum to the payment. Servicing checks the sum, checks that the order is interest, then fees, then principal, checks that no line exceeds the due bucket, and checks that principal is not driven negative. A surplus above the s 125 settlement amount is a separate surplus line, not principal and not future interest.
-7. Ledger: debit unallocated, credit the buckets, value date = `consumer_payment_date`, cash date = `receipt_date`. One transaction, one idempotency key.
+7. Ledger: debit unallocated, credit the buckets, value date = recognition date. One transaction, one idempotency key. `tendered_on` is stored on the intake row and is not a journal date.
 8. Engine `position_after` returns arrears, duplum flag, and a revised schedule if principal was prepaid. Servicing updates status and stores the schedule version.
 9. Return 200 with the lines. Emit `payment.allocated`.
 
@@ -578,13 +597,13 @@ Non-NCA plans skip steps 5 and 6's waterfall. The engine returns a contractual i
 `POST /v1/payments/{id}/reversals` with the rail's reversal event id.
 
 1. Lock the agreement.
-2. Engine `replay` from the reversed payment's value date, without that payment, over every later event. The engine is pure. Given the same journals and elections it returns the same journals.
-3. Ledger posts the reversal and the replacement journals atomically, effective on their original value dates, with a link to the reversal event.
+2. Engine `replay` from the original recognition date, without that payment, over every later event. The engine is pure. Given the same journals and the frozen elections it returns the same journals.
+3. Ledger posts the reversal and the replacement journals atomically. The reversal's value date is the original recognition date (L1), with a link to the reversal event. `reversed_on` is the civil date the reversal was processed.
 4. A statement already delivered is not edited. If the replay changes a figure inside a delivered period, the next statement opens with the old closing balance (s 109) and shows an adjustment line (s 112(3)). The statement row is flagged `affected_by_replay` for operations. A statement not yet delivered is regenerated.
 
 An unpaid DebiCheck after a `success` uses this path. A `tracking` event that never succeeded has nothing to reverse.
 
-Backdated intake: a payment with an earlier `consumer_payment_date` than a payment already allocated to the same agreement does not allocate on top. It triggers the same replay from the earlier value date. The lock serialises allocations per agreement. Order of work is value date, then intake time.
+Backdated intake: a payment whose recognition date is earlier than a payment already allocated to the same agreement does not allocate on top. It triggers the same replay from that earlier recognition date. The lock serialises allocations per agreement. Order of work is recognition date, then intake time.
 
 ### 7.4 Other failure paths
 
@@ -717,12 +736,12 @@ Engine operations servicing will call:
 | --- | --- | --- |
 | `validate_booking` | Payload, elections, prior same-provider short-term ids, rule pack | Accept or reject with rule ids; schedule; classified subsector and size |
 | `on_disbursement` | Agreement, disbursement civil date | Journals to levy the deferred initiation fee, if any; interest base for the next day |
-| `prepare` | Agreement, ledger position, value date | Due-debits that fall on that date; memo accrual; duplum flag; duplum base if default starts this date |
+| `prepare` | Agreement, ledger position, recognition date, frozen elections | Due-debits that fall on that date; memo accrual; duplum flag; duplum base if this date is the first day of default |
 | `allocate` | Amount, due buckets, elections, settlement total | Lines in s 126 order, plus surplus; lines sum to the amount |
 | `settlement_quote` | Agreement, position, settlement date | s 125 components and total |
 | `statement_figures` | Agreement, movements, previous closing | Regulation 35 totals, arrears, rates to print, component closings |
 | `replay` | Agreement, events from a value date, elections | Replacement journal set for that suffix |
-| `on_rate_change` | Agreement, new RR, date | New rate and the consumer debit difference, for the s 104 notice |
+| `on_rate_change` | Agreement, frozen L5 choice, new RR, date | New rate and the consumer debit difference. No change when L5 is `contract_rate_continues` on a fixed rate, or when the cap is not RR-linked |
 
 Ledger operations:
 
@@ -743,10 +762,10 @@ Invariants the ledger may enforce because they are structural, not a second calc
 
 Calculation Engine:
 
-- Versioned rule pack with gazette, effective date, and every election in section 4. No silent default for E4.
+- Versioned rule pack with gazette and effective date. L1, L3, and L4 are platform rules in that pack. L2 defaults to `no_interest` only when the agreement snapshot says so. L5 has no engine-side default: a missing value on an RR-linked agreement is a reject.
 - Regulation 40 day maths, the 0.1% test, and E15 rounding, with fixtures that sum to the cent.
 - Short-term versus unsecured classification from regulation 39, not from the product name.
-- In duplum exactly as *Nedbank v NCR* order 11, with the base defined by E13 once counsel signs it.
+- In duplum exactly as *Nedbank v NCR* order 11, with the base defined by L3.
 - Settlement as s 125(2), with a zero early-termination charge unless the agreement is large, which day-1 rejects at booking.
 - Deterministic `replay`.
 - Credit-life cap from Gazette 40606, transcribed from the gazette rather than from the media release.
@@ -755,7 +774,7 @@ Ledger:
 
 - Effective-dated, immutable journals and atomic replay.
 - Memo balances that are not "due" for the waterfall, distinct from due balances. Without that split, E2 cannot be implemented.
-- The buckets in section 9 kept separate, so a capitalised interest figure cannot inflate principal.
+- The buckets in section 9 kept separate. Post-default interest and fees stay out of `principal`, so a statement line that displays them as capitalised cannot inflate `duplum_base`. A pre-default initiation fee enters `principal` only when the frozen election capitalises it.
 - A position read that is repeatable inside the agreement lock (snapshot isolation or the equivalent).
 
 Enigma, to be confirmed against the private repository:
@@ -775,26 +794,21 @@ Platform:
 Origination, which this design consumes and does not build:
 
 - A concluded agreement document and a statement-delivery offer.
-- The E4, E8, E14, and E16 elections, already disclosed where the agreement must disclose them.
+- Disclosure of the L2 and L5 choices that the organisation or product has stored, where the agreement must show them.
 - A guarantee that money is not disbursed before `POST /v1/agreements` returns 201.
 
-## 11. What counsel signs before the rule pack is activated
+## 11. Decisions still open
 
-The flows above are implementable only after these are signed. Until then the corresponding field has no default and booking fails closed.
+L1 to L5 are locked. The implementation design lists which of the remaining points block a code path. The short list:
 
-| Id | Question |
+| Id | Still unresolved |
 | --- | --- |
-| E1 | Credit interest on the date the consumer pays, while the bank date follows receipt |
-| E2 | Exclude accrued-but-not-yet-debitable interest and fees from the s 126 waterfall |
-| E3 | Oldest due fee first, with the disclosed same-day tie-break |
-| E4 | Whether this provider's deferred initiation fee bears interest |
-| E5 | Initiation-fee cap computed on cash advanced |
-| E6 | Prescribed rand maxima are the most the consumer pays |
-| E7 | "Subsequent" short-term loan means the same provider and the same calendar year |
-| E8 | Pro rata method, and pro rata in the settlement month |
-| E9 | Fixed rate is cut if the RR cap later falls below it |
-| E13 | Duplum base is the principal bucket at the start of that default |
-| E14 | Annual disclosure is nominal monthly times 12 |
-| E11 / E12 | Zero-cost plan stays outside the NCA; the lay-by is a deposit, not principal |
-| Form 26 | Gazette artwork, and whether the component block may sit on the small-agreement PDF |
-| s 108 | That a secured-loan statement interval applies, or does not, to a lay-by cession |
+| E2 | Whether s 126 reaches interest and fees that have accrued but are not yet debitable |
+| E3 | Order among fee buckets that are all already due |
+| E5 | Whether the initiation-fee cap is computed on cash advanced or on cash plus the fee |
+| E6 | Whether the prescribed rand maxima include VAT |
+| E7 | Whether a "subsequent" short-term loan counts only this provider |
+| E16 | After a partial principal prepayment, whether the term shortens or the instalment drops |
+| Default date | Whether the duplum snapshot is the end of the due date or the next civil day |
+| Form 26 | Gazette artwork, and whether the component block sits on the small-agreement PDF |
+| Lay-by security | Whether a cession of the deposit makes the loan a secured loan for the s 108 statement interval |
