@@ -9,8 +9,7 @@ parameters is the LMS's.
 from decimal import Decimal
 
 from lms_config.statute import (
-    DAY_COUNT_365,
-    DAY_COUNT_ACTUAL_MONTH,
+    DAY_COUNT_ACTUAL_ACTUAL,
     SERVICE_FEE_MONTHLY_CENTS,
     SHORT_TERM_DEFERRED_CENTS,
     SHORT_TERM_FIRST_MONTHLY,
@@ -41,7 +40,9 @@ def micro_short_term() -> ProductTerms:
                 code="loan",
                 kind="credit",
                 monthly_rate=SHORT_TERM_FIRST_MONTHLY,
-                day_count=DAY_COUNT_ACTUAL_MONTH,
+                base_rate=SHORT_TERM_FIRST_MONTHLY,
+                discount_rate=Decimal(0),
+                day_count=DAY_COUNT_ACTUAL_ACTUAL,
                 max_term_months=SHORT_TERM_MAX_MONTHS,
                 max_deferred_cents=SHORT_TERM_DEFERRED_CENTS,
                 fees=(
@@ -64,7 +65,9 @@ def unsecured_personal() -> ProductTerms:
                 code="loan",
                 kind="credit",
                 repo_margin=UNSECURED_REPO_MARGIN,
-                day_count=DAY_COUNT_365,
+                base_rate=UNSECURED_REPO_MARGIN,
+                discount_rate=Decimal(0),
+                day_count=DAY_COUNT_ACTUAL_ACTUAL,
                 max_term_months=60,
                 fees=(
                     FeeTerms("initiation", charge="statutory_formula"),

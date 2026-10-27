@@ -2,13 +2,14 @@
 
 Post-origination loan management for a South African white-label LMaaS. Enigma owns identity, organisations, memberships, enrolment, roles, and mandates. This repository owns product configuration, statutory reference data, and the financial and operational audit log.
 
-The design, the table shapes, the calculation-engine read path, and the unsettled NCA readings are in [docs/lms-owned-configuration.md](docs/lms-owned-configuration.md).
+[docs/LOCKED_DECISIONS.md](docs/LOCKED_DECISIONS.md) is the source of truth for calculation, ledger, servicing, and configuration behaviour. Do not invent a default for a choice that document leaves open. The table shapes and the calculation-engine read path are in [docs/lms-owned-configuration.md](docs/lms-owned-configuration.md). Where the two differ, the locked decisions win.
 
 ## Layout
 
 | Path | What it is |
 | --- | --- |
 | `db/migrations/0001_lms_owned.sql` | Aurora PostgreSQL schema. Apply as the migration role, with `TimeZone=UTC` |
+| `db/migrations/0002_locked_decisions.sql` | Leniency, full-payment threshold, campaign base and discount, and the other stored choices in the locked decisions |
 | `db/seed/001_reference.sql` | Gazette figures, the adopted interpretation set, and public holidays for 2026–2032 |
 | `src/lms_config` | Ceiling arithmetic and the engine read contract. One implementation, so the formula is not copied into SQL |
 | `scripts/render_holidays.py` | Regenerates the holiday block in the seed from the Public Holidays Act rules |
@@ -27,6 +28,7 @@ The tests are the worked examples in the design note. A change to a gazetted fig
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0001_lms_owned.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0002_locked_decisions.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed/001_reference.sql
 ```
 

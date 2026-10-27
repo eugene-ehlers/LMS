@@ -1,5 +1,7 @@
 # LMS configuration, reference data, and audit
 
+`docs/LOCKED_DECISIONS.md` is the source of truth for calculation, ledger, servicing, and configuration behaviour. This document is the storage and the read path. Where the two differ, the locked decisions win. Do not invent a default for a choice that document leaves open.
+
 The LMS prices and services agreements. Enigma owns who the parties are. This document is the storage and the read path for the three things the LMS still owns: configuration, statutory reference data, and the financial and operational audit log.
 
 The ceiling arithmetic lives in `src/lms_config`. The tables live in `db/migrations/0001_lms_owned.sql` and `db/seed/001_reference.sql`. Tests lock the worked examples below to that code.
@@ -30,18 +32,21 @@ The servicing agreement table is not in this migration. Origination writes a pin
 | `organisation_id`, `enigma_person_id` | Enigma | No |
 | `terms_version_id` | Published `cfg_product_terms.id` | No. A new version does not reprice this agreement |
 | `classification` | The terms at origination | No. A zero-cost plan is not silently reclassified when someone wants a late fee |
-| Contractual monthly rate, annual rate, or repo margin | The terms, already not above the cap on the origination date | No, except that a variable margin is added to the repo rate in force on the accrual date |
-| `day_count` | The terms. Regulation 40 requires the agreement to choose | No |
+| Contractual rate as base rate minus campaign discount | The terms. The performing rate is base minus discount, and may be zero. On default the discount falls away and the rate is the base. Penalty interest is that rate, so it does not exceed the contract | The base and the discount are pinned. A later campaign does not reprice this agreement |
+| `leniency_days`, `full_payment_threshold_percent` | Organisation, unless the product overrides it. Copied onto the agreement. Null at both levels fails closed. The examples 4, 5, and 95 are not defaults | No |
+| `interest_on_deferred_initiation` | Organisation, product override. Locked default is `none` | No |
+| `repo_rate_fall` | Organisation, product override. No platform default | No |
+| `day_count` | The terms. Locked decision 5: `actual_actual` (recommended for a new product) or `thirty_360` | No |
 | `short_term_ordinal` | Count of prior disbursed short-term agreements for this organisation and person | No |
 | `ncr_registration_number` | Enigma, copied at origination | No |
 
-The statutory ceiling is not pinned. On each accrual date the engine reads the cap in force that day and charges the lesser of the pin and the ceiling. Section 104 forbids a unilateral increase, so a later rise in the cap does not raise a fixed contract. A later fall can reduce what is accrued. That is interpretation `cap_test_date = accrual_date`.
+The statutory ceiling is not pinned. On each accrual date the engine reads the cap in force that day. A short-term monthly cap is applied on every accrual, because it is the cap for that loan's ordinal. For a repo-linked rate, locked decision 11 is a provider choice stored as `repo_rate_fall`: `contract_rate` keeps the contract rate when the repo falls, and `lower_of_contract_and_cap` accrues at the lower figure and the section 104 notice is issued. Null fails closed. Section 104 still forbids a unilateral increase, so a later rise in the cap does not raise a fixed contract. A rate above the cap on the origination date is refused, including a campaign base that would apply only after the discount falls away.
 
 Sub-ledgers the future ledger has to keep, because section 126 and section 103(5) need them separate even after regulation 40 adds interest to the deferred amount:
 
 `principal`, `interest`, `initiation_fee`, `service_fee`, `default_admin`, `collection`, `credit_insurance`, `deposit`, `layby_penalty`, `early_termination`.
 
-The interest base for the next day is the sum of the sub-ledgers the agreement says interest runs on. Capitalising interest does not move it into `principal`.
+The interest base for the next day is the sum of the sub-ledgers the agreement says interest runs on, minus a linked lay-by hold, and minus a deferred initiation fee unless the provider chose to charge interest on it. A capitalised initiation fee is part of `principal` (locked decisions 2 and 7). Post-default interest and fees stay in their own sub-ledgers even when a statement shows them as capitalised.
 
 ## How the engine reads configuration
 
@@ -70,13 +75,16 @@ Short-term and incidental caps are monthly rates. They are not converted to an a
 Unsecured and the other Table A annual rows are `repo + margin`. On 26 October 2026 the confirmed repo rate is 7.25 percent (MPC statement of 23 September 2026, effective 25 September). The unsecured ceiling is 28.25 percent a year.
 
 ```text
-chargeable = min(contractual rate, statutory cap on the accrual date)
+performing = base_rate - discount_rate
+rate       = base_rate            if in default, else performing
+chargeable = rate                 if repo_rate_fall = contract_rate and the accrual is after origination
+           = min(rate, statutory) if the cap is a short-term monthly cap, or repo_rate_fall = lower_of_contract_and_cap
 ```
 
 ### A payment, in order
 
 1. Resolve the business date and the rows above.
-2. Interest since the last posting is the sum of the unrounded daily amounts. Each day uses that day's deferred amount. The Day-1 pin is end of day, so a payment received today reduces today's base.
+2. Interest since the last posting is the sum of the unrounded daily amounts. Each day uses that day's interest-bearing balance. Locked decision 1 value-dates a loan, settlement, or deposit at 00:00 on its Johannesburg calendar day, so a payment received today reduces today's base. Leniency does not remove a day from this sum.
 3. Half-up the sum to the cent, then clamp it to the in-duplum room and to the rate ceiling. Regulation 40(4) allows 0.1 percent a year against the prescribed daily sum; a half-cent is inside that. A cap itself rounds down, so the consumer is not charged a cent over the gazetted figure.
 4. If today is the capitalisation day, post that interest to the interest sub-ledger. Regulation 40 adds interest at most once a month. It is payable from then. Section 103(3) forbids debiting a day's interest before the end of that day.
 5. Fees that fall due today are posted the same way, clamped to whatever room remains.
@@ -150,7 +158,7 @@ A gazette sweep from 2016 through October 2026 was not completed for every thres
 
 Every configuration row carries `organisation_id` except the child rows of a product, which inherit it through `cfg_product`.
 
-`cfg_organisation_settings` is one row per organisation: Johannesburg timezone, ZAR, locale, and `vat_vendor`. No legal name, no NCR number.
+`cfg_organisation_settings` is one row per organisation: Johannesburg timezone, ZAR, locale, and `vat_vendor`. It also stores `leniency_days`, `full_payment_threshold_percent`, `interest_on_deferred_initiation` (default `none`), and `repo_rate_fall` (null until the provider chooses). No legal name, no NCR number. "Customer" in locked decision 6 is this organisation. A product column of the same name overrides it. Null does not mean zero days or 100 percent.
 
 `cfg_brand` is display name, support contacts, logo key, statement footer. Presentation only.
 
@@ -158,7 +166,7 @@ Every configuration row carries `organisation_id` except the child rows of a pro
 
 `cfg_product` is the stable id. `enigma_enrolment_code` is the code Enigma uses. The row does not grant enrolment.
 
-`cfg_product_terms` is the priced version. `rate_kind` is `zero`, `fixed_monthly`, `fixed_annual`, or `variable_rr_plus`, and the check constraint allows only the matching rate column. `intraday` is `end_of_day` on the Day-1 templates (regulation 40(2)(c)(i)). `prorate_settlement_service_fee` defaults to false, which is the regulation 44 maximum: pro rata is required in the conclusion month, not in the settlement month. A product may turn it on and charge less.
+`cfg_product_terms` is the priced version. `rate_kind` is `zero`, `fixed_monthly`, `fixed_annual`, or `variable_rr_plus`, and the check constraint allows only the matching rate column. A credit rate is stored as `base_rate` minus `discount_rate`, and the effective column must equal that difference, including zero. `intraday` is `start_of_day` (locked decision 1). `prorate_settlement_service_fee` cannot be true (locked decision 9). The same row may override the organisation's leniency, full-payment threshold, initiation-interest choice, and repo-fall choice.
 
 `cfg_fee_rule.charge` is `zero`, `fixed`, `statutory_formula`, or `tariff`. Initiation is published as `statutory_formula` so the engine caps each agreement. A fixed initiation amount is rejected at publish, because an amount that is lawful on R8 000 can break the 15 percent limb on a smaller loan. `tariff` is how default administration and collection are represented, and it still cannot post without `ref_tariff_amount`.
 
@@ -216,14 +224,23 @@ Row level security is forced on the tenant tables. The session variable `lms.org
 
 ## Readings that are not settled
 
-The seed's interpretation set `day1-adopted` records each one. `safe_ceiling` means the adopted option charges less than or equal to the alternative, so a later decision that the alternative was right leaves the consumer over-charged by nothing. `either_way` is where Day-1 can be on the expensive side of another plausible reading. Counsel should start there.
+The seed's interpretation set `day1-adopted` records each one. `locked` means `docs/LOCKED_DECISIONS.md` has closed the question. `safe_ceiling` means the adopted option charges less than or equal to the alternative, so a later decision that the alternative was right leaves the consumer over-charged by nothing. `either_way` is where the engine can be on the expensive side of another plausible reading. Counsel should start there.
 
-Two items are `either_way`:
+Locked, and no longer open in this engine:
 
-- The service-fee pro rata in the month the agreement is concluded includes the conclusion day. Regulation 44(4) does not say whether that day counts.
-- "In default under the credit agreement" is wider than arrears. The engine opens section 103(5) on arrears and on a status flagged `opens_in_duplum`. A breach that nobody has recorded does not open it.
+- Day boundary is 00:00 on the Johannesburg calendar day (decision 1).
+- Default, for in duplum and for collections, is the contractual due date plus the configured leniency, and only if receipts are below the configured percent of the instalment (decision 6). Leniency does not pause interest.
+- Service fee pro-rata is only the opening period from disbursement to the first due date. Later months, including the settlement month, are the full monthly fee, capped at R60 (decision 9).
+- When the repo rate falls, the provider's stored choice applies. There is no platform default (decision 11).
+- The in-duplum cap is cumulative. Its base includes pre-default capitalised initiation (decision 7).
 
-The early-termination base is also unsettled, and Day-1 does not reach it. See the last example.
+Still open:
+
+- The early-termination base is unsettled, and Day-1 does not reach it. See the last example.
+- Credit life and funeral cover on a lay-by that secures a loan: the locked decisions say the treatment is undefined (estate versus beneficiary, and the effect on the loan). This schema does not store a choice.
+- The opening-period service-fee fraction uses the actual days in the disbursement month as its denominator. Decision 9 names the period and does not name that denominator.
+- Leniency is calendar days. The locked text says "days" and does not say business days.
+- Decision 13 (instalment adjustment when disbursement is later than the quote) and decision 14 (payment frequency) are locked and are not columns yet. Servicing must read the document before storing either choice. Do not invent a default.
 
 ### Initiation fee
 
@@ -255,9 +272,11 @@ On a R1 000 balance the two readings are **R50** and **R30** for a month. Day-1 
 
 ### In duplum
 
-Section 103(5): the section 101(1)(b) to (g) amounts that accrue while the consumer is in default may not, in aggregate, exceed the unpaid principal at the time the default occurs. Initiation charged before the default does not count, because it did not accrue during the default.
+Section 103(5): the section 101(1)(b) to (g) amounts that accrue while the consumer is in default may not, in aggregate, exceed the unpaid principal at the time the default occurs. Locked decision 7: that principal includes initiation capitalised before the default. Initiation that was not capitalised stays a fee. Post-default interest and fees stay charges even if a statement shows them as capitalised. A payment reduces what is owed and does not reset the counter.
 
-Adopted reading: the cap is cumulative for that episode. A payment does not reopen it. The episode ends when nothing payable is overdue. The next default snapshots principal again.
+The same default test feeds this cap and collections. It does not flag during the leniency period. Interest still accrues on those days.
+
+The cap is cumulative for that episode. The episode ends when nothing payable is overdue. The next default snapshots principal again.
 
 Alternative: the cap is on the unpaid stock of those charges, so paying them creates room to accrue more.
 
@@ -289,6 +308,8 @@ Two fees payable the same day share a short payment in proportion. R45 against a
 
 ### Day count
 
+Locked decision 5: the credit provider chooses actual/actual or 30/360. Actual/actual is the recommendation for a new product. 30/360 remains selectable. A 30/360 divisor can differ from the regulation 40 prescribed divisor by more than the 0.1 percent annual tolerance. The terms version pins the choice anyway. The regulation 40 codes stay in reference data so an agreement already pinned to one of them can still be read.
+
 Regulation 40, R1 000 at 5 percent a month, March 2026 (31 days):
 
 | Convention | Interest for the month |
@@ -296,22 +317,17 @@ Regulation 40, R1 000 at 5 percent a month, March 2026 (31 days):
 | Actual days in the month | R50.00 |
 | Divisor 30, charged on all 31 days | R51.67 |
 
-The gap is R1.67, about 3.3 percent of that month, which is more than the 0.1 percent annual tolerance. Both divisors are permitted. They are not interchangeable, and the terms version pins one. The short-term template pins actual days. The same point applies to 365 against 366 for an annual rate: the agreement picks one.
+The gap is R1.67, about 3.3 percent of that month, which is more than the 0.1 percent annual tolerance. Both divisors are permitted. They are not interchangeable, and the terms version pins one. The short-term template pins actual/actual. The same point applies to 365 against 366 for an annual rate, and to 360: the agreement picks one.
 
 Unsecured, R10 000, 28.25 percent, divisor 365, 31 days: **R239.93**.
 
-### Service fee in the first month
+### Service fee in the opening period
 
-Concluded on 20 March 2026, a 31-day month, contractual fee at the R60 cap.
+Locked decision 9. Pro-rata only from the disbursement value date to the first payment due date. The denominator used here is the actual number of days in the calendar month of disbursement, and the result is clamped to one monthly fee. Every later month, including the settlement month, is the full contractual monthly fee, still not above R60. A product cannot prorate the settlement month.
 
-| Days counted | Fee |
-| --- | --- |
-| 12, including 20 March | R23.22 |
-| 11, excluding it | R21.29 |
+Disbursed on 20 March 2026, first due on 3 April 2026: 14 days of a 31-day month. `6000 × 14 / 31` is 2709.67 cents, floored to **R27.09**. A first due date of 20 April is 31 days, so the opening fee is the full **R60**. A settlement on 2 April of a later month is still **R60** when the contractual fee is R60.
 
-The cap rounds down: `6000 × 12 / 31` is 2322.58 cents, and the charge is 2322 cents. The one-day gap is **R1.93**. This is the adopted choice that can charge more than the other plausible reading.
-
-A full R60 in a month the agreement begins on the 1st is the whole month, not an overcharge. A settlement on 2 April is, on the text, a full R60 if the fee is due that month. The product may prorate and charge less. The template does not.
+The older calendar-month reading, which regulation 44(4) does not settle by itself, remains measurable and is not what is charged. Including the conclusion day on 20 March is R23.22 and excluding it is R21.29. The one-day gap is R1.93. Decision 9 replaces that choice.
 
 ### Settlement
 
@@ -333,7 +349,7 @@ Goods priced at R2 000. The regulation 34 maximum penalty is **R20**. The consum
 | Not disclosed | R0 | R800 |
 | Consumer died or was hospitalised | R0 | R800 |
 
-A cash deposit securing a short-term loan is not this. CPA section 62 is about goods held until the price is paid. The deposit accrues no interest and takes no 1 percent penalty. Applying the penalty there would be an invented charge. Set-off against the loan needs a mandate id; section 124's conditions on a charge against a named deposit are enforced by servicing, and the configuration flag is what makes a missing mandate fail closed.
+A cash deposit securing a short-term loan is not this. CPA section 62 is about goods held until the price is paid. The deposit accrues no interest and takes no 1 percent penalty. Applying the penalty there would be an invented charge. Interest on the loan accrues on the loan principal minus the lay-by hold, and not below zero. Only the loan carries a service fee. Set-off against the loan needs a mandate id; section 124's conditions on a charge against a named deposit are enforced by servicing, and the configuration flag is what makes a missing mandate fail closed. Credit life and funeral cover on that lay-by are not decided and are not stored.
 
 ### Zero-cost BNPL
 

@@ -193,6 +193,7 @@ def test_unsecured_cap_on_the_september_2026_repo_rate():
         originated_on=date(2026, 10, 1),
         short_term_ordinal=None,
         ncr_registration_number="NCRCP0",
+        repo_rate_fall="lower_of_contract_and_cap",
     )
     resolved = resolve_charge(pin, cap, REPO_ANNUAL, date(2026, 10, 26))
     assert resolved.statutory == Decimal("0.2825")
@@ -206,26 +207,41 @@ def test_unsecured_cap_on_the_september_2026_repo_rate():
     assert post_interest_cents(month) == 23_993
 
 
-def test_fixed_rate_above_a_later_cap_is_reduced():
+def test_repo_fall_is_a_provider_choice_and_has_no_default():
+    # Locked decision 11. A contract at 29% booked before the repo fell.
+    # Option B reduces it to 28.25%. Option A keeps 29%. Neither is implied.
     cap = RateCap("unsecured", annual_margin_over_repo=UNSECURED_REPO_MARGIN)
-    pin = AgreementPin(
-        agreement_id=ZERO,
-        organisation_id=ZERO,
-        enigma_person_id=ZERO,
-        terms_version_id=ZERO,
-        classification="unsecured",
-        contractual_monthly_rate=None,
-        contractual_annual_rate=Decimal("0.29"),
-        contractual_repo_margin=None,
-        day_count=DAY_COUNT_365,
-        originated_on=date(2026, 5, 1),
-        short_term_ordinal=None,
-        ncr_registration_number="NCRCP0",
-    )
-    resolved = resolve_charge(pin, cap, REPO_ANNUAL, date(2026, 10, 26))
-    assert resolved.agreed == Decimal("0.29")
-    assert resolved.rate == Decimal("0.2825")
-    assert resolved.cap_reduced is True
+
+    def pin(choice: str | None, originated: date = date(2026, 5, 1)) -> AgreementPin:
+        return AgreementPin(
+            agreement_id=ZERO,
+            organisation_id=ZERO,
+            enigma_person_id=ZERO,
+            terms_version_id=ZERO,
+            classification="unsecured",
+            contractual_monthly_rate=None,
+            contractual_annual_rate=Decimal("0.29"),
+            contractual_repo_margin=None,
+            day_count=DAY_COUNT_365,
+            originated_on=originated,
+            short_term_ordinal=None,
+            ncr_registration_number="NCRCP0",
+            repo_rate_fall=choice,
+        )
+
+    with pytest.raises(CalculationInputError, match="repo_rate_fall"):
+        resolve_charge(pin(None), cap, REPO_ANNUAL, date(2026, 10, 26))
+    kept = resolve_charge(pin("contract_rate"), cap, REPO_ANNUAL, date(2026, 10, 26))
+    assert kept.agreed == Decimal("0.29")
+    assert kept.rate == Decimal("0.29")
+    assert kept.cap_reduced is False
+    reduced = resolve_charge(pin("lower_of_contract_and_cap"), cap, REPO_ANNUAL, date(2026, 10, 26))
+    assert reduced.agreed == Decimal("0.29")
+    assert reduced.rate == Decimal("0.2825")
+    assert reduced.cap_reduced is True
+    # The same 29% cannot be booked on a day when the cap is already 28.25%.
+    with pytest.raises(CalculationInputError, match="origination"):
+        resolve_charge(pin("contract_rate", date(2026, 10, 26)), cap, REPO_ANNUAL, date(2026, 10, 26))
 
 
 def test_second_short_term_loan_is_capped_at_3_percent():

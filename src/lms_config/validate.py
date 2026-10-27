@@ -14,10 +14,8 @@ from decimal import Decimal
 from lms_config.exceptions import CalculationInputError
 from lms_config.fees import DEFAULT_INITIATION_CAP, initiation_fee_cents
 from lms_config.statute import (
-    DAY_COUNT_30,
-    DAY_COUNT_365,
-    DAY_COUNT_ACTUAL_MONTH,
-    DAY_COUNT_ACTUAL_YEAR,
+    DAY_COUNT_30_360,
+    DAY_COUNT_ACTUAL_ACTUAL,
     SERVICE_FEE_MONTHLY_CENTS,
     SHORT_TERM_DEFERRED_CENTS,
     SHORT_TERM_FIRST_MONTHLY,
@@ -33,8 +31,9 @@ UNSECURED = "unsecured"
 INCIDENTAL = "incidental"
 CPA_LAYBY = "cpa_layby"
 
-ANNUAL_DAY_COUNTS = {DAY_COUNT_365, DAY_COUNT_ACTUAL_YEAR}
-MONTHLY_DAY_COUNTS = {DAY_COUNT_30, DAY_COUNT_ACTUAL_MONTH}
+# Locked decision 5. New products pin one of these. The regulation 40
+# divisor codes remain in reference data for agreements already pinned to them.
+PROVIDER_DAY_COUNTS = {DAY_COUNT_ACTUAL_ACTUAL, DAY_COUNT_30_360}
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +58,11 @@ class InstrumentTerms:
     max_deferred_cents: int | None = None
     fees: tuple[FeeTerms, ...] = ()
     setoff_requires_mandate: bool = False
+    # Locked decision 3. The performing rate is base minus discount.
+    # A discount of zero is still stored. None is only valid on a product
+    # that charges no interest.
+    base_rate: Decimal | None = None
+    discount_rate: Decimal = Decimal(0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +72,12 @@ class ProductTerms:
     # Commercial ceiling chosen so Day-1 unsecured loans stay below the
     # large-agreement line. Not a statutory cap.
     max_principal_cents: int | None = None
+    # Null inherits the organisation. It does not mean zero days, 100 percent,
+    # or a repo-fall option. See docs/LOCKED_DECISIONS.md.
+    leniency_days: int | None = None
+    full_payment_threshold_percent: Decimal | None = None
+    interest_on_deferred_initiation: str | None = None
+    repo_rate_fall: str | None = None
 
 
 def validate_terms(terms: ProductTerms) -> None:
@@ -99,6 +109,10 @@ def _reject_any_charge(terms: ProductTerms, message: str) -> None:
             raise CalculationInputError(message)
         if instrument.repo_margin not in (None, Decimal(0)):
             raise CalculationInputError(message)
+        if instrument.base_rate not in (None, Decimal(0)):
+            raise CalculationInputError(message)
+        if instrument.discount_rate not in (None, Decimal(0)):
+            raise CalculationInputError(message)
         for fee in instrument.fees:
             if fee.charge != "zero" or fee.amount_cents != 0:
                 raise CalculationInputError(message)
@@ -123,6 +137,8 @@ def _validate_layby(terms: ProductTerms) -> None:
             raise CalculationInputError("a lay-by cannot carry interest")
         if instrument.repo_margin not in (None, Decimal(0)):
             raise CalculationInputError("a lay-by cannot carry interest")
+        if instrument.base_rate not in (None, Decimal(0)) or instrument.discount_rate not in (None, Decimal(0)):
+            raise CalculationInputError("a lay-by cannot carry interest")
         for fee in instrument.fees:
             if fee.code == "layby_penalty" and fee.charge in {"zero", "statutory_formula"} and fee.amount_cents == 0:
                 continue
@@ -131,12 +147,15 @@ def _validate_layby(terms: ProductTerms) -> None:
 
 def _validate_short_term(terms: ProductTerms) -> None:
     credit = _single(terms, "credit")
-    if credit.day_count not in MONTHLY_DAY_COUNTS:
-        raise CalculationInputError("short-term interest must use a regulation 40 monthly day-count")
+    if credit.day_count not in PROVIDER_DAY_COUNTS:
+        raise CalculationInputError("short-term day count must be actual/actual or 30/360")
     if credit.monthly_rate is None:
         raise CalculationInputError("short-term terms need a contractual monthly rate")
-    if credit.monthly_rate > SHORT_TERM_FIRST_MONTHLY:
-        raise CalculationInputError("short-term contractual rate exceeds 5% per month")
+    _require_campaign(credit, credit.monthly_rate, "short-term")
+    if credit.base_rate > SHORT_TERM_FIRST_MONTHLY:
+        raise CalculationInputError(
+            "short-term base rate exceeds 5% per month; that base is charged when a campaign discount falls away"
+        )
     if credit.monthly_rate > SHORT_TERM_SUBSEQUENT_MONTHLY:
         # Allowed only as the first-loan rate. The origination path must
         # still cap later loans at the subsequent rate. Recorded here so a
@@ -154,12 +173,17 @@ def _validate_short_term(terms: ProductTerms) -> None:
 
 def _validate_unsecured(terms: ProductTerms) -> None:
     credit = _single(terms, "credit")
-    if credit.day_count not in ANNUAL_DAY_COUNTS:
-        raise CalculationInputError("unsecured interest must use a regulation 40 annual day-count")
+    if credit.day_count not in PROVIDER_DAY_COUNTS:
+        raise CalculationInputError("unsecured day count must be actual/actual or 30/360")
     if credit.repo_margin is not None:
-        if credit.repo_margin > UNSECURED_REPO_MARGIN:
-            raise CalculationInputError("unsecured margin cannot exceed RR + 21%")
-    elif credit.annual_rate is None:
+        _require_campaign(credit, credit.repo_margin, "unsecured margin")
+        if credit.base_rate > UNSECURED_REPO_MARGIN:
+            raise CalculationInputError(
+                "unsecured base margin cannot exceed RR + 21%; that base is charged when a campaign discount falls away"
+            )
+    elif credit.annual_rate is not None:
+        _require_campaign(credit, credit.annual_rate, "unsecured")
+    else:
         raise CalculationInputError("unsecured terms need a fixed annual rate or a repo margin")
     if terms.max_principal_cents is None or terms.max_principal_cents >= 25_000_000:
         raise CalculationInputError(
@@ -171,7 +195,10 @@ def _validate_unsecured(terms: ProductTerms) -> None:
 
 def _validate_incidental(terms: ProductTerms) -> None:
     credit = _single(terms, "credit")
-    if credit.monthly_rate is None or credit.monthly_rate > Decimal("0.02"):
+    if credit.monthly_rate is None:
+        raise CalculationInputError("incidental credit needs a contractual monthly rate")
+    _require_campaign(credit, credit.monthly_rate, "incidental")
+    if credit.base_rate > Decimal("0.02"):
         raise CalculationInputError("incidental credit interest cannot exceed 2% per month")
     for fee in credit.fees:
         if fee.code == "initiation" and fee.charge != "zero":
@@ -204,9 +231,31 @@ def _check_fees(credit: InstrumentTerms, *, allow_service: bool, allow_initiatio
             raise CalculationInputError(f"Day-1 does not publish a {fee.code} charge")
 
 
+def _require_campaign(instrument: InstrumentTerms, effective: Decimal | None, label: str) -> None:
+    """The stored price is a base rate minus a campaign discount.
+
+    Locked decision 3. The performing rate must equal that difference,
+    including when the difference is zero. The base is what is charged if
+    the discount falls away, so a campaign cannot hide a higher penalty.
+    """
+    if instrument.base_rate is None:
+        raise CalculationInputError(
+            f"{label} must store a base rate and a campaign discount; "
+            "a discount of zero is a campaign with nothing off"
+        )
+    if instrument.discount_rate < 0 or instrument.base_rate < instrument.discount_rate:
+        raise CalculationInputError("campaign discount must be between zero and the base rate")
+    if effective != instrument.base_rate - instrument.discount_rate:
+        raise CalculationInputError(
+            f"{label} contractual rate must equal the base rate minus the campaign discount"
+        )
+
+
 def _require_zero_deposit(instrument: InstrumentTerms) -> None:
     if instrument.monthly_rate not in (None, Decimal(0)) or instrument.annual_rate not in (None, Decimal(0)):
         raise CalculationInputError("a security deposit accrues no interest")
+    if instrument.base_rate not in (None, Decimal(0)) or instrument.discount_rate not in (None, Decimal(0)):
+        raise CalculationInputError("a security deposit has no campaign rate")
     for fee in instrument.fees:
         if fee.charge != "zero" or fee.amount_cents != 0:
             raise CalculationInputError("a security deposit is not a lay-by and carries no CPA penalty")

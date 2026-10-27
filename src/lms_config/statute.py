@@ -81,3 +81,10 @@ DAY_COUNT_ACTUAL_MONTH = "short_term_actual_days"
 DAY_COUNT_30 = "short_term_30_day"
 DAY_COUNT_365 = "annual_365"
 DAY_COUNT_ACTUAL_YEAR = "annual_actual"
+
+# Locked decision 5. The credit provider chooses one of these. actual/actual
+# is the recommendation for a new product. 30/360 stays selectable. A 30/360
+# divisor can differ from the regulation 40 divisor by more than the 0.1%
+# annual tolerance; the terms version still pins the provider's choice.
+DAY_COUNT_ACTUAL_ACTUAL = "actual_actual"
+DAY_COUNT_30_360 = "thirty_360"

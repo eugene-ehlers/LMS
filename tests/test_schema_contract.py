@@ -4,6 +4,7 @@ from pathlib import Path
 
 from lms_config.calendar import public_holidays
 from lms_config.context import (
+    CUSTOMER_SETTINGS_SQL,
     ENGINE_READ_STEPS,
     INTEREST_CAP_SQL,
     PUBLISHED_TERMS_SQL,
@@ -18,6 +19,7 @@ SEED = (ROOT / "db" / "seed" / "001_reference.sql").read_text()
 
 def test_engine_steps_include_the_pin_the_ceiling_and_the_audit():
     assert ENGINE_READ_STEPS[0] == "agreement_pin"
+    assert "customer_settings" in ENGINE_READ_STEPS
     assert "interest_cap" in ENGINE_READ_STEPS
     assert "reference_rate" in ENGINE_READ_STEPS
     assert ENGINE_READ_STEPS[-1] == "post_and_audit"
@@ -27,6 +29,10 @@ def test_engine_steps_include_the_pin_the_ceiling_and_the_audit():
 
 def test_read_sql_uses_tables_this_migration_owns_except_the_agreement():
     assert "lms.cfg_product_terms" in PUBLISHED_TERMS_SQL
+    assert "leniency_days" in CUSTOMER_SETTINGS_SQL
+    assert "full_payment_threshold_percent" in CUSTOMER_SETTINGS_SQL
+    assert "base_rate" in CUSTOMER_SETTINGS_SQL
+    assert "discount_rate" in CUSTOMER_SETTINGS_SQL
     assert "lms.ref_interest_cap" in INTEREST_CAP_SQL
     assert "lms.ref_reference_rate" in REFERENCE_RATE_SQL
     assert "confidence = 'confirmed'" in REFERENCE_RATE_SQL
@@ -41,6 +47,22 @@ def test_read_sql_uses_tables_this_migration_owns_except_the_agreement():
         "audit_event",
     ):
         assert f"CREATE TABLE lms.{name}" in MIGRATION
+
+
+def test_locked_decision_columns_are_in_the_second_migration():
+    migration = (ROOT / "db" / "migrations" / "0002_locked_decisions.sql").read_text()
+    for name in (
+        "leniency_days",
+        "full_payment_threshold_percent",
+        "base_rate",
+        "discount_rate",
+        "interest_on_deferred_initiation",
+        "repo_rate_fall",
+        "actual_actual",
+        "thirty_360",
+    ):
+        assert name in migration
+    assert "docs/LOCKED_DECISIONS.md" in migration
 
 
 def test_seed_carries_the_gazetted_figures_the_tests_charge():

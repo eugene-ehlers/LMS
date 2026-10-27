@@ -34,6 +34,21 @@ _FIXED = (
 )
 
 
+def value_date(instant: dt.datetime) -> dt.date:
+    """Johannesburg calendar date assigned by locked decision 1.
+
+    A loan, settlement, or deposit concluded at any time on that calendar
+    day is treated as 00:00. Two events on the same local date share one
+    value date, including an event that is still the previous date in UTC.
+    """
+    return business_date(instant)
+
+
+def value_instant(day: dt.date) -> dt.datetime:
+    """00:00 Africa/Johannesburg on ``day``. Events that day apply at this instant."""
+    return dt.datetime(day.year, day.month, day.day, 0, 0, tzinfo=JOHANNESBURG)
+
+
 def business_date(instant: dt.datetime) -> dt.date:
     """Calendar date in Africa/Johannesburg for an aware instant.
 

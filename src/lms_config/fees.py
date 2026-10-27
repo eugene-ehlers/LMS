@@ -98,6 +98,54 @@ def _grossed_fee(cash_advanced_cents: int, cap: InitiationCap) -> int:
     return best
 
 
+def opening_service_fee_cents(
+    monthly_cents: int,
+    disbursed_on: date,
+    first_due_on: date,
+    *,
+    monthly_cap_cents: int = SERVICE_FEE_MONTHLY_CENTS,
+) -> int:
+    """Locked decision 9. Pro-rata only from disbursement to the first due date.
+
+    The decision names that period and does not name the fraction's
+    denominator. This uses the actual number of days in the calendar month
+    of the disbursement value date, then clamps the result to one monthly
+    fee and to the monthly cap. A first due date more than a month after
+    disbursement therefore does not charge more than one monthly fee.
+    Every later month, including the settlement month, uses
+    ``subsequent_service_fee_cents``.
+    """
+    require_non_negative_cents(monthly_cents, "service fee")
+    if monthly_cents > monthly_cap_cents:
+        raise CalculationInputError(
+            f"service fee {monthly_cents} cents exceeds the monthly cap {monthly_cap_cents}"
+        )
+    if first_due_on <= disbursed_on:
+        raise CalculationInputError(
+            "first payment due must be after the disbursement value date"
+        )
+    covered = (first_due_on - disbursed_on).days
+    raw = Decimal(monthly_cents) * Decimal(covered) / Decimal(_days_in_month(disbursed_on))
+    return min(floor_cents(raw), monthly_cents)
+
+
+def subsequent_service_fee_cents(
+    monthly_cents: int,
+    *,
+    monthly_cap_cents: int = SERVICE_FEE_MONTHLY_CENTS,
+) -> int:
+    """Full monthly service fee, including the settlement month.
+
+    Locked decision 9. Still not above the contractual fee or the R60 cap.
+    """
+    require_non_negative_cents(monthly_cents, "service fee")
+    if monthly_cents > monthly_cap_cents:
+        raise CalculationInputError(
+            f"service fee {monthly_cents} cents exceeds the monthly cap {monthly_cap_cents}"
+        )
+    return monthly_cents
+
+
 def inception_service_fee_cents(
     monthly_cents: int,
     concluded_on: date,
@@ -105,11 +153,11 @@ def inception_service_fee_cents(
     include_conclusion_day: bool,
     monthly_cap_cents: int = SERVICE_FEE_MONTHLY_CENTS,
 ) -> int:
-    """Regulation 44(4): pro rata in the calendar month of conclusion.
+    """Superseded calendar-month reading of regulation 44(4).
 
-    The regulation does not say whether the conclusion day counts. Including
-    it charges one day more than excluding it. The monthly result is also
-    clamped to ``monthly_cap_cents``.
+    Locked decision 9 replaced this. The charge is
+    ``opening_service_fee_cents``. This function remains so the one-day gap
+    between including and excluding the conclusion day can still be measured.
     """
     require_non_negative_cents(monthly_cents, "service fee")
     if monthly_cents > monthly_cap_cents:

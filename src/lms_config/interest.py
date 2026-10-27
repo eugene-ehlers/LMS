@@ -25,7 +25,9 @@ from lms_config.exceptions import CalculationInputError
 from lms_config.money import floor_cents, half_up_cents, require_non_negative_cents
 from lms_config.statute import (
     DAY_COUNT_30,
+    DAY_COUNT_30_360,
     DAY_COUNT_365,
+    DAY_COUNT_ACTUAL_ACTUAL,
     DAY_COUNT_ACTUAL_MONTH,
     DAY_COUNT_ACTUAL_YEAR,
 )
@@ -96,15 +98,17 @@ def chargeable_rate(agreed: Decimal, statutory: Decimal) -> Decimal:
 def year_divisor(day: date, convention: str) -> int:
     if convention == DAY_COUNT_365:
         return 365
-    if convention == DAY_COUNT_ACTUAL_YEAR:
+    if convention in {DAY_COUNT_ACTUAL_YEAR, DAY_COUNT_ACTUAL_ACTUAL}:
         return 366 if calendar.isleap(day.year) else 365
+    if convention == DAY_COUNT_30_360:
+        return 360
     raise CalculationInputError(f"{convention!r} is not an annual day-count")
 
 
 def month_divisor(day: date, convention: str) -> int:
-    if convention == DAY_COUNT_30:
+    if convention in {DAY_COUNT_30, DAY_COUNT_30_360}:
         return 30
-    if convention == DAY_COUNT_ACTUAL_MONTH:
+    if convention in {DAY_COUNT_ACTUAL_MONTH, DAY_COUNT_ACTUAL_ACTUAL}:
         return calendar.monthrange(day.year, day.month)[1]
     raise CalculationInputError(f"{convention!r} is not a monthly day-count")
 

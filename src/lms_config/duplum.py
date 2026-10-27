@@ -4,21 +4,21 @@ The section says the amounts in section 101(1)(b) to (g) that accrue while
 the consumer is in default may not, in aggregate, exceed the unpaid balance
 of the principal debt at the time the default occurs.
 
-"Accrue" and "in aggregate" are why Day-1 treats the ceiling as a cumulative
-accrual cap for that default episode. A payment does not reopen it. The
-episode ends when the default is purged (no payable amount remains overdue);
-a later default snapshots a new principal balance and a new cap.
+Locked decision 7 treats the ceiling as a cumulative accrual cap for that
+default episode. A payment does not reopen it. The episode ends when the
+default is purged (no payable amount remains overdue); a later default
+snapshots a new principal balance and a new cap. The base is unpaid
+principal at the first default and includes initiation capitalised before
+that default. ``duplum_base_cents`` is how that principal is assembled.
 
 The floating alternative — unpaid charges of those kinds may not exceed the
 snapshot, so a payment of charges creates room to accrue more — is
-implemented only so the two readings can be compared. It is not the adopted
+implemented only so the two readings can be compared. It is not the locked
 reading.
 
-The cap base is the principal sub-ledger at the start of the default, not
-the deferred amount. Interest and fees keep their own sub-ledgers for
-section 126 even after regulation 40 capitalises them onto the interest
-base. That separation is itself an adopted reading: the Act does not say
-whether interest, once added to the deferred amount, becomes principal.
+Post-default interest and fees stay in their own sub-ledgers for section
+103(5) and section 126, even if a statement shows them as capitalised.
+Pre-default capitalised initiation is principal, not a charge.
 """
 
 from __future__ import annotations
