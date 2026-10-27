@@ -2,7 +2,7 @@
 
 Orchestration contract for booking, disbursement, payments, and statements. The Calculation Engine and the Ledger are not implemented here. This note defines the calls servicing makes and the invariants it checks before it commits.
 
-Normative rules for the five locked elections are in [primary-flows.md](primary-flows.md) section 4 (L1 to L5). This note says how those values are stored and how they travel on each call.
+`docs/LOCKED_DECISIONS.md` is the source of truth (last updated 2026-10-27). This note says how servicing carries those decisions. It does not add a rule. Gaps are in [implementation-checklist.md](implementation-checklist.md).
 
 Dates are civil dates in Africa/Johannesburg. Timestamps are UTC. Money is integer cents, currency `ZAR`.
 
@@ -64,7 +64,7 @@ The snapshot is inserted in the same transaction as the agreement:
 }
 ```
 
-`capitalised_into_principal` is not an L2 value. Booking rejects it when `nca.subsector` is `short_term` or `unsecured`. L3's phrase "including any pre-default capitalised initiation fee" is then vacuously the cash principal, because nothing was capitalised into that bucket. A later product that s 102 allows to capitalise posts the fee into `principal` before default, and the snapshot flag tells the engine to include that balance in the base.
+`initiation_fee_capitalised` is stored on the agreement. True means the fee is principal and, if posted before the default date, is inside the in-duplum ceiling. False means the fee is a section 126 fee. Booking returns 422 `unresolved_conflict` when the flag is true and the subsector is `short_term` or `unsecured`, until the locked decisions name the products section 102 allows. That reject is a fail-closed conflict, not a finding that the fee can never be capitalised.
 
 ### 1.2 Envelope on every engine call
 
@@ -147,9 +147,7 @@ Request:
     "structure": "fixed_monthly",
     "monthly_rate": "0.050000",
     "annual_rate_disclosure": "0.600000",
-    "annual_disclosure_method": "nominal_times_12",
-    "month_day_count": "30",
-    "deferred_amount_convention": "end_of_day"
+    "day_count": "actual_actual"
   },
   "service_fee": { "basis": "monthly", "amount_cents": 6000 },
   "credit_life": null,
@@ -158,9 +156,11 @@ Request:
     "first_due_date": "2026-11-25",
     "maturity_date": "2026-11-25",
     "instalment_cents": 583150,
-    "frequency": "single"
+    "payment_frequency": "monthly"
   },
-  "prepayment_application": "not_applicable",
+  "prepayment_application": "reduce_term",
+  "quote_disbursement_rule": "adjust_instalment",
+  "initiation_fee_capitalised": false,
   "statement_election": { "offered": true, "frequency": "monthly", "channel": "email" },
   "agreement_document": { "uri": "s3://agreements/dec_01J0.pdf", "sha256": "abc" },
   "linked_deposit_id": null
@@ -169,9 +169,9 @@ Request:
 
 `disclosed` is required. It must equal the resolved L2 and L5 values. A mismatch is 422 `election_mismatch`. The caller does not send a pro-rata method or a value-date basis.
 
-`frequency` `single` requires `prepayment_application = not_applicable`. `monthly` or `weekly` requires `reduce_term` or `reduce_instalment` (E16 chooses which value a product uses; the field itself is required).
+`payment_frequency` is one of `weekly`, `fortnightly`, `monthly`, `quarterly`, `bi_annual`, `annual`. There is no `single` token in the locked list. `prepayment_application` is `reduce_term` or `reduce_instalment` when the provider has chosen. Absent, booking fails closed. The preference to keep the instalment unchanged is not substituted automatically. `day_count` is `actual_actual` or `30_360`. Absent, booking fails closed. `quote_disbursement_rule` is `adjust_instalment` or `keep_instalment`. Absent, booking fails closed.
 
-Engine call `validate_booking` after the snapshot is built and before insert. Inputs: the request, the envelope in section 1.2, and the ids of this consumer's disbursed short-term agreements with this organisation in the calendar year of `agreement_date`. Output: `accepted` plus `schedule`, or `rejected` plus `rule_id`. On reject, servicing persists nothing and returns 422.
+Engine call `validate_booking` after the snapshot is built and before insert. Inputs: the request, the envelope in section 1.2, and this person's disbursed short-term agreements at this organisation, each with its agreement date. The calendar-year filter is gap G7. It is not applied and it is not dropped. Output: `accepted` plus `schedule`, or `rejected` plus `rule_id`. On reject, servicing persists nothing and returns 422. `annual_rate_disclosure` is stored and disclosed. It is not checked against a formula.
 
 Response 201:
 
@@ -210,7 +210,7 @@ Mandate `agreement.disburse` when the caller is a user or the decision engine. N
 
 `instruct` records `disbursement_status = instructed` and leaves `status = pending_disbursement`. No engine call and no consumer journal.
 
-`confirm` requires `status = pending_disbursement` and `amount_cents` equal to booked principal. Engine call `on_disbursement` with the envelope, the recognition date, and the frozen fee treatment. The engine returns the journals: principal receivable against disbursement clearing for the cash advanced, and, when the initiation fee is deferred, a separate initiation-fee receivable. It also returns the L4 opening-fee instruction if that fee becomes due on the disbursement date. It does not return a service-fee levy dated the disbursement day when L4 says the opening fee is due later. Servicing posts only those journals, then sets `status = active`.
+`confirm` requires `status = pending_disbursement` and `amount_cents` equal to booked principal. Engine call `on_disbursement` with the envelope, the recognition date, and the frozen fee treatment. The engine returns the journals: principal receivable against disbursement clearing for the cash advanced, and, when the initiation fee is deferred, a separate initiation-fee receivable. The opening-month service fee is not calculated until gap G4 names the numerator. No estimated fraction is posted. Servicing posts only those journals, then sets `status = active`.
 
 Response 200:
 
@@ -295,7 +295,9 @@ Worked matched allocation, charges already due on the recognition date: interest
 
 ## 6. Statements
 
-`POST /v1/agreements/{agreement_id}/statements`
+The issued document is one per client and contains every loan. The steps below are the per-loan section. The client key is gap G9. Do not sum the sections into one balance.
+
+`POST /v1/agreements/{agreement_id}/statements` builds one section. The client run calls it for each loan in the unsigned client set, then writes one PDF.
 
 Scheduler identity, or mandate `statement.issue`. Idempotent on `(agreement_id, period_end)`.
 
@@ -353,7 +355,7 @@ Worked L1 reversal. Receipt recognised 7 April and allocated that day. Reversal 
 
 ## 8. Agreement state machine
 
-Status is servicing's. Duplum frozen, dispute open, and prescription review are flags.
+Status is servicing's. An open in-duplum episode, a dispute, and prescription review are flags. The episode flag does not suppress charges.
 
 | From | Event | Enigma | Engine | To |
 | --- | --- | --- | --- | --- |
@@ -368,7 +370,7 @@ Status is servicing's. Duplum frozen, dispute open, and prescription review are 
 
 `disbursement_failed`, `rescinded`, and `settled` are terminal. A payment recognised against a settled agreement allocates only up to a zero settlement total and the remainder is surplus.
 
-Default, for the L3 snapshot, starts at the end of the due date on which a due amount is still unpaid. `default_occurred_on` is that civil date. The one-day question in section 10 does not change the rest of the machine.
+Default is flagged by the morning check on the flag date (contractual due date plus customer `leniency_days`). `default_occurred_on` is that flag date. Unset leniency or threshold fails closed. The check includes payments whose recognition date is the flag date. The clip is not turned on when the episode opens.
 
 Non-NCA payment plans use the same statuses except `in_arrears` and the duplum flag. A missed instalment is a contract marker and is not sent to the engine as a default.
 
@@ -383,8 +385,8 @@ Servicing commits a ledger batch only when all of these hold. The engine is the 
 | No line exceeds the due bucket `prepare` just returned | `allocate` |
 | No consumer bucket goes negative | every post |
 | Every consumer journal was returned by this engine call | every post |
-| `duplum_accrued` after `prepare` is not greater than `duplum_base` | `prepare` when a default episode is open |
-| `duplum_base` is unchanged across calls inside one episode | `prepare` |
+| `duplum_base` is set once on the flag date that opens the episode and does not change until the episode closes | `prepare` |
+| A charge is not deleted or reduced because `duplum_accrued` reached `duplum_base` | every post. The clip is off |
 | Statement opening equals the previous closing | `statement_figures` |
 | Reversal value date equals the original recognition date | reversals |
 | `recognition_date` is not after today | payments and disbursement confirm |
@@ -501,7 +503,7 @@ sequenceDiagram
   participant S as Servicing
   participant C as Calculation Engine
   participant L as Ledger
-  K->>S: POST /agreements/{id}/statements
+  K->>S: POST /clients/{person_id}/statements
   S->>C: accrue_to(period_end, envelope)
   C-->>S: due debits, including L4
   S->>L: post due debits
@@ -513,20 +515,6 @@ sequenceDiagram
 
 ## 11. Open points
 
-These still need a business or legal decision. Servicing orchestration can be coded against the contracts above while the engine's rule pack leaves the rejected paths returning `rule_id`. The paths named in the last column should not be treated as settled behaviour.
+Unsigned points are listed in [implementation-checklist.md](implementation-checklist.md). VAT treatment, the per-organisation subsequent-loan count, the provider's prepayment choice, the flag date, half-up billing, and the lay-by parent/child pair are locked. The in-duplum clip stays off. A lay-by hold is not booked as a cession that makes the loan secured.
 
-| Id | Decision | Blocks |
-| --- | --- | --- |
-| E2 | Does s 126 take interest and fees that have accrued but that s 103(3) and reg 41 do not yet allow to be debited? | Engine `prepare` bucket contents. Servicing will post whatever `prepare` returns |
-| E3 | Order among fee buckets that are all already due | Engine line order inside the fee group. Servicing checks only interest, then fees, then principal |
-| E5 | Initiation-fee cap on cash advanced, or on cash plus the fee | Engine `validate_booking` |
-| E6 | Whether the R60, R165, and R1 050 maxima include VAT | Engine `validate_booking` and L4's cap comparison |
-| E7 | Whether "subsequent" short-term loans are counted only for this organisation | Which ids servicing passes into `validate_booking` |
-| E14 | Annual disclosure as monthly times 12, or as a compounded effective rate | The check servicing runs on `annual_rate_disclosure` |
-| E15 | Cent rounding of the daily interest sum and of the L4 opening fee | Engine amounts. Servicing posts the cents it is given |
-| E16 | `reduce_term` or `reduce_instalment` as the product's value | Product setup. The API already requires one of the two on a multi-instalment agreement |
-| Default date | End of the due date, as this design uses, or the next civil day | The civil date stored as `default_occurred_on` and therefore the L3 base |
-| Form 26 | Gazette artwork, and whether component balances are printed on the small-agreement PDF | PDF bytes only. The GET statement payload includes the components either way |
-| Enigma | The real mandate and enrolment operations | The adapter. The call sites in sections 3, 4, and 8 stay as specified |
-
-Zero-cost plans and the lay-by deposit stay as specified in the primary flows. A monthly statement remains lawful if a lay-by cession is later classified as a secured loan, because s 108(2) sets a maximum gap, and one month is inside the two-month maximum.
+The statement sequence above is one document per client. The `{id}` in that diagram is the client statement run, and each loan section keeps its own opening and closing balance. The client key is unsigned.
