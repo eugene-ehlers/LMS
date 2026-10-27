@@ -8,8 +8,8 @@ from decimal import Decimal
 
 from lms.calc.allocation import allocate_payment
 from lms.calc.calendar import binding_until, month_end
-from lms.calc.fees import initiation_fee, service_fee_cents, vat_on
-from lms.calc.interest import daily_interest_rands, divisor_days, periodic_rate
+from lms.calc.fees import apply_ex_vat_discount, initiation_fee, service_fee_cents, vat_on
+from lms.calc.interest import campaign_terms, daily_interest_rands, divisor_days
 from lms.calc.models import (
     Agreement,
     Charge,
@@ -17,6 +17,7 @@ from lms.calc.models import (
     DuplumEpisode,
     DuplumReset,
     Event,
+    LaybyeHold,
     ManualCharge,
     Payment,
     Policy,
@@ -88,6 +89,8 @@ def _initial(agreement: Agreement) -> State:
         clips=(),
         waived_cents=0,
         settled_on=None,
+        laybye_hold_cents=agreement.laybye_hold_cents,
+        campaign_discount_active=True,
     )
 
 
@@ -105,22 +108,54 @@ def _replace_episode(state: State, updated: DuplumEpisode) -> tuple[DuplumEpisod
     )
 
 
-def _overdue(state: State, day: date) -> bool:
-    if any(charge.remaining_cents > 0 and charge.due_on < day for charge in state.charges):
-        return True
-    return any(slice_.remaining_cents > 0 and slice_.due_on < day for slice_ in state.principal_slices)
+def _due_bundles(state: State) -> dict[date, tuple[int, int]]:
+    """Original and remaining cents of everything that shares a contractual due date.
+
+    Unbilled interest is not in a bundle. It is not payable until it is debited.
+    """
+    original: dict[date, int] = {}
+    remaining: dict[date, int] = {}
+    for slice_ in state.principal_slices:
+        original[slice_.due_on] = original.get(slice_.due_on, 0) + slice_.amount_cents
+        remaining[slice_.due_on] = remaining.get(slice_.due_on, 0) + slice_.remaining_cents
+    for charge in state.charges:
+        original[charge.due_on] = original.get(charge.due_on, 0) + charge.amount_cents
+        remaining[charge.due_on] = remaining.get(charge.due_on, 0) + charge.remaining_cents
+    return {due_on: (original[due_on], remaining[due_on]) for due_on in original}
 
 
-def _cured(state: State, day: date) -> bool:
-    if any(charge.remaining_cents > 0 and charge.due_on <= day for charge in state.charges):
+def _below_threshold(original: int, remaining: int, threshold_percent: Decimal) -> bool:
+    if original <= 0:
         return False
-    return not any(
-        slice_.remaining_cents > 0 and slice_.due_on <= day for slice_ in state.principal_slices
-    )
+    received = original - remaining
+    return Decimal(received) * Decimal(100) < Decimal(original) * threshold_percent
+
+
+def _overdue(state: State, day: date, policy: Policy) -> bool:
+    """True when a contractual due date plus leniency has arrived and the bundle is short.
+
+    Flag date = due date + leniency_days, calendar days. leniency_days=1 flags on the
+    next calendar day, which is the accepted calculator's previous rule.
+    The test uses payments already in the state. A payment on the flag date itself
+    is applied later that day. See the raised value-date point in the rules document.
+    """
+    for due_on, (original, remaining) in _due_bundles(state).items():
+        if day < due_on + timedelta(days=policy.leniency_days):
+            continue
+        if _below_threshold(original, remaining, policy.full_payment_threshold_percent):
+            return True
+    return False
+
+
+def _cured(state: State, day: date, policy: Policy) -> bool:
+    return not _overdue(state, day, policy)
 
 
 def _interest_base_cents(state: State, policy: Policy) -> int:
-    base = state.principal_cents
+    # LOCKED_DECISIONS §4: interest on principal minus the linked lay-by hold.
+    # The hold does not reduce the in-duplum ceiling. A hold above principal
+    # yields a zero base. It does not create a credit balance.
+    base = max(0, state.principal_cents - state.laybye_hold_cents)
     if policy.interest_on_deferred_initiation:
         base += sum(
             charge.remaining_cents for charge in state.charges if charge.kind == "initiation"
@@ -183,9 +218,18 @@ def _add_charge(
     return replace(state, charges=state.charges + (charge,), next_sequence=state.next_sequence + 1)
 
 
-def _open_default(state: State, day: date) -> State:
+def _open_default(state: State, day: date, agreement: Agreement) -> State:
+    """Open a fresh episode. The ceiling is unpaid principal at this default, not the last one.
+
+    A capitalised initiation fee is not modelled. The ceiling is therefore the unpaid
+    cash principal only. LOCKED_DECISIONS §7 would include a capitalised initiation
+    fee. That conflict is raised and not given a silent capitalisation rule.
+    """
+    discount_active = state.campaign_discount_active
+    if agreement.campaign_falls_away_on_default:
+        discount_active = False
     if _open_episode(state) is not None:
-        return replace(state, in_default=True)
+        return replace(state, in_default=True, campaign_discount_active=discount_active)
     episode = DuplumEpisode(
         episode_no=state.next_episode_no,
         started_on=day,
@@ -198,6 +242,7 @@ def _open_default(state: State, day: date) -> State:
         in_default=True,
         episodes=state.episodes + (episode,),
         next_episode_no=state.next_episode_no + 1,
+        campaign_discount_active=discount_active,
     )
 
 
@@ -205,9 +250,15 @@ def _accrue(state: State, agreement: Agreement, day: date, policy: Policy, repos
     base = _interest_base_cents(state, policy)
     if base == 0:
         return state
+    _base_rate, _stored_discount, effective = campaign_terms(
+        agreement,
+        day,
+        repos,
+        discount_active=state.campaign_discount_active,
+    )
     daily = daily_interest_rands(
         base,
-        periodic_rate(agreement, day, repos),
+        effective,
         divisor_days(day, agreement.product, policy.day_count),
     )
     if state.in_default:
@@ -354,6 +405,11 @@ def _levy_initiation(state: State, agreement: Agreement, day: date, policy: Poli
         basis=policy.fee_cap_basis,
         vat_registered=policy.vat_registered,
     )
+    if agreement.campaign_initiation_discount_cents:
+        rate = vat_on(day, vat_rates) if policy.vat_registered else Decimal(0)
+        ex_vat, vat, total = apply_ex_vat_discount(
+            ex_vat, rate, agreement.campaign_initiation_discount_cents
+        )
     # A deferred initiation fee is unpaid from the advance date, so s 126 allocates
     # it before principal, but it is not a default until the first principal due date.
     # Paying it upfront makes it due, and paid, on the advance date.
@@ -410,6 +466,11 @@ def _levy_service(state: State, agreement: Agreement, day: date, policy: Policy,
         basis=policy.fee_cap_basis,
         vat_registered=policy.vat_registered,
     )
+    if agreement.campaign_service_discount_cents:
+        rate = vat_on(day, vat_rates) if policy.vat_registered else Decimal(0)
+        ex_vat, vat, total = apply_ex_vat_discount(
+            ex_vat, rate, agreement.campaign_service_discount_cents
+        )
     state = _levy_priced(
         state,
         kind="service",
@@ -446,7 +507,7 @@ def _levy_manual(state: State, event: ManualCharge, policy: Policy, vat_rates: t
 
 def _close_if_cured(state: State, day: date, policy: Policy) -> State:
     episode = _open_episode(state)
-    if episode is None or not state.in_default or not _cured(state, day):
+    if episode is None or not state.in_default or not _cured(state, day, policy):
         return state
     counted = min(to_cents(state.unbilled_duplum), _room_cents(state, policy, include_unbilled=False))
     closed = replace(
@@ -526,14 +587,22 @@ def _fold_day(
 ) -> State:
     if state.status != "open":
         return state
-    if _overdue(state, day):
-        state = _open_default(state, day)
+    for event in events:
+        if isinstance(event, LaybyeHold):
+            state = replace(state, laybye_hold_cents=event.hold_cents)
+    if _overdue(state, day, policy):
+        state = _open_default(state, day, agreement)
     else:
         state = replace(state, in_default=False)
     state = _accrue(state, agreement, day, policy, repos)
     state = _levy_initiation(state, agreement, day, policy, vat_rates)
     upfront = tuple(event for event in events if isinstance(event, Payment) and event.purpose == "initiation_upfront")
-    ordinary = tuple(event for event in events if not (isinstance(event, Payment) and event.purpose == "initiation_upfront"))
+    ordinary = tuple(
+        event
+        for event in events
+        if isinstance(event, (Payment, ManualCharge))
+        and not (isinstance(event, Payment) and event.purpose == "initiation_upfront")
+    )
     for payment in upfront:
         state = allocate_payment(state, payment.cents).state
     if settle or day == month_end(day):

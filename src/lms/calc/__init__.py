@@ -8,6 +8,7 @@ from lms.calc.allocation import allocate_payment
 from lms.calc.examples import EXAMPLES
 from lms.calc.fees import initiation_cap_ex_vat_cents, service_fee_cents
 from lms.calc.interest import (
+    campaign_terms,
     daily_interest_rands,
     micro_monthly_rate,
     personal_annual_rate,
@@ -25,6 +26,7 @@ from lms.calc.models import (
     DayCount,
     DuplumReset,
     FeeCapBasis,
+    LaybyeHold,
     ManualCharge,
     Payment,
     Policy,
@@ -42,6 +44,7 @@ __all__ = [
     "DayCount",
     "DuplumReset",
     "FeeCapBasis",
+    "LaybyeHold",
     "ManualCharge",
     "Payment",
     "Policy",
@@ -53,6 +56,7 @@ __all__ = [
     "VatRate",
     "allocate_payment",
     "binding_until",
+    "campaign_terms",
     "cancel_laybye",
     "daily_interest_rands",
     "execute_settlement",

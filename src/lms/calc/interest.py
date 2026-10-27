@@ -58,11 +58,42 @@ def divisor_days(day: date, product: Product, day_count: DayCount) -> int:
 
 
 def periodic_rate(agreement: Agreement, day: date, repos: tuple[RepoRate, ...]) -> Decimal:
+    """Contractual base rate, before any campaign discount."""
     if agreement.product == Product.MICRO:
         return agreement.monthly_rate
     if agreement.product == Product.PERSONAL:
         return personal_annual_rate(day, agreement.margin_annual, repos)
     raise RuleError("product", f"{agreement.product} does not accrue NCA interest.")
+
+
+def campaign_terms(
+    agreement: Agreement,
+    day: date,
+    repos: tuple[RepoRate, ...] = (),
+    *,
+    discount_active: bool,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Return ``(base_rate, stored_discount, effective_rate)``.
+
+    The stored discount is always the campaign's y%, including after it has fallen
+    away. The effective rate is base minus that discount while the campaign is on,
+    and the base rate once it has fallen away. It is never negative and never above
+    the contractual base. A discount larger than the base produces an effective 0%.
+    """
+    base = periodic_rate(agreement, day, repos)
+    stored = agreement.campaign_interest_discount
+    if stored < 0:
+        raise RuleError("campaign", "Campaign interest discount cannot be negative.")
+    applied = stored if discount_active else Decimal("0")
+    effective = base - applied
+    if effective < 0:
+        effective = Decimal("0")
+    if effective > base:
+        raise RuleError(
+            "campaign-rate",
+            "Effective interest exceeds the contractual rate. Penalty interest may not do that.",
+        )
+    return base, stored, effective
 
 
 def daily_interest_rands(

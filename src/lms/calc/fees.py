@@ -79,6 +79,27 @@ def price_fee(
     return ex_vat, vat, total
 
 
+def apply_ex_vat_discount(
+    ex_vat_cents: int,
+    vat_rate: Decimal,
+    discount_cents: int,
+) -> tuple[int, int, int]:
+    """Subtract a campaign discount from an ex-VAT fee and recompute VAT.
+
+    A discount at or above the ex-VAT amount yields R0, including VAT. The discount
+    is not itself a percentage. LOCKED_DECISIONS describes the interest campaign as
+    x% minus y%. It does not say fee campaigns are a percentage.
+    """
+    if discount_cents < 0:
+        raise RuleError("campaign", "Campaign fee discount cannot be negative.")
+    if discount_cents == 0:
+        return add_vat(ex_vat_cents, vat_rate)
+    reduced = ex_vat_cents - discount_cents
+    if reduced <= 0:
+        return 0, 0, 0
+    return add_vat(reduced, vat_rate)
+
+
 def initiation_fee(
     principal_cents: int,
     *,

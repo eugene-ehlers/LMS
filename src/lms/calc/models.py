@@ -95,6 +95,12 @@ class Policy:
     service_fee_monthly_cents: int = SERVICE_FEE_MONTHLY_CAP_CENTS
     vat_registered: bool = True
     count_vat_in_duplum: bool = True
+    # Preserved calculator behaviour. LOCKED_DECISIONS §6 makes both configurable
+    # and gives 4 or 5 days, and 95%, as examples. It does not set the unset values.
+    # leniency_days=1 flags on the calendar day after the due date, which is the
+    # accepted calculator's rule. See the raised points in the rules document.
+    leniency_days: int = 1
+    full_payment_threshold_percent: Decimal = Decimal("100")
 
     def __post_init__(self) -> None:
         if self.service_fee_monthly_cents < 0:
@@ -104,6 +110,15 @@ class Policy:
                 "service-fee-cap",
                 "Monthly service fee exceeds the prescribed R60 cap.",
             )
+        if type(self.leniency_days) is not int or self.leniency_days < 0:
+            raise RuleError("leniency", "Leniency days must be a non-negative integer.")
+        threshold = Decimal(self.full_payment_threshold_percent)
+        if threshold < 0 or threshold > 100:
+            raise RuleError(
+                "threshold",
+                "Full-payment threshold must be between 0 and 100 percent.",
+            )
+        object.__setattr__(self, "full_payment_threshold_percent", threshold)
 
 
 @dataclass(frozen=True)
@@ -152,6 +167,16 @@ class Agreement:
     principal_instalments: tuple[tuple[date, int], ...] = ()
     cash_to_consumer: bool = True
     mortgage: bool = False
+    # Linked lay-by. Interest uses principal minus this hold. The lay-by is not a second fee.
+    linked_laybye_id: str | None = None
+    laybye_hold_cents: int = 0
+    # Campaign: contractual base rate minus this discount. The unit matches the product
+    # (monthly points on micro, annual points on personal). Fee discounts are cents off
+    # the ex-VAT fee the agreement would otherwise charge.
+    campaign_interest_discount: Decimal = Decimal("0")
+    campaign_initiation_discount_cents: int = 0
+    campaign_service_discount_cents: int = 0
+    campaign_falls_away_on_default: bool = False
 
     def __post_init__(self) -> None:
         if not self.credit_provider_org_id or not self.consumer_party_id:
@@ -181,6 +206,17 @@ class Agreement:
                 raise RuleError("instalments", "Each principal instalment must be positive.")
             if due_on < self.advance_date or due_on > self.maturity_date:
                 raise RuleError("instalments", "Instalment due date is outside the agreement term.")
+        if self.laybye_hold_cents < 0:
+            raise RuleError("laybye", "Lay-by hold cannot be negative.")
+        if self.laybye_hold_cents > 0 and not self.linked_laybye_id:
+            raise RuleError(
+                "laybye-link",
+                "A lay-by hold needs the linked lay-by id. The LMS does not invent the parent/child link.",
+            )
+        if self.campaign_interest_discount < 0:
+            raise RuleError("campaign", "Campaign interest discount cannot be negative.")
+        if self.campaign_initiation_discount_cents < 0 or self.campaign_service_discount_cents < 0:
+            raise RuleError("campaign", "Campaign fee discount cannot be negative.")
 
     def _validate_micro(self) -> None:
         # Reg 39(2): short-term is a cash disbursement of at most R8,000, repayable within 6 months,
@@ -304,7 +340,22 @@ class Settlement:
             raise RuleError("settlement", "Settlement payment must be positive.")
 
 
-Event = Payment | ManualCharge | Settlement
+@dataclass(frozen=True)
+class LaybyeHold:
+    """Replace the linked lay-by hold at 00:00 on ``on``.
+
+    The value is the hold balance, not a delta. Interest that day uses this balance.
+    """
+
+    on: date
+    hold_cents: int
+
+    def __post_init__(self) -> None:
+        if self.hold_cents < 0:
+            raise RuleError("laybye", "Lay-by hold cannot be negative.")
+
+
+Event = Payment | ManualCharge | Settlement | LaybyeHold
 
 
 @dataclass(frozen=True)
@@ -369,6 +420,10 @@ class State:
     clips: tuple[Clip, ...]
     waived_cents: int
     settled_on: date | None
+    laybye_hold_cents: int = 0
+    # False once a campaign that falls away on default has been switched off.
+    # A later cure does not turn it back on. That restoration is not in the locked decisions.
+    campaign_discount_active: bool = True
 
     @property
     def principal_cents(self) -> int:
