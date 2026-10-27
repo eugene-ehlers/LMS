@@ -1,8 +1,8 @@
 # Day-1 calculation rules
 
-Locked on 26 October 2026 (Africa/Johannesburg), and aligned on 27 October 2026 with [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md).
+Locked on 26 October 2026 (Africa/Johannesburg). Aligned again on 27 October 2026 with the Layer 0 text now in [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md).
 
-[LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) is the source of truth for decisions that have already been locked. This document is the calculation contract: formulas, edge cases, and the worked examples. `tests/test_day1_examples.py` and `tests/test_locked_alignments.py` pin every figure. If the prose and the tests disagree, fix the prose. Where this document and the locked-decisions file disagree, the locked-decisions file wins, and the disagreement is listed under [Raised, not chosen](#raised-not-chosen) so that file can be updated. The calculator does not invent a third reading.
+[LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) is the source of truth. This document is the calculation contract: formulas, edge cases, and the worked examples. `tests/test_day1_examples.py` and `tests/test_locked_alignments.py` pin the calculator that exists today. This update does not change that calculator. Where a pin and a newly locked sentence differ, the locked sentence is the rule for the next implementation, and the difference is recorded in [implementation-checklist.md](implementation-checklist.md). No new reading is added here.
 
 The pure functions in `src/lms/calc/` are the numerical authority for the formulas that match those locks. This is the reference calculator. It is not yet a persisted ledger or an HTTP service.
 
@@ -43,7 +43,9 @@ Agreement size, used only to confirm that early termination is zero, follows sec
 
 ## Money, rounding, and the interest base
 
-Amounts are integer cents. A fee or a billed interest charge is rounded half-up, away from zero, to the nearest cent. Daily interest is kept at 10 decimal places of a rand and rounded only when it is debited.
+Amounts are integer cents. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §17 requires half-up rounding to cents on billing, the same rounding rule wherever a round is required, and disclosure of the annual equivalent rate. A round must not push an instalment above an affordability figure already aligned with the client. The annual-equivalent formula, and what the system does when a round would cross that figure, are not in the locked file. See the checklist.
+
+A fee or a billed interest charge is rounded half-up, away from zero, to the nearest cent. Daily interest is kept at 10 decimal places of a rand and rounded only when it is debited. That is rounding on billing. It is the method the pins use.
 
 Debit interest:
 
@@ -58,15 +60,15 @@ Regulation 40(3) says the month's rand amount is the sum of the days. Summing th
 
 Regulation 40(4) allows a method that is not the prescribed one to differ by up to 0.1% over a year. The day-1 method is the prescribed actual-day method, so that tolerance is not used as room to go over the cap.
 
-**Interest base (lock).** Interest accrues on the unpaid cash principal only, minus any linked lay-by hold ([LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §4). It does not accrue on unpaid interest, service fees, VAT, insurance, default administration, or collection costs. A deferred initiation fee does not join the base either. See D-BASE. A hold larger than the principal produces a zero base for that day. It does not create a credit. The hold does not reduce the in-duplum ceiling. See Example 12.
+**Interest base (lock).** Interest accrues on the unpaid cash principal only, minus any linked lay-by hold ([LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §4). It does not accrue on unpaid interest, service fees, VAT, insurance, default administration, or collection costs. A deferred initiation fee bears interest only when the provider has chosen that option. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §10 locks the unset choice as no interest. Example 12 shows the calculator's net-of-hold interest. §4 also says that net figure is evidence the hold is a payment against the loan, not a separate savings product. The locked file does not say whether that payment reduces principal before the ceiling is read. The calculator subtracts the hold from the interest base only. See the checklist.
 
 The base for a day is the principal at the start of that civil day after the advance has been posted and before payments received that day. An advance on 15 March accrues interest on 15 March. A payment on 15 March does not reduce 15 March's interest. It reduces the base from 16 March. This is the agreement's "particular time in the day" for regulation 40(2)(c)(i): start of day, with same-day advances included and same-day receipts excluded.
 
-There is no separate penalty rate above the contractual rate. Section 103(1) says default interest may not exceed the highest rate on the principal. A campaign is stored as the contractual base rate minus a discount ([LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §3). While the campaign is on, the effective rate is that difference, floored at 0%. If the campaign is marked to fall away on default, the effective rate from the flag date is the contractual base, which is the penalty rate, and it is not higher than the base. See Example 13. The in-duplum freeze can still stop accrual.
+There is no separate penalty rate above the contractual rate. Section 103(1) says default interest may not exceed the highest rate on the principal. A campaign is stored and displayed as base rate x% minus discount y% ([LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §3). The discount stays on through the leniency window. It falls away on the default flag date, and the rate from that date is the base rate. A later cure does not bring the discount back. A campaign that sets interest to 0% is the real rate less the discount, equal to 0%. The penalty rate is that base rate and must not exceed the contractual rate. Example 13 matches these three timing rules. The in-duplum freeze can still stop accrual. §3 does not say whether a fee discount falls away. The calculator leaves fee discounts in place.
 
-Personal rates move only as repo plus a margin fixed in the agreement (section 103(4)). The margin is at most 21 percentage points (regulation 42, Table A, item 3, as substituted in 2015). The applied rate on a day is `repo(day) + margin`, using the repo whose effective date is on or before that day. Days before a change are not restated. Section 104(3) still requires written notice no later than 30 business days after the change. That notice is a servicing duty, not a term in the formula.
+Personal rates are repo plus a margin fixed in the agreement (section 103(4)), and the margin is at most 21 percentage points (regulation 42, Table A, item 3, as substituted in 2015). [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §11 then requires a provider choice, stored per organisation or per product, with no platform default: Option A keeps the contract rate after a repo fall; Option B accrues at the lower of the contract rate and the current statutory maximum and issues the section 104 notice. Until that choice is stored, the calculation fails closed. The calculator still accrues `repo(day) + margin` on every personal loan. That is not Option A or Option B, and it is not fail-closed. See the checklist.
 
-Short-term rates are disclosed as a monthly rate (regulation 42). Personal rates are disclosed as an annual rate (section 101(1)(d)). The engine does not publish `monthly × 12` as if it were a prescribed annual rate.
+Short-term rates are disclosed as a monthly rate (regulation 42). Personal rates are disclosed as an annual rate (section 101(1)(d)). §17 also requires disclosure of the annual equivalent rate. The locked file does not give that conversion. This document does not supply one.
 
 ## Interest formulas
 
@@ -80,7 +82,7 @@ effective(D)  = max(0, base_rate − campaign_discount)   while the campaign is 
 interest(D)   = net(D) × effective(D) / days_in_calendar_month(D)
 ```
 
-`base_rate` is 5% if this is the consumer's first short-term loan with this credit provider in the calendar year of the advance, and 3% otherwise (regulation 42, Table A, item 5), unless the agreement states a lower rate. The base rate is chosen once, at inception, and does not change on 1 January. Another loan with the same inception date counts as earlier, so the later same-day agreement is a subsequent loan. A loan advanced on 1 January is the first loan of the new year even if a December loan is still outstanding. The list of prior inceptions is an input. See D-RATE-SCOPE. The campaign discount is a separate stored number. It is not a rewrite of the base rate.
+`base_rate` is 5% if this is the consumer's first short-term loan with this credit-provider organisation in the calendar year of the advance, and 3% otherwise (regulation 42, Table A, item 5), unless the agreement states a lower rate. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §13 locks that count to the credit-provider organisation. The base rate is chosen once, at inception, and does not change on 1 January. Another loan with the same inception date counts as earlier, so the later same-day agreement is a subsequent loan. A loan advanced on 1 January is the first loan of the new year even if a December loan is still outstanding. The campaign discount is a separate stored number. It is not a rewrite of the base rate. While leniency is running the effective rate still uses the discount. From the flag date it uses the base rate, including after a cure (§3).
 
 For an unsecured personal agreement the same net and the same campaign rule apply, with:
 
@@ -89,7 +91,7 @@ base_rate    = repo(D) + margin
 interest(D)  = net(D) × effective(D) / days_in_year(D)
 ```
 
-`days_in_year` is 366 in a leap year and 365 otherwise. See D-DAYCOUNT for the 30-day and 365-day alternatives, both of which regulation 40(2)(c) permits. The day-1 wording uses actual days. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §5 also asks for 30/360. That divisor is not the pinned `fixed` option. See [Raised, not chosen](#raised-not-chosen).
+`days_in_year` is 366 in a leap year and 365 otherwise when the agreement uses actual/actual. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §5 requires both actual/actual and standard 30/360, with the provider choosing, and recommends actual/actual for new products. The same section says a 360-day year is not required for Day-1. Those two sentences are both locked and they conflict, because standard 30/360 uses a 360-day year. This document does not pick one. The calculator's `actual` option is actual/actual. Its `fixed` option is a 30-day month and a 365-day year. That is the regulation 40 alternative in D-DAYCOUNT. It is not 30/360. Accrual is daily (§5).
 
 ## Initiation fee
 
@@ -113,34 +115,40 @@ The 15% limb binds at and below R1,300. Table B binds between R1,300 and R9,850.
 | R9,850.00 | R1,050.00 | R1,050 rand cap |
 | R10,000.00 | R1,050.00 | R1,050 rand cap |
 
-VAT is then added if the credit provider is a VAT vendor. On R800.00 the day-1 charge is R120.00 + R18.00 = **R138.00**. See D-VAT.
+VAT is then added if the credit provider is a VAT vendor and the provider has not elected an inclusive cap. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §9 locks the rand maxima (R60, R165, R1,050) as excluding VAT by default. The provider may elect inclusive. On R800.00 the exclusive charge is R120.00 + R18.00 = **R138.00**. The inclusive election charges R120.00. See Example 1.
 
 The fee is levied on the advance date, which is not earlier than approval (regulation 41(1)). Regulation 43(4) allows it only when a new credit agreement is established, not on a transactional draw. Whether a refinance is a new agreement is a legal characterisation the caller supplies. The engine will not invent a second initiation fee on an existing agreement.
 
-**Due date (lock, D-INIT-DUE).** If the consumer pays the fee upfront, it is due on the advance date and the upfront payment is applied to it before that day's interest is debited (section 103(3): that day's interest is not payable before the end of the day). If the fee is deferred, it is unpaid from the advance date, so section 126 allocates it before principal, but it falls due on the first principal due date. It does not, by itself, put the agreement in default the next morning.
+[LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §2: a capitalised initiation fee is part of the principal debt, and §7 includes a capitalised initiation fee that was capitalised before the default date in the in-duplum ceiling. An initiation fee that is not capitalised is a section 126 fee. §2 says the same split applies to related fee points. It does not name those fees. The calculator always posts initiation as a section 126 fee, so its ceiling does not contain a capitalised fee.
 
-Section 102 does not allow this fee to be folded into the principal of an unsecured or short-term agreement. It stays in its own bucket.
+**Due date (not locked).** The Act and the locked file do not say when a deferred, non-capitalised initiation fee falls due. The calculator keeps it unpaid from the advance date, so section 126 can pay it before principal, and due on the first principal due date, so it does not by itself open a default the next morning. That due date is still D-INIT-DUE. It is not a new rule.
+
+Section 102 is the statutory tension with §2 for an unsecured or short-term agreement. This update does not resolve it. See the checklist.
 
 ## Service fee
 
-Regulation 44, as substituted in 2015, sets the maximum monthly service fee at **R60**. The National Credit Regulator's January 2019 public note says this maximum is R60 **excluding VAT**. Day-1 treats the prescribed rand caps as exclusive of VAT and adds VAT for a vendor. See D-VAT.
+Regulation 44, as substituted in 2015, sets the maximum monthly service fee at **R60**. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §9 locks that maximum, and the Table B rand figures, as excluding VAT by default. A provider may elect inclusive. The NCR's January 2019 note is the source named in §9.
 
 The fee is levied at the end of the month to which it relates (regulation 41(2)), or on the settlement date if the agreement ends first.
 
-Regulation 44(4) requires a pro-rata fee when the agreement is concluded during the calendar month:
+[LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §9 locks the shape of the fee:
+
+- pro-rata only in the opening month, described as disbursement to first payment due;
+- opening-month fraction = inclusive days in the month / actual days in that month;
+- every later month, including the settlement month, is the full monthly fee, subject to the R60 cap.
 
 ```text
-ex_VAT = round_half_up(R60 × inclusive_days / days_in_that_month)
+ex_VAT = round_half_up(R60 × inclusive_days_in_the_month / actual_days_in_that_month)
 VAT    = round_half_up(ex_VAT × vat_rate_on_the_levy_date)
 ```
 
-Inclusive days run from the advance date through the last day of that month, or through the settlement date if the agreement is concluded and ends in the same month. An advance on the 1st is 31/31 of a 31-day month, so the pro-rata formula charges the full R60. An advance on the last day is 1/N of the cap.
+The calculator's inclusive days run from the advance date through the last day of the commencement month, or through the settlement date if the agreement starts and ends in that month. An advance on the 1st is 31/31 of a 31-day month. An advance on the last day is 1/N of the cap. §9's phrase "disbursement to first payment due" does not say what the numerator is when that due date falls in a later month. See the checklist.
 
-After the commencement month, the day-1 product charges the full monthly maximum for every later calendar month in which the agreement is open, including the month in which it ends. That is the maximum Davis J allowed in *Micro Finance South Africa and the Banking Association of South Africa v National Credit Regulator* (Gauteng Division, Pretoria, 14 August 2020), as reported by Moonstone on 10 September 2020. The signed order was not in this workspace. See D-TERMINAL. Charging the full final month is permitted by that judgment, not required. The engine can be switched to pro-rata the final month. It will not charge more than the full month, and it will not charge a full month on top of the commencement pro-rata when both happen in one month.
+The full fee after the opening month, including the settlement month, is the locked rule. The calculator can still be switched to pro-rata the final month. That switch is below the locked full fee. Example 5 keeps both totals so the difference stays visible. A loan that starts and ends in one month is pro-rata only, which is the opening-month rule rather than a second full fee.
 
-A service fee above R60 before VAT is rejected at configuration. During an in-duplum freeze the fee is clipped, not rejected. See below.
+A service fee above R60 before VAT is rejected at configuration. During an in-duplum freeze the calculator clips the fee. §7 says three unnamed edges stay unclipped until counsel confirms. This document does not decide that the service-fee clip is one of them.
 
-A linked lay-by does not add a second monthly service fee ([LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §4). The child lay-by is not posted as its own NCA agreement on this ledger, so it cannot raise one. Example 12 pins a single R69.00 fee on the loan. A campaign may discount the loan's ex-VAT service fee, including down to R0. That fee discount does not fall away when the interest discount does. See [Raised, not chosen](#raised-not-chosen).
+A linked lay-by does not add a second monthly service fee. §4 levies the one fee on the parent. Example 12 pins a single R69.00 fee. A campaign may discount the parent's ex-VAT service fee, including to R0. §3 requires a R0 fee to calculate. It does not say that fee discount falls away on the flag date. The calculator leaves it in place.
 
 ## VAT
 
@@ -166,15 +174,17 @@ The amounts are initiation fees, service fees, interest, credit-insurance premiu
 
 Common-law in duplum is a different rule. *Paulsen v Slip Knot Investments* 2015 (CC) confirms that, outside the NCA, unpaid interest stops at the unpaid capital and can run again after a payment, and that the rule's operation around judgment is its own question. Day-1 NCA agreements do not import that restart.
 
-**Default (lock, [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §6).** The same test is used for in duplum and for the default flag. Default is flagged on a contractual due date plus `leniency_days` calendar days, when the amount received toward that due date's bundle is below `full_payment_threshold_percent`. The bundle is the original cents of the principal slices and the levied charges that share that due date. Unbilled interest is not in the bundle. A payment on the due date is already in the state on the flag date. A payment on the flag date itself is applied later that day, which is the accepted calculator's order. See [Raised, not chosen](#raised-not-chosen).
+**Default (lock, [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §6).** The same test is used for in duplum and for collections. Leniency is configured per customer and counts calendar days, including weekends and public holidays. An unset `leniency_days` or `full_payment_threshold_percent` fails closed. Example values, including 4 or 5 days and 95%, must not be hard-coded as defaults. The flag date is the contractual due date plus the configured leniency. The agreement is flagged when the amount received for that due date is below the threshold. The instalment in that test is the original principal slice plus the levied charges that share the due date, including the monthly service fee, a non-capitalised initiation fee, and credit life. Unbilled interest is outside the test until it is debited. A payment on the flag date is valued at 00:00 that day and is visible to the morning check (§1 and §6). Interest continues every civil day on the outstanding balance. Leniency does not pause it or reduce it. The campaign discount stays on during that window and becomes the base rate on the flag date (§3).
 
-With the preserved unset values, `leniency_days = 1` and the threshold is 100%. That flags on the calendar day after the due date if any cent of the bundle remains, which is the rule the accepted calculator already used. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §6 gives 4 or 5 days, and 95%, as examples. It does not lock those numbers as the unset values. Interest accrues every civil day during the leniency window, on that day's net balance, at the rate that applies that day. Leniency does not pause it and does not move the campaign penalty rate forward. Example 11.
+The calculator does not yet match two of those sentences. `Policy` still constructs with `leniency_days = 1` and a 100% threshold, and the morning check still runs before payments dated on the flag date. Examples 11 and 13 are pins of that code. They are not a restatement of the fail-closed rule or of the morning check.
 
-**Ceiling (lock, [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §7).** The ceiling is the unpaid cash principal at the start of the first day of that episode, before that day's interest. It does not fall if principal is paid during the episode. It does not include the lay-by hold, unpaid fees, or uncapitalised initiation. Paying a duplum charge reduces what is owed. It does not give back cap room. A capitalised initiation fee would be part of this principal. The calculator does not capitalise initiation. See [Raised, not chosen](#raised-not-chosen).
+**Ceiling (lock, [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §7).** The ceiling is the unpaid principal at the start of that episode, including any initiation fee that was capitalised before the default date. It does not fall if principal is paid during the episode. Paying a duplum charge reduces what is owed and does not reset the episode counter. The calculator's ceiling is unpaid cash principal only, because it does not capitalise initiation. Example 12's R1,000.00 ceiling is that cash figure. §4's treatment of the hold as a payment against the loan is not applied to the ceiling in the calculator.
 
-**What counts (lock).** Only amounts that accrue on a day that is already inside the episode. A fee levied the day before default, and still unpaid, is collectible and is outside the cap. The levy date decides, not the month the fee "relates" to.
+**What counts (lock, §7).** Charges that cause the default do not count toward the cap. Only charges that accrue during the episode count. A fee levied before the episode, and still unpaid, is collectible and is outside the cap. Post-default accruals count as charges even when a statement shows them as capitalised.
 
-**VAT (lock, D-VAT-DUPLUM).** The consumer-facing total, including VAT, consumes the ceiling. On a freeze day the charge is clipped to the remaining cents and VAT is extracted from that clipped total so ex-VAT plus VAT equals the amount posted. The uncharged remainder is not a debt.
+**Unsigned clip (§7).** Three section 103(5) edges that Nedbank did not decide remain unsigned, and the clip stays off until counsel confirms. The locked file does not name the three edges. This document does not assign D-VAT-DUPLUM, or any other open item, to those edges. The calculator still clips in-duplum charges, VAT included. That clip is not turned off here.
+
+**VAT in the cap (not locked).** D-VAT-DUPLUM is the calculator's current behaviour: the consumer-facing total, including VAT, consumes the ceiling, and a clipped fee is split so ex-VAT plus VAT equals the posted total. It is not a sentence in the locked file.
 
 **Order on a day inside the cap.** Interest for the day is clipped first. A fee levied that day then takes what room remains.
 
@@ -182,13 +192,11 @@ With the preserved unset values, `leniency_days = 1` and the threshold is 100%. 
 
 The NCR's draft guideline in Government Notice 54 of *Government Gazette* 38419 (30 January 2015) would add every earlier episode's accruals to the new one. That notice asked for comment. This workspace did not find it enacted as a regulation. The engine can still run that reading so the cents stay visible. It contradicts §7 and is not the production rule.
 
-Credit insurance, default administration, and collection costs are buckets, not calculators.
+Credit insurance, default administration, and collection costs are not priced by a formula in the locked file.
 
-- A premium is an input. Section 106's "cover may not exceed the outstanding obligation" is not computed here.
-- Regulation 46 limits a default administration charge to the amount payable for a registered letter of demand in an undefended magistrates' court action, plus reasonable necessary delivery expenses. No rand tariff is hardcoded.
-- Regulation 47 limits collection costs to costs actually incurred, under whichever of the statutes it names applies to the enforcement. It still cites the Supreme Court Act, 1959, which the Superior Courts Act 10 of 2013 repealed. The engine does not turn that citation into a tariff.
-
-Both are clipped by the same ceiling when they are levied during default.
+- [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §6 includes a levied credit-life charge in the instalment used for the threshold, and requires the credit-life instalment in the affordability calculation. §4 states the death order. Neither section gives a premium table. The calculator has an insurance bucket only.
+- [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §18: default-administration and collection-cost charges fail closed until a tariff row exists. §13 and §18 prefer an additional monthly fee, fixed or variable, rather than capitalising those costs into the amortisation schedule. The calculator still accepts a caller-supplied total and can clip it. That is not a tariff row and it is not fail-closed.
+- Regulation 46 and regulation 47 remain the statutory limits. Regulation 47 still cites the Supreme Court Act, 1959, which the Superior Courts Act 10 of 2013 repealed. No rand tariff is taken from that citation.
 
 ## Payment allocation (section 126)
 
@@ -204,7 +212,7 @@ Within interest, the oldest due date is paid first, then the earlier posting.
 
 Within fees the Act is silent. Day-1 pays the earliest due date first and, on the same due date, uses this rank: collection costs, default administration, credit insurance, service fee, initiation fee (D-ALLOC). A deferred initiation fee is unpaid, so it is paid before principal even though it is not yet due. A service fee that is already due is paid before that initiation fee, because a due charge outranks a later-due one. That sub-order is what lets a partial payment clear the charge that would otherwise start default tomorrow.
 
-Principal is reduced on the earliest unpaid instalment first, including a future instalment once arrears and fees are clear (D-PREPAY). A payment that clears the principal of a multi-instalment loan therefore shortens the next instalment rather than the last.
+[LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §13: after a partial prepayment the provider chooses whether to shorten the term or drop the instalment. The same section, and §6, prefer keeping the contractual instalment the same during the term. Unlike the repo choice in §11, §13 does not say the prepayment choice fails closed when it is unset. The calculator reduces the earliest unpaid slice, which changes that slice's amount. Example 6 is that calculator behaviour. It is not the provider choice.
 
 Anything left after the principal is zero is suspense, not a negative balance. It is applied to interest and to the terminal service fee if the payment is large enough to close the agreement. It is not a fee.
 
@@ -248,11 +256,13 @@ Cancellation, CPA section 62(4) to (6) and regulation 34 of the CPA regulations 
 
 Adding any late fee or interest later would risk turning the plan into an incidental credit agreement, capped at 2% per month once the charge is raised (regulation 42, Table A, item 7, and section 5). That transition is not implemented. See D-BNPL.
 
-### Lay-by as security for a short-term loan
+### Lay-by linked to a loan
 
-Section 90(2)(n) makes a blanket set-off clause unlawful except as a standing debt arrangement or as section 124 allows. Section 124 requires a written (or recorded) authorisation that names the account, the obligation, the amount or the method, and the dates. Regulation 38 requires notice in Form 27, or an electromagnetic record later transcribed, before the first charge.
+[LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §4 locks the pair as one loan. The contract must not treat the hold as security that would make the loan secured. The parent/child link is required. Interest is the net balance, and §4 treats that as evidence the hold is a payment against the loan rather than a separate savings product. One monthly service fee is levied on the parent. The client can consolidate or settle when the lay-by balance is at least the settlement balance. The arrangement is a deposit-insurance style: the client pays for a period, then the loan is disbursed. For Day-1 it is not deposit-taking under the Banks Act.
 
-The calculator does not decide that a mandate is valid. `guard_s124` refuses the application when the Enigma mandate id is missing, the date is outside the authorised dates, or the requested cents exceed the authorised cents. The recommended authorised amount is the unpaid interest and fees, not a forced settlement of principal that the mandate did not name. The application is then an ordinary section 126 payment sourced from the hold. The hold is reduced by the amount applied. It earns R0.
+On death, credit life pays the loan first. The lay-by covers any shortfall. A surplus goes to the estate when the lay-by is a cash deposit. When it is structured as insurance, treatment follows whether a beneficiary was named. A funeral benefit is paid to the named beneficiary and leaves the loan and the lay-by as they are. Death does not apply the lay-by unless a section 124 authority was signed in life. Without that authority the lay-by stays with the estate.
+
+Section 90(2)(n) still makes a blanket set-off clause unlawful except as a standing debt arrangement or as section 124 allows. Section 124 requires a written or recorded authorisation that names the account, the obligation, the amount or the method, and the dates. The calculator's `guard_s124` refuses an application when the Enigma mandate id is missing, the date is outside the authorised dates, or the requested cents exceed the authorised cents. It does not post credit life, a funeral benefit, a death application, or a consolidation. The posting of the hold as a section 126 payment, as against an interest-base offset only, is a technical gap in the checklist. Example 12 is the offset the calculator uses.
 
 ## Worked examples
 
@@ -275,7 +285,7 @@ R2,000.00 at 5% per month, constant principal, 20 January 2026 through 31 Januar
 | Actual days in January (lock) | R38.71 |
 | Fixed 30-day month | R40.00 |
 
-The R38.71 is `round(R2,000 × 0.05 × 12 / 31)`. A full January at the same balance is **R100.00** on the actual-day divisor, which is exactly 5%. The 30-day divisor bills **R103.33** for that January, because 31/30 × 5% is more than 5% in a 31-day month. Day-1 agreements state the actual-day divisor so a full calendar month cannot exceed the prescribed monthly rate. Regulation 40(2)(c)(iv) allows a 30-day agreement. It is not the day-1 wording. See D-DAYCOUNT.
+The R38.71 is `round(R2,000 × 0.05 × 12 / 31)`. A full January at the same balance is **R100.00** on the actual-day divisor, which is exactly 5%. The 30-day divisor bills **R103.33** for that January, because 31/30 × 5% is more than 5% in a 31-day month. §5 recommends actual/actual for new products. The fixed column in this example is the calculator's 30/365 divisor, not standard 30/360. See D-DAYCOUNT.
 
 ### 3. First loan at 5%, subsequent loan at 3%
 
@@ -495,7 +505,7 @@ R1,000.00 advanced 1 March 2026, initiation paid upfront, the whole principal du
 | 4 April | Yes | that day's interest starts the duplum episode |
 | 30 April | Yes | March R50.00 + April R50.00 = **R100.00** |
 
-The same loan with `leniency_days = 1` also bills **R100.00** by 30 April. The four-day window does not delete 1–3 April. It only delays the flag. `leniency_days = 0` would flag on 31 March itself. The preserved unset value is 1, which flags on the next calendar day. That unset value is raised below. It is not a number in the locked-decisions file.
+The same loan with `leniency_days = 1` also bills **R100.00** by 30 April. The four-day window does not delete 1–3 April. It only delays the flag. These two runs pass the leniency and the threshold in explicitly. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §6 now fails closed when either value is unset, and it does not adopt 1 or 100% as defaults. The pin also flags on 4 April without a payment on 4 April. A payment on the flag date must be visible to the morning check. This example does not contain that payment, so it does not demonstrate the new check.
 
 With `leniency_days = 4` and a **95%** threshold, 95% of R1,119.00 is exactly **R1,063.05**. Paid on 31 March, that clears the R119.00 of interest and service and R944.05 of principal, and **4 April is not a default**. Principal still owing is **R55.95**. One cent less, R1,063.04, is a default on 4 April. The threshold is the whole bundle, not 95% of the principal alone.
 
@@ -512,7 +522,7 @@ R1,000.00 micro loan for March 2026, linked to lay-by `laybye-child` with a R400
 
 R14.52 is 15/31 × 5% × R600.00, with each day kept at 10 decimal rands and the month rounded once. The hold set on 16 March is the balance at 00:00 that day, so 16 March already uses a zero net base.
 
-The R400.00 loan is unpaid, so default starts on 1 April. The in-duplum ceiling that morning is **R1,000.00**, the gross unpaid principal. It is not the R600.00 net balance on which March interest was calculated.
+The R400.00 loan is unpaid, so the calculator starts default on 1 April and sets the ceiling to **R1,000.00** of cash principal. It does not subtract the R400.00 hold. §4 calls the hold a payment against the loan. §7's ceiling is unpaid principal, including pre-default capitalised initiation. The locked file does not say the hold is deducted from that ceiling. This pin is the calculator's cash ceiling only.
 
 ### 13. Zero rate, zero fees, and a campaign discount that falls away
 
@@ -526,13 +536,13 @@ The principal falls due on 31 March and is not paid.
 | Same campaign, leniency 4 days | R0.00 | **R45.00** | R0.00 | Yes |
 | Discount does not fall away | R0.00 | **R0.00** | R0.00 | Yes |
 
-`campaign_terms` keeps reporting base 5.00% and discount 5.00% after the fall-away. The effective rate is 0% while the discount is on and 5% once it has fallen away. The 4-day window is still at 0%, including R0.00 of unbilled interest on 3 April, because the penalty rate starts on the flag date and not on the missed due date. From 4 April the base rate runs, so April is 27/30 × R50.00 = **R45.00**. The fee discounts stay at R0. That split is raised below.
+`campaign_terms` keeps reporting base 5.00% and discount 5.00% after the fall-away. The effective rate is 0% while the discount is on and 5% once it has fallen away. [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §3 locks that timing: the discount stays through leniency, falls away on the flag date, and does not return on a later cure. The 4-day window is still at 0%, including R0.00 of unbilled interest on 3 April. From 4 April the base rate runs, so April is 27/30 × R50.00 = **R45.00**. The fee discounts in this example stay at R0. §3 does not say a fee discount falls away.
 
-A second loan, R600.00 due 31 March and R400.00 due 30 June, uses the same 5% minus 5% campaign, set to fall away. The R600.00 is paid on 15 April, after the flag. April interest is R25.00 for 1–15 April on R1,000.00 plus R10.00 for 16–30 April on the remaining R400.00, **R35.00** in total. Both pieces use the base 5%. The cure does not turn the discount back on. That restoration is also raised below.
+A second loan, R600.00 due 31 March and R400.00 due 30 June, uses the same 5% minus 5% campaign, set to fall away. The R600.00 is paid on 15 April, after the flag. April interest is R25.00 for 1–15 April on R1,000.00 plus R10.00 for 16–30 April on the remaining R400.00, **R35.00** in total. Both pieces use the base 5%. The cure leaves the discount off, which §3 now locks.
 
 ## Data structures and pure functions
 
-Every public function takes values and returns values. None of them reads a clock, a database, or Enigma. `State` is immutable. `run` folds civil days from the advance date through `until` and returns a new state.
+This block is the calculator's current surface. It is not the draft Layer 1 sketch. That sketch is in [implementation-checklist.md](implementation-checklist.md). Every public function takes values and returns values. None of them reads a clock, a database, or Enigma. `State` is immutable. `run` folds civil days from the advance date through `until` and returns a new state.
 
 ```text
 Agreement
@@ -556,16 +566,16 @@ Agreement
   campaign_falls_away_on_default
 
 Policy
-  fee_cap_basis                exclusive (lock) | inclusive
-  terminal_service_fee         full (lock) | pro_rata
-  duplum_reset                 fresh (locked by LOCKED_DECISIONS §7) | aggregate (rejected reading)
-  day_count                    actual (lock) | fixed
-  interest_on_deferred_initiation   false (lock)
+  fee_cap_basis                exclusive is the §9 default; inclusive is the provider election
+  terminal_service_fee         full matches §9; pro_rata does not
+  duplum_reset                 fresh matches §7; aggregate is the rejected reading
+  day_count                    actual is actual/actual; fixed is 30/365, not 30/360
+  interest_on_deferred_initiation   false matches the §10 unset value
   service_fee_monthly_cents    at most 6000
   vat_registered               true for a vendor
-  count_vat_in_duplum          true (lock)
-  leniency_days                1 preserves the accepted calculator; raised, not a locked number
-  full_payment_threshold_percent    100 preserves the accepted calculator; raised, not a locked number
+  count_vat_in_duplum          calculator behaviour; not a §7 sentence. See G-CLIP
+  leniency_days                required per customer; unset fails closed (§6). The calculator still defaults to 1
+  full_payment_threshold_percent    required per customer; unset fails closed (§6). The calculator still defaults to 100
 
 State
   principal_slices             due date, original cents, remaining cents
@@ -600,64 +610,56 @@ Events are `Payment` (ordinary, or `initiation_upfront`, and optionally `source=
 
 `RuleError.code` is stable. The codes the product guards use include `short-term-amount`, `short-term-term`, `short-term-payee`, `short-term-rate`, `unsecured-margin`, `day1-large`, `service-fee-cap`, `s124-mandate-missing`, `s124-amount`, and `s124-date`.
 
+## Servicing locks not built in the calculator
+
+These sentences are locked. This update records them. It does not add code.
+
+- §12: one statement per client, covering all loans.
+- §13: the platform may force its own decision engine at first, and must accept loans from an external engine later. When disbursement is later than the quote date, the provider uses either an instalment adjusted for the actual disbursement date and the remaining term, or the original instalment with an early settle or a small residual write-off at contractual end. The write-off is not required when the account is already in default. A restructuring can add other costs during the term by creating a new instalment, pricing, and term. Additional costs outside interest, initiation, the monthly service fee, and credit life are a further monthly fee, fixed or variable, and are not capitalised into the schedule.
+- §14: weekly, fortnightly, monthly, quarterly, bi-annual, and annual frequencies.
+- §15: opaque `person_id` and `organisation_id` only. Fail closed on an Enigma timeout or an ambiguous status.
+- §16: freeze name, ID number, and service address at booking. A later Enigma change does not rewrite the concluded agreement.
+- §1: a reversal uses the value date the system originally recognised.
+
+The checklist holds the technical gaps under these sentences. None of them is given an algorithm here.
+
 ## Decision log
 
-These are the readings that need a business, and in several cases a legal, confirmation. The "day-1 default" column is what the code does now.
+Rows marked **closed** are now sentences in [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md). The other rows were not closed by the 27 October 2026 Layer 0 update. They are not restated as new questions. The calculator column is what the code does today, including where that code is behind a closed row.
 
 | Id | Question | Day-1 default | Alternative, with the worked difference |
 | --- | --- | --- | --- |
-| D-DAYCOUNT | Regulation 40 lets the agreement use actual days or a 30-day month and a 365-day year | Actual days in the month, and 365 or 366 in the year | Full January on R2,000 at 5% is R100.00 actual and **R103.33** on a 30-day divisor. 29 February 2028 on R10,000 at 28.25% is R7.72 actual and **R7.74** on a 365-day divisor |
-| D-VAT | The regulations state R60 and the Table B rands without saying "excluding VAT". The NCR's January 2019 note says the service fee "must not exceed R60 excluding VAT" | Prescribed caps are ex-VAT. VAT is added for a vendor, half-up, on the rounded ex-VAT amount. Interest has no VAT | Treating the cap as VAT-inclusive changes the R800 initiation fee from **R138.00 to R120.00** |
+| D-DAYCOUNT | §5 locks actual/actual and standard 30/360, recommends actual/actual for new products, and also says a 360-day year is not required for Day-1. Those last two claims conflict. Regulation 40 also allows a 30-day month and a 365-day year | Calculator: actual days, or `fixed` as 30/365. Not 30/360 | Full January on R2,000 at 5% is R100.00 actual and **R103.33** on a 30-day divisor. 29 February 2028 on R10,000 at 28.25% is R7.72 actual and **R7.74** on a 365-day divisor |
+| D-VAT | **Closed by §9.** Rand maxima are ex-VAT by default. The provider may elect inclusive | Exclusive. VAT is added for a vendor, half-up, on the rounded ex-VAT amount. Interest has no VAT | The inclusive election changes the R800 initiation fee from **R138.00 to R120.00** |
 | D-VAT-TIME | Which VAT rate applies when the rate changes during a month | The rate on the levy date, for the whole fee | Splitting the month was not adopted. Example 5 shows March at 15% and a hypothetical April at 16%, with no split inside April |
-| D-VAT-DUPLUM | Does VAT on a fee consume the section 103(5) ceiling | Yes. The consumer-facing total is clipped to the ceiling | Leaving VAT outside the ceiling bills **R153.00** of June and July charges on the R150 loan against a R150 ceiling, and does not clip July's service fee |
-| D-BASE | Regulation 39(1) defines "deferred amount" to include section 101(1)(b) to (g), which would compound unpaid interest and fees. NCR Circular 15 of 2016 says a deferred initiation fee on an unsecured or short-term loan must stay separate and not bear interest. The 2020 High Court judgment, as reported, says interest on a deferred initiation fee is **permitted** | Interest accrues on unpaid cash principal only. The court permitted the extra interest. It did not require it. Charging less than the maximum is lawful. Regulation 39's wider base is not used | On the R1,000 March 2026 loan, putting the unpaid R172.50 initiation fee into the base raises March interest from **R50.00 to R58.35**. Compounding unpaid interest as well is a further step and is not offered as a switch |
-| D-TERMINAL | Regulation 44(4) pro-rates the commencement month and is silent on the month the agreement ends. Davis J held that a full fee in the final month is allowed | Commencement month is pro-rata. Every later month, including the settlement month, is the full R60 before VAT. A loan that starts and ends in one month is pro-rata only | Pro-rata for the final month cuts the hypothetical 10 April quote from **R4,818.54 to R4,772.14** |
+| D-VAT-DUPLUM | Not named in the locked file. §7's three unsigned edges are also unnamed. This row is not one of those edges unless counsel says so | The calculator clips the consumer-facing total, VAT included | Leaving VAT outside the ceiling bills **R153.00** of June and July charges on the R150 loan against a R150 ceiling, and does not clip July's service fee |
+| D-BASE | **Closed by §10.** Provider choice, stored per organisation or per product. The locked unset value is no interest on a deferred initiation fee | No interest, unless `interest_on_deferred_initiation` is set | On the R1,000 March 2026 loan, putting the unpaid R172.50 initiation fee into the base raises March interest from **R50.00 to R58.35** |
+| D-TERMINAL | **Closed by §9.** Full monthly fee after the opening month, including the settlement month, subject to the R60 cap | The calculator's full setting matches. The pro-rata final-month switch does not | Pro-rata for the final month cuts the hypothetical 10 April quote from **R4,818.54 to R4,772.14** |
 | D-DUP-RESET | Closed by [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §7. A cure closes the episode. The next default has a fresh ceiling equal to unpaid principal at the new default. The 2015 NCR draft was not found as a regulation | Fresh episode. Example 10: the ceiling moves from **R200.00 to R50.00** | The aggregate switch remains only so the rejected reading stays reproducible. On the R150 loan it charges **R0** in October where the fresh cap charges **R7.50 interest and R69.00 service**. On the R200 loan it charges **R0** in October where the fresh cap charges **R2.50 interest and R47.50 service** |
 | D-INIT-DUE | The Act does not say when a deferred initiation fee falls due | Unpaid from the advance date (so section 126 pays it before principal) but due on the first principal due date | Making it due on the advance date would put the R150 loan in default on 2 May, and May's R69.00 service fee would then count toward the R150 ceiling. The pinned Example 7 would no longer hold |
 | D-ALLOC | Section 126 orders interest, then fees as a class, then principal. It does not order the fee class | Earliest due date, then collection, default administration, insurance, service, initiation | Any other order inside the fee class is still section 126-compliant. The pinned R200 payment in Example 6 clears the service fee before the initiation fee because the service fee is already due |
-| D-PREPAY | Which instalment a principal prepayment reduces | The earliest unpaid slice, so arrears clear before the tail shortens | Reducing the last instalment instead would leave the next instalment intact. Example 6's two-slice loan reduces the 1 April slice by the extra R10, from R400 to R390 |
-| D-RATE-SCOPE | "First loan" and "subsequent loans within a calendar year" do not say whether the universe is one credit provider or the whole market | This credit provider only, because the LMS cannot see other providers. The caller can pass bureau dates later without a formula change. The rate is fixed at inception | A market-wide 3% rule needs data this product does not have on day 1 |
+| D-PREPAY | **Superseded by §13.** The provider chooses shorten-the-term or drop-the-instalment. No platform default is stated | The calculator reduces the earliest unpaid slice. Example 6 takes R10.00 off the R400.00 slice due 1 April and leaves the R600.00 slice | The §13 choice is not implemented. The checklist does not pick a default |
+| D-RATE-SCOPE | **Closed by §13.** A subsequent short-term loan is counted per credit-provider organisation | Prior inceptions are an input for that organisation. The rate is fixed at inception | A market-wide 3% count is not the locked rule |
 | D-THRESHOLD | Section 7 says the Minister reviews the section 9 thresholds at least every five years. Commentary in 2026 still uses R15,000 and R250,000 from GN 713 of 2006. The short-term R8,000 figure is still the one printed in regulation 39(2) | Use R8,000, six months, R15,000, and R250,000, and reject a book that would cross them | A later unnoticed amendment would move the micro / personal boundary and the early-termination boundary. Confirm against the latest Gazette before go-live |
 | D-LARGE | Section 125(2)(c) adds an early-termination charge on a **large** agreement. For a variable-rate large agreement it is "no more than" the interest for three months minus any notice given. The regulation does not say whether those are calendar months, 90 days, or interest on the current balance | Day-1 personal loans at or above R250,000 are rejected. The charge is R0 for every agreement the engine will quote. The three-month formula is not implemented | Inventing a 90-day or three-calendar-month formula would be a new rule. Do not do it until the product is allowed to be large |
 | D-BNPL | A zero-cost plan is outside the NCA. The first late fee or interest can make it incidental credit | No NCA cost is ever posted. Cancellation uses CPA regulation 34 | The incidental-credit cap of 2% per month is not built. Do not add a late fee in this engine until that path is specified |
 | D-HOLD-INTEREST | CPA section 62 requires interest under the Prescribed Rate of Interest Act only when the supplier cannot deliver goods for a reason beyond its control, and double the payments when the failure is the supplier's. It does not require the supplier to pay interest on a voluntary security hold | The hold earns R0. Inability-to-supply compensation is not calculated | Paying the consumer a deposit rate would be a product choice, not an NCA cap |
 | D-SECURITY | How much of the hold is applied on default | Only the cents a section 124 mandate specifically authorises. The recommended figure is the unpaid interest and fees, applied through section 126 | Applying the hold to principal, or to the full settlement, needs those cents and that obligation written into the mandate. A clause that merely says "apply the deposit on default" is the section 90(2)(n) problem |
-| D-TARIFF | Default-administration and collection amounts | Caller-supplied, then clipped by section 103(5). No magistrates' court or debt-collector tariff is hardcoded | Hardcoding a rand letter fee would invent a number the regulation ties to a tariff |
+| D-TARIFF | **Closed by §18 as a fail-closed rule.** No charge until a tariff row exists. §13 and §18 prefer an additional monthly fee over capitalising the cost into the schedule | Caller-supplied, then clipped. There is no tariff row | A missing row must not become a rand amount. The calculator does not enforce that yet |
 
-## Raised, not chosen
+## Calculator divergence
 
-These points are gaps or conflicts between [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md), the Act, and the accepted calculator. The calculator does not treat them as new locked decisions. Where a behaviour is named below, it is the behaviour required to keep the accepted formulas running, or the only arithmetic that avoids a negative amount. Update the locked-decisions file before treating any of them as closed.
-
-| Point | What the locked file says | What the calculator does now | Why it is not closed |
-| --- | --- | --- | --- |
-| Unset leniency and threshold | §6: configurable, with examples of 4 or 5 days and 95% or more. No unset number | `leniency_days = 1` and `100%`. That is the accepted calculator: flag the next calendar day if any cent of the bundle remains | 4, 5, and 95 are examples, not a default. Choosing them as the unset values would move every existing pinned default |
-| Which days leniency counts | §6 says "days" | Calendar days. Flag date = due date + `leniency_days` | Business days are not stated |
-| What "the instalment" contains | §6: 95% or more of the instalment | Original cents of principal slices and levied charges that share that due date. Unbilled interest is outside the test until it is debited | A contractual instalment that includes unbilled interest is not defined |
-| Payment on the flag date | §1: a payment on a calendar day is recognised at 00:00. §6: flag if the payment has not been received | The morning check runs before that day's payments, as the accepted calculator already does. A payment on the flag date can cure the episode later the same day. It does not stop the episode from opening | Applying §1 literally would let a same-day payment stop the flag, and would change the duplum day-count of a payment made on the first default day |
-| When the campaign penalty rate starts | §3: the discount falls away on non-payment and the penalty rate is the base rate. §6: default is flagged after leniency | The discount stays on through the leniency window, including at 0%. The base rate starts on the flag date. Example 13: four days of leniency bill **R45.00** of April interest, not R50.00 and not R0.00 | "Non-payment" could instead mean the missed due date, with the penalty rate running during leniency while the flag waits |
-| Does a cure restore the discount? | §3 does not say | It stays off, including after the cure. The split loan in Example 13 bills **R10.00** for 16–30 April on the remaining R400.00, not R0.00 | Restoring it on cure would also be a new rule |
-| Do fee discounts fall away? | §3 describes the penalty as a rate | Only the interest discount falls away. Initiation and service discounts stay, including a discount to R0 | The file does not say a fee campaign ends on non-payment |
-| Fee discount shape | Interest is base x% minus discount y% | Fee discounts are cents off the ex-VAT fee, floored at R0, then VAT is recalculated | A percentage fee discount is not stated |
-| Discount larger than the base | "Real rate less discount = 0%" | The effective rate is floored at 0%. It is not a credit, and it is not an error | A negative rate would break regulation 40 |
-| Lay-by and the duplum ceiling | §4: interest on principal minus hold. §7: ceiling is unpaid principal, including capitalised initiation | Interest uses the net balance. The ceiling uses gross unpaid principal. Example 12: March interest **R30.00**, ceiling **R1,000.00** | The file does not say the hold reduces the ceiling |
-| Hold larger than principal | §4: net balance | Interest base is floored at R0. Example 12: a R1,500.00 hold on R1,000.00 bills **R0.00** interest and still one R69.00 service fee | A negative base is not an NCA result |
-| Same-day hold | §1: value date 00:00. The interest convention in this document excludes same-day receipts from that day's base | A `LaybyeHold` on date D reduces interest on D. The hold is not a section 126 receipt | Treating it like a receipt would start the lower base on D+1 |
-| Capitalised initiation | §2: if capitalised, it is part of the principal. §7: the ceiling includes pre-default capitalised initiation. This document: section 102 keeps the fee out of principal on a short-term or unsecured agreement | Initiation stays a section 126 fee. The ceiling is cash principal only | Capitalising it for these two products conflicts with the section 102 reading already in this document. No capitalisation rule was added |
-| Service-fee pro-rata period | §9: pro-rata only from disbursement to the first payment due. Regulation 44(4): pro-rata when the agreement is concluded during the calendar month | Pro-rata for the commencement calendar month only. Later months, including the settlement month, are the full fee | "Until the first payment due" can cross a month boundary. Regulation 44(4) does not. The accepted formula was left in place |
-| 30/360 | §5: actual/actual and standard 30/360 must both be available | `actual` is actual/actual. `fixed` is a 30-day month and a **365-day** year, which is the regulation 40 alternative already pinned. It is not 30/360 | Changing the personal divisor from 365 to 360 would move the pinned fixed-day figures. No 360-day divisor was added |
-| Rate after a repo fall | §11: provider choice. Option A keeps the contract rate. Option B uses the lower of the contract rate and the current statutory maximum, with a section 104 notice | The engine always accrues `repo(day) + margin`. There is no frozen contract rate and no notice | Neither option is coded as a choice. The current formula matches Option B only when the margin is already at the 21-point cap |
-| Lay-by payments, consolidation, credit life | §4: payments may be allocated across the loan and the lay-by; the client may settle when the lay-by covers the settlement balance; credit life on the linked lay-by must be defined | The hold reduces the interest base. Applying the hold still requires a section 124 amount and is a section 126 payment. No split allocation, no automatic consolidation, no credit-life posting | Those three behaviours are not specified far enough to calculate |
-| Statements, external decision engines, payment frequencies, identity freeze | §§12–16 | Not in this calculator | They are servicing and origination rules. They do not change a cent in `src/lms/calc/` |
+The locked file has closed the points that used to sit in this section as open business readings: calendar-day leniency, the instalment contents, the flag-date payment, campaign timing through leniency and after cure, exclusive VAT with an inclusive election, the full settlement-month service fee, no interest on a deferred initiation fee unless the provider chooses otherwise, the per-organisation subsequent-loan count, and fail-closed tariffs. [implementation-checklist.md](implementation-checklist.md) lists what the calculator still does instead, and the technical gaps. This section does not choose a repair. The Layer 1 types in that file are marked draft.
 
 ## What was deliberately not invented
 
 - A rand cap for a section 129 letter or a collection commission.
 - A three-month early-termination formula for large agreements.
-- A market-wide view of who has already had a short-term loan this year.
-- An annual percentage rate equal to the monthly short-term rate times 12.
+- A market-wide count of who has already had a short-term loan this year. §13 counts subsequent loans per credit-provider organisation.
+- An annual-equivalent conversion. §17 requires the disclosure. It does not give the formula, and this document does not invent `monthly × 12`.
 - A credit-life premium table, or a section 106 cover test.
-- A public-holiday calendar.
-- A grace period other than the configurable leniency in [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) §6. The unset values are raised above. They are not a new statutory grace.
+- A public-holiday calendar. Leniency counts those days as calendar days without needing their names (§6).
+- A numeric default for leniency or for the full-payment threshold. §6 fails closed when either is unset.
 - Compound interest on unpaid fees, other than the explicit and switched-off option to accrue on a deferred initiation fee.
 - Any Enigma entity, role, or mandate schema.
 
