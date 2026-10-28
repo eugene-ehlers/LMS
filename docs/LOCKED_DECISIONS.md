@@ -161,6 +161,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - One statement per client per credit-provider organisation, showing all of that client's loans with that organisation.
 - Each loan retains its own opening and closing balance so section 109 still holds.
+- The maximum period between successive statements is one month for Day-1 products (short-term and unsecured personal). Section 108 allows longer periods for other agreement types; those are not Day-1 products.
 - The LMS produces shortened statements, interim statements, regular statements, proof of balances and proof of payments.
 - Origination and contracting documents are produced in the decision engine before the information is sent to the LMS.
 - Logo and look-and-feel are client-specific. The platform provides basic templates. The client may supply their own look and feel for customisation.
