@@ -335,7 +335,7 @@ Documents layer
   |  frozen name, id number, service address                            §16
   |
   |  Configuration read: cfg_brand.logo_object_key                      logo only
-  |  Configuration read: NCR number on the agreement pin                §15, gap G11
+  |  Configuration read: NCR number on the agreement pin                gap G11
   |  Provider legal name                                                 gap G11, fail closed
   |  Configuration read: lms.ref_public_holiday
   |
