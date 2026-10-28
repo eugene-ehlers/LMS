@@ -735,20 +735,7 @@ class Ledger:
         open_episode = self._open_episode(account)
         effects: list[Effect] = []
         if flagged and open_episode is None:
-            principal = self.bucket_balance(account, "principal")
-            capitalised = account.capitalised_initiation_cents
-            ceiling = duplum_base_cents(
-                cash_balance_cents=principal - capitalised,
-                capitalised_initiation_cents=capitalised,
-            )
-            effects.append(
-                Effect(
-                    "open_episode",
-                    cents=ceiling,
-                    episode_no=(account.episodes[-1].episode_no + 1) if account.episodes else 1,
-                    levied_on=check_on,
-                )
-            )
+            effects.append(self._open_episode_effect(account, check_on))
             effects.append(Effect("fall_away"))
         elif not flagged and open_episode is not None:
             effects.append(
@@ -762,6 +749,141 @@ class Ledger:
             effects=tuple(effects),
         )
         return flagged
+
+    def open_in_duplum_episode(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+        fall_away: bool,
+    ) -> Episode:
+        """Open one episode at the principal now on the loan.
+
+        Collections decides which §6 event this is. This method does not
+        run the morning check and does not close an episode. A second open
+        while one is already open is refused: §7 does not restart a ceiling.
+        """
+        account = self._loan(organisation_id, loan_id)
+        if self._open_episode(account) is not None:
+            raise LedgerError(
+                "episode-open",
+                "LOCKED_DECISIONS §7: an open in-duplum episode is not restarted.",
+            )
+        day = value_date(recognised_at)
+        effects: list[Effect] = [self._open_episode_effect(account, day)]
+        if fall_away and not account.discount_fallen_away:
+            effects.append(Effect("fall_away"))
+        self._post(
+            account,
+            kind="default_flag",
+            recognised_at=recognised_at,
+            entries=(),
+            effects=tuple(effects),
+        )
+        opened = self._open_episode(account)
+        if opened is None:
+            raise LedgerError("episode", "The in-duplum episode did not open.")
+        return opened
+
+    def close_in_duplum_episode(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+    ) -> Episode:
+        """Close the open episode. The discount flag is left as it is (§3)."""
+        account = self._loan(organisation_id, loan_id)
+        episode = self._open_episode(account)
+        if episode is None:
+            raise LedgerError("episode-absent", "There is no open in-duplum episode to close.")
+        self._post(
+            account,
+            kind="default_flag",
+            recognised_at=recognised_at,
+            entries=(),
+            effects=(
+                Effect("close_episode", episode_no=episode.episode_no, levied_on=value_date(recognised_at)),
+            ),
+        )
+        return episode
+
+    def mark_discount_fallen_away(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+    ) -> None:
+        """§3. Once the flag date has removed the discount, it stays off."""
+        account = self._loan(organisation_id, loan_id)
+        if account.discount_fallen_away:
+            return
+        self._post(
+            account,
+            kind="default_flag",
+            recognised_at=recognised_at,
+            entries=(),
+            effects=(Effect("fall_away"),),
+        )
+
+    def write_off_outstanding(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+        amount_cents: int | None = None,
+    ) -> Transaction:
+        """Write off the full outstanding position in one balanced journal.
+
+        §8 does not rank a partial write-off across buckets. An amount other
+        than the full position is refused. Principal slices and charges are
+        cleared together so the ledger invariant holds.
+        """
+        account = self._loan(organisation_id, loan_id)
+        effects: list[Effect] = []
+        credits: dict[str, int] = {}
+        for slice_ in account.slices:
+            if slice_.remaining_cents:
+                effects.append(
+                    Effect("decrease_slice", cents=slice_.remaining_cents, sequence=slice_.sequence)
+                )
+                credits["principal"] = credits.get("principal", 0) + slice_.remaining_cents
+        for charge in account.charges:
+            if charge.remaining_cents:
+                effects.append(
+                    Effect(
+                        "decrease_charge",
+                        cents=charge.remaining_cents,
+                        charge_id=charge.charge_id,
+                    )
+                )
+                credits[charge.bucket] = credits.get(charge.bucket, 0) + charge.remaining_cents
+        total = sum(credits.values())
+        if total == 0:
+            raise LedgerError("write-off-zero", "There is no outstanding balance to write off.")
+        if amount_cents is not None and amount_cents != total:
+            raise LedgerError(
+                "write-off-partial-unset",
+                "LOCKED_DECISIONS §8 does not order a partial write-off across buckets. "
+                "The journal writes off the full outstanding position, or it does not post.",
+            )
+        entries = [Entry("write_off_expense", None, total, 0)]
+        for bucket, amount in credits.items():
+            code = "principal" if bucket == "principal" else f"{bucket}_receivable"
+            entries.append(Entry(code, bucket, 0, amount))
+        transaction = self._post(
+            account,
+            kind="write_off",
+            recognised_at=recognised_at,
+            entries=tuple(entries),
+            effects=tuple(effects),
+            amount_cents=total,
+        )
+        self._assert_consistent(account)
+        return transaction
 
     def issue_statement(
         self,
@@ -1198,6 +1320,16 @@ class Ledger:
             if episode.closed_on is None:
                 return episode
         return None
+
+    def _open_episode_effect(self, account: LoanAccount, day: date) -> Effect:
+        principal = self.bucket_balance(account, "principal")
+        capitalised = account.capitalised_initiation_cents
+        ceiling = duplum_base_cents(
+            cash_balance_cents=principal - capitalised,
+            capitalised_initiation_cents=capitalised,
+        )
+        episode_no = (account.episodes[-1].episode_no + 1) if account.episodes else 1
+        return Effect("open_episode", cents=ceiling, episode_no=episode_no, levied_on=day)
 
     def _episode(self, account: LoanAccount, episode_no: int) -> Episode:
         for episode in account.episodes:
