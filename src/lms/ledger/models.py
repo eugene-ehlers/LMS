@@ -148,7 +148,7 @@ class LoanAccount:
     frozen_service_address: str
     snapshot: ElectionSnapshot
     payment_frequency: str
-    disbursement_value_date: date
+    disbursement_value_date: date | None
     quoted_disbursement: date | None
     contractual_end: date
     cash_advanced_cents: int
@@ -162,6 +162,13 @@ class LoanAccount:
     next_charge_sequence: int = 1
 
     def __setattr__(self, name: str, value: object) -> None:
+        if (
+            name == "disbursement_value_date"
+            and name in self.__dict__
+            and self.__dict__[name] is None
+        ):
+            object.__setattr__(self, name, value)
+            return
         if name in _FROZEN_ACCOUNT_FIELDS and name in self.__dict__:
             raise LedgerError(
                 "identity-frozen",
