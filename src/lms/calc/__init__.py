@@ -6,11 +6,14 @@ The public surface is the set of types and functions documented in
 
 from lms.calc.allocation import allocate_payment
 from lms.calc.examples import EXAMPLES
-from lms.calc.fees import initiation_cap_ex_vat_cents, service_fee_cents
+from lms.calc.fees import initiation_cap_ex_vat_cents, opening_service_fraction, service_fee_cents
 from lms.calc.interest import (
+    accrual_weight,
     campaign_terms,
     daily_interest_rands,
     micro_monthly_rate,
+    nominal_annual_rate,
+    periods_per_year,
     personal_annual_rate,
 )
 from lms.calc.laybye import cancel_laybye, guard_s124
@@ -30,7 +33,9 @@ from lms.calc.models import (
     ManualCharge,
     Payment,
     Policy,
+    PrepaymentChoice,
     Product,
+    RepoFallChoice,
     RepoRate,
     Settlement,
     TerminalServiceFee,
@@ -48,12 +53,15 @@ __all__ = [
     "ManualCharge",
     "Payment",
     "Policy",
+    "PrepaymentChoice",
     "Product",
+    "RepoFallChoice",
     "RepoRate",
     "RuleError",
     "Settlement",
     "TerminalServiceFee",
     "VatRate",
+    "accrual_weight",
     "allocate_payment",
     "binding_until",
     "campaign_terms",
@@ -63,7 +71,10 @@ __all__ = [
     "guard_s124",
     "initiation_cap_ex_vat_cents",
     "micro_monthly_rate",
+    "nominal_annual_rate",
+    "opening_service_fraction",
     "payoff_cents",
+    "periods_per_year",
     "personal_annual_rate",
     "quote_settlement",
     "run",

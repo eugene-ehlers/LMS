@@ -2,21 +2,27 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
 from lms.calc.allocation import allocate_payment
-from lms.calc.fees import initiation_cap_ex_vat_cents, initiation_fee, service_fee_cents
+from lms.calc.fees import (
+    initiation_cap_ex_vat_cents,
+    initiation_fee,
+    opening_service_fraction,
+    service_fee_cents,
+)
 from lms.calc.interest import campaign_terms, interest_for_dates, micro_monthly_rate
 from lms.calc.laybye import cancel_laybye, guard_s124
 from lms.calc.ledger import (
     DEFAULT_VAT,
     charge_remaining,
     episode_accrued,
-    execute_settlement,
-    quote_settlement,
-    run,
 )
+from lms.calc.ledger import execute_settlement as _execute_settlement
+from lms.calc.ledger import quote_settlement as _quote_settlement
+from lms.calc.ledger import run as _run
 from lms.calc.models import (
     Agreement,
     DayCount,
@@ -25,11 +31,48 @@ from lms.calc.models import (
     LaybyeHold,
     Payment,
     Policy,
+    PrepaymentChoice,
     Product,
+    RepoFallChoice,
     RepoRate,
     TerminalServiceFee,
     VatRate,
 )
+
+def _stated(policy: Policy | None) -> Policy:
+    """Fill only the worked-example customer's leniency and threshold.
+
+    The engine fails closed when either is unset. These numbers are this
+    file's stated customer choice, not an engine default.
+    """
+    policy = policy or Policy()
+    if policy.leniency_days is None or policy.full_payment_threshold_percent is None:
+        policy = replace(
+            policy,
+            leniency_days=1 if policy.leniency_days is None else policy.leniency_days,
+            full_payment_threshold_percent=(
+                Decimal("100")
+                if policy.full_payment_threshold_percent is None
+                else policy.full_payment_threshold_percent
+            ),
+        )
+    return policy
+
+
+def run(*args: object, **kwargs: object):
+    kwargs["policy"] = _stated(kwargs.get("policy"))  # type: ignore[arg-type]
+    return _run(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def quote_settlement(*args: object, **kwargs: object):
+    kwargs["policy"] = _stated(kwargs.get("policy"))  # type: ignore[arg-type]
+    return _quote_settlement(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def execute_settlement(*args: object, **kwargs: object):
+    kwargs["policy"] = _stated(kwargs.get("policy"))  # type: ignore[arg-type]
+    return _execute_settlement(*args, **kwargs)  # type: ignore[arg-type]
+
 
 # SARB raised the policy rate by 25bp to 7.25% effective 25 September 2026.
 # 7.00% is the rate that increase moved from. It is an input, not a live fetch.
@@ -176,51 +219,77 @@ def example_first_versus_subsequent() -> dict[str, int]:
 
 
 def example_repo_step() -> dict[str, int]:
-    """R10,000 unsecured, RR+21%, 20-30 September 2026, actual/365."""
+    """R10,000 unsecured. The contract rate is struck on the advance date (§11).
+
+    The September 2026 repo increase does not raise either choice. A later fall
+    leaves option A on the contract rate and drops option B to the new cap.
+    """
     from lms.calc.money import to_cents
 
     agreement = _personal(1_000_000, date(2026, 9, 20), date(2027, 9, 20))
-    total = interest_for_dates(
+    continues = RepoFallChoice.CONTRACT_RATE_CONTINUES
+    lower = RepoFallChoice.LOWER_OF_CONTRACT_AND_CAP
+    rise_continues = interest_for_dates(
         base_cents=1_000_000,
         agreement=agreement,
         start=date(2026, 9, 20),
         end=date(2026, 9, 30),
         repos=REPOS,
+        repo_fall=continues,
     )
-    before = interest_for_dates(
+    rise_lower = interest_for_dates(
         base_cents=1_000_000,
         agreement=agreement,
         start=date(2026, 9, 20),
-        end=date(2026, 9, 24),
-        repos=REPOS,
-    )
-    after = interest_for_dates(
-        base_cents=1_000_000,
-        agreement=agreement,
-        start=date(2026, 9, 25),
         end=date(2026, 9, 30),
         repos=REPOS,
+        repo_fall=lower,
     )
+    fall_repos = (
+        RepoRate(date(2026, 1, 1), Decimal("0.0725")),
+        RepoRate(date(2026, 9, 25), Decimal("0.0700")),
+    )
+    fall_continues = interest_for_dates(
+        base_cents=1_000_000,
+        agreement=agreement,
+        start=date(2026, 9, 20),
+        end=date(2026, 9, 30),
+        repos=fall_repos,
+        repo_fall=continues,
+    )
+    fall_lower = interest_for_dates(
+        base_cents=1_000_000,
+        agreement=agreement,
+        start=date(2026, 9, 20),
+        end=date(2026, 9, 30),
+        repos=fall_repos,
+        repo_fall=lower,
+    )
+    leap_repos = (RepoRate(date(2028, 1, 1), Decimal("0.0725")),)
+    leap_agreement = _personal(1_000_000, date(2028, 2, 29), date(2028, 8, 29))
     leap_actual = interest_for_dates(
         base_cents=1_000_000,
-        agreement=_personal(1_000_000, date(2028, 2, 29), date(2028, 8, 29)),
+        agreement=leap_agreement,
         start=date(2028, 2, 29),
         end=date(2028, 2, 29),
-        repos=(RepoRate(date(2028, 1, 1), Decimal("0.0725")),),
+        repos=leap_repos,
         day_count=DayCount.ACTUAL,
+        repo_fall=continues,
     )
     leap_fixed = interest_for_dates(
         base_cents=1_000_000,
-        agreement=_personal(1_000_000, date(2028, 2, 29), date(2028, 8, 29)),
+        agreement=leap_agreement,
         start=date(2028, 2, 29),
         end=date(2028, 2, 29),
-        repos=(RepoRate(date(2028, 1, 1), Decimal("0.0725")),),
+        repos=leap_repos,
         day_count=DayCount.FIXED,
+        repo_fall=continues,
     )
     return {
-        "before_hike": to_cents(before),
-        "after_hike": to_cents(after),
-        "total": to_cents(total),
+        "rise_continues": to_cents(rise_continues),
+        "rise_lower": to_cents(rise_lower),
+        "fall_continues": to_cents(fall_continues),
+        "fall_lower": to_cents(fall_lower),
         "leap_day_actual": to_cents(leap_actual),
         "leap_day_fixed_365": to_cents(leap_fixed),
     }
@@ -243,10 +312,12 @@ def example_service_fee_and_vat() -> dict[str, int]:
         vat_rates=VAT_HYPOTHETICAL,
         policy=Policy(terminal_service_fee=TerminalServiceFee.PRO_RATA),
     )
+    march_fraction = opening_service_fraction(date(2026, 3, 15), date(2026, 9, 15))
     march_fee = service_fee_cents(
         on=date(2026, 3, 31),
         period_start=date(2026, 3, 15),
-        period_end=date(2026, 3, 31),
+        period_end=date(2026, 3, 15),
+        fraction=march_fraction,
         vat_rates=VAT_HYPOTHETICAL,
         basis=FeeCapBasis.EXCLUSIVE,
     )
@@ -295,7 +366,12 @@ def example_partial_payment() -> dict[str, int]:
         (Payment(date(2026, 3, 31), 20_000),),
         until=date(2026, 3, 31),
     ).state
-    second = allocate_payment(march, 10_000).state
+    second = allocate_payment(
+        march,
+        10_000,
+        as_of=date(2026, 3, 31),
+        prepayment=PrepaymentChoice.DROP_INSTALMENT,
+    ).state
     return {
         "interest_after_200": charge_remaining(march, "interest"),
         "initiation_after_200": charge_remaining(march, "initiation"),
@@ -402,11 +478,16 @@ def example_settlement() -> dict[str, int]:
         date(2026, 4, 17),
         vat_rates=VAT_15,
     )
+    # One cent short, and a payment after the window, are ordinary section 126
+    # receipts. Principal is not due until 15 September, so the receipt states
+    # the drop-instalment choice. The engine does not assume that choice.
+    ordinary = Policy(prepayment_choice=PrepaymentChoice.DROP_INSTALMENT)
     short = execute_settlement(
         agreement,
         quote,
         quote.total_cents - 1,
         date(2026, 4, 10),
+        policy=ordinary,
         vat_rates=VAT_15,
     )
     late = execute_settlement(
@@ -414,6 +495,7 @@ def example_settlement() -> dict[str, int]:
         quote,
         quote.total_cents,
         date(2026, 4, 18),
+        policy=ordinary,
         vat_rates=VAT_15,
     )
     return {

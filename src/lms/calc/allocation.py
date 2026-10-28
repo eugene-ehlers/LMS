@@ -1,14 +1,20 @@
-"""Section 126(3) allocation. Interest, then fees, then principal."""
+"""Section 126 allocation of amounts that are already due or unpaid.
+
+LOCKED_DECISIONS §8. Unbilled interest is not allocatable. When several fee
+buckets are already due, the order is collection costs, default administration,
+credit insurance, service fee, initiation fee, and earliest due date inside
+each bucket.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import date
 
-from lms.calc.models import Charge, PrincipalSlice, State
+from lms.calc.models import Charge, PrepaymentChoice, PrincipalSlice, State
 from lms.calc.money import RuleError
 
-# Within the fee class the Act is silent. Same due date: this rank, then posting sequence.
-# Interest is not in this table; the whole interest class is allocated first.
+# Within a fee bucket the earliest due date is paid first (§8).
 FEE_RANK = {
     "collection": 0,
     "default_admin": 1,
@@ -31,12 +37,38 @@ def _replace_charge(charges: tuple[Charge, ...], updated: Charge) -> tuple[Charg
     return tuple(updated if charge.charge_id == updated.charge_id else charge for charge in charges)
 
 
-def allocate_payment(state: State, cents: int) -> Allocation:
-    """Apply ``cents`` to a state whose payable charges are already billed.
+def _with_remaining(charge: Charge, remaining_cents: int) -> Charge:
+    return Charge(
+        charge.charge_id,
+        charge.kind,
+        charge.levied_on,
+        charge.due_on,
+        charge.ex_vat_cents,
+        charge.vat_cents,
+        charge.amount_cents,
+        remaining_cents,
+        charge.duplum_episode,
+        charge.sequence,
+    )
 
-    Unbilled interest is not payable (s 103(3) until it has been debited).
-    Principal slices are reduced earliest due date first, which clears arrears
-    before it shortens a future instalment.
+
+def allocate_payment(
+    state: State,
+    cents: int,
+    *,
+    as_of: date,
+    prepayment: PrepaymentChoice | None = None,
+    apply_prepayment: bool = True,
+    settle: bool = False,
+) -> Allocation:
+    """Apply ``cents`` to amounts that are already due or unpaid.
+
+    Principal with a due date after ``as_of`` is not due. Paying it is the
+    §13 prepayment choice. That choice fails closed when it is unset.
+    ``apply_prepayment=False`` leaves that surplus unapplied, so a morning
+    default check can see the receipt without choosing a prepayment rule.
+    ``settle=True`` pays every remaining principal slice. That is section 125,
+    not a prepayment.
     """
     if cents < 0:
         raise RuleError("payment", "Cannot allocate a negative amount.")
@@ -54,69 +86,85 @@ def allocate_payment(state: State, cents: int) -> Allocation:
         if remaining == 0:
             break
         take = min(charge.remaining_cents, remaining)
-        charges = _replace_charge(
-            charges, _with_remaining(charge, charge.remaining_cents - take)
-        )
+        charges = _replace_charge(charges, _with_remaining(charge, charge.remaining_cents - take))
         remaining -= take
         interest_taken += take
 
     fees = sorted(
-        (
-            c
-            for c in charges
-            if c.kind != "interest" and c.remaining_cents > 0
-        ),
-        key=lambda c: (c.due_on, FEE_RANK.get(c.kind, 99), c.sequence),
+        (c for c in charges if c.kind != "interest" and c.remaining_cents > 0),
+        key=lambda c: (FEE_RANK.get(c.kind, 99), c.due_on, c.sequence),
     )
     for charge in fees:
         if remaining == 0:
             break
         take = min(charge.remaining_cents, remaining)
-        charges = _replace_charge(
-            charges, _with_remaining(charge, charge.remaining_cents - take)
-        )
+        charges = _replace_charge(charges, _with_remaining(charge, charge.remaining_cents - take))
         remaining -= take
         fee_taken += take
 
-    slices = tuple(
-        sorted(state.principal_slices, key=lambda s: (s.due_on, s.sequence))
-    )
-    updated_slices: list[PrincipalSlice] = []
-    for slice_ in slices:
-        if remaining == 0 or slice_.remaining_cents == 0:
-            updated_slices.append(slice_)
-            continue
-        take = min(slice_.remaining_cents, remaining)
-        updated_slices.append(
-            PrincipalSlice(
-                slice_.due_on,
-                slice_.amount_cents,
-                slice_.remaining_cents - take,
-                slice_.sequence,
-            )
-        )
+    slices = list(sorted(state.principal_slices, key=lambda s: (s.due_on, s.sequence)))
+    due_indexes = [
+        index
+        for index, slice_ in enumerate(slices)
+        if slice_.remaining_cents > 0 and (settle or slice_.due_on <= as_of)
+    ]
+    for index in due_indexes:
+        if remaining == 0:
+            break
+        take = min(slices[index].remaining_cents, remaining)
+        slices[index] = _reduce_slice(slices[index], take)
         remaining -= take
         principal_taken += take
 
+    future = [
+        index
+        for index, slice_ in enumerate(slices)
+        if slice_.remaining_cents > 0 and not settle and slice_.due_on > as_of
+    ]
+    unapplied = 0
+    if remaining and future:
+        if not apply_prepayment:
+            unapplied = remaining
+            remaining = 0
+        elif prepayment is None:
+            raise RuleError(
+                "prepayment-choice-unset",
+                "A payment would reduce principal that is not yet due, and the "
+                "prepayment choice is unset. LOCKED_DECISIONS §13 and §19 fail closed.",
+            )
+        else:
+            order = (
+                list(reversed(future))
+                if prepayment == PrepaymentChoice.SHORTEN_TERM
+                else list(future)
+            )
+            for index in order:
+                if remaining == 0:
+                    break
+                take = min(slices[index].remaining_cents, remaining)
+                slices[index] = _reduce_slice(slices[index], take)
+                remaining -= take
+                principal_taken += take
+
     new_state = replace(
         state,
-        principal_slices=tuple(updated_slices),
+        principal_slices=tuple(slices),
         charges=charges,
         suspense_cents=state.suspense_cents + remaining,
     )
-    return Allocation(interest_taken, fee_taken, principal_taken, remaining, new_state)
+    return Allocation(
+        interest_taken,
+        fee_taken,
+        principal_taken,
+        remaining + unapplied,
+        new_state,
+    )
 
 
-def _with_remaining(charge: Charge, remaining_cents: int) -> Charge:
-    return Charge(
-        charge.charge_id,
-        charge.kind,
-        charge.levied_on,
-        charge.due_on,
-        charge.ex_vat_cents,
-        charge.vat_cents,
-        charge.amount_cents,
-        remaining_cents,
-        charge.duplum_episode,
-        charge.sequence,
+def _reduce_slice(slice_: PrincipalSlice, take: int) -> PrincipalSlice:
+    return PrincipalSlice(
+        slice_.due_on,
+        slice_.amount_cents,
+        slice_.remaining_cents - take,
+        slice_.sequence,
     )

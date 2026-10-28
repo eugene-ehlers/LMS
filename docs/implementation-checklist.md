@@ -1,6 +1,6 @@
 # Implementation checklist
 
-Documentation only. This file does not change `src/lms/calc/`. It records what [LOCKED_DECISIONS.md](LOCKED_DECISIONS.md) requires after the 27 October 2026 Layer 0 update, and where an implementer does not yet have enough named structure to write code without inventing a rule.
+Draft sketch from 27 October 2026. The 28 October locks and the pure calculator are in [day1-calculation-rules.md](day1-calculation-rules.md) and [day1-calc-engine-note.md](day1-calc-engine-note.md). Where this sketch disagrees with those files, those files win. This file does not change a locked rule.
 
 The calculation contract and the worked examples stay in [day1-calculation-rules.md](day1-calculation-rules.md). Pins in `tests/test_day1_examples.py` and `tests/test_locked_alignments.py` describe the calculator as it is. They are not a licence to keep a behaviour that the locked file has since closed.
 
