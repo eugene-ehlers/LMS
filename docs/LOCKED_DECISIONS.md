@@ -62,12 +62,17 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A 360-day year is not required for Day-1.
 - Interest and fee accrual must use the same day-count and base method that was used to calculate the contractual instalment. Do not use a different method for accrual than was used for the instalment quote.
 
-## 6. Default definition (aligned for in-duplum and collections)
+## 6. Default definition — contractual breach vs collections default
 
-- Single definition used for both in-duplum and collections/reporting.
+- Two distinct concepts:
+  - Contractual breach: payment was due on day X and not received on day X. Once the day has passed this cannot be rectified (unless it was a system error, in which case it is corrected as if it never occurred).
+  - Collections default: the account is outside its limit (in arrears). This can be cured by paying the arrears amounts.
+- The default flag starts the in-duplum calculation (if not already in an episode) and is used for reporting and collections. It does not stop the charging of fees or interest. Payments continue to be treated normally.
+- The client chooses which event kicks off in-duplum:
+  - Contractual breach (ceiling is fixed at that date and cannot be restarted), or
+  - Collections default (in-duplum can stop if the client cures, and a new episode starts on the next collections default).
 - Leniency period is configurable per customer and counts calendar days (including weekends and public holidays).
 - Unset leniency_days or full_payment_threshold_percent fails closed. Do not hard-code example values as defaults.
-- Default is only automatically flagged on the contractual payment date + leniency days if the amount received for that due date is below the threshold.
 - The instalment used for the threshold test is the original principal slice plus levied charges that share that due date (including monthly service fee, non-capitalised initiation fee, and credit life). Unbilled interest is excluded until it is debited.
 - Credit life instalment must be included in the loan instalment for affordability calculations under the Act.
 - Prefer keeping the contractual instalment the same during the loan term.
@@ -80,11 +85,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Post-default accruals count as charges even if displayed as capitalised on statements.
 - Charges that cause the default do not count toward the cap; only charges that accrue during the default episode.
 - A payment during the default reduces what is owed but does not reset the counter for that episode.
-- A cure (account brought out of default) closes the episode.
-- A new default starts a fresh episode with a new ceiling based on the unpaid principal at the start of the new default.
+- A cure closes the episode only when the client has chosen collections-default as the in-duplum trigger. If the client has chosen contractual breach, the ceiling remains fixed.
+- A new default starts a fresh episode with a new ceiling based on the unpaid principal at the start of the new default (when collections-default trigger is selected).
 - Three section 103(5) edges not decided by Nedbank remain unnamed and unsigned; the clip stays off until counsel lists and confirms them. No implementation assumption is made.
-- This is not an absolute single-lifetime ceiling; the law provides for the rule to halt and start anew on a subsequent default.
-- Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the fresh-episode rule above.
+- This is not an absolute single-lifetime ceiling when the collections-default trigger is selected.
+- Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the client-selected trigger above.
 
 ## 8. Payment allocation and capitalisation
 
@@ -94,8 +99,10 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - On any calendar day, accrued interest and fees that become due that day are capitalised at 00:00 before payments recognised that day are allocated.
 - Capitalisation and payment allocation need not occur on the same calendar day. Capitalisation may be month-end; payment may be on the client's payday. Each is processed on its own recognition date.
 - Fees and interest charged may never exceed NCA limits.
-- If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment (write-off not required if the account is already in default).
+- If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment.
+- Small residual write-off threshold is client-configurable. Default value is R50. It is not automatic.
 - If the client does not pay exactly the contractual instalment, the difference becomes part of arrears. Normal arrears, in-duplum and collections rules then apply. The client either continues paying until the loan is fully repaid, or the outstanding amount is written off.
+- Provision and write-off are per client requirement and can be manual or formula-based (arrears, recency, months on book, promise-to-pay adherence, contactability, etc.).
 
 ## 9. Service-fee pro-rata and VAT
 
@@ -130,8 +137,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Quote date and disbursement date may differ. The contractual instalment accepted by the client is binding.
 - Two options must be supported when disbursement occurs later than the quote date:
   - (a) adjust the instalment based on actual disbursement date and remaining term, or
-  - (b) keep the original instalment and either settle early or write off a small residual at contractual end
-    (write-off not required if the account is already in default).
+  - (b) keep the original instalment and either settle early or write off a small residual at contractual end.
 - After a partial prepayment the provider chooses whether to shorten the term or drop the instalment.
 - Prefer keeping the contractual instalment the same during the loan term.
 - Additional fees outside interest, initiation, monthly service fee and credit life (for example certain collection costs) should be added as a further monthly fee (fixed or variable), not capitalised into the amortisation schedule.
@@ -175,4 +181,13 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Partial-prepayment choice (shorten term or drop instalment)
   - Interest on deferred initiation fee
   - Repo-rate fall choice
+  - In-duplum trigger (contractual_breach / collections_default)
+  - Residual write-off threshold (default R50)
 - Unset values fail closed.
+
+## 20. Prescription (section 126B)
+
+- Prescription handling is per client requirement.
+- It can be manual or formula-based.
+- Different clients may use different formulas based on arrears, recency, months on book, promise-to-pay adherence, contactability, and other factors.
+- No platform default is imposed.
