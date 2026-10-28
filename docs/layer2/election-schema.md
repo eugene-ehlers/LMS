@@ -4,7 +4,7 @@ Decision 19. One organisation row, and an optional product row that overrides it
 
 The vocabulary is the constants already published by `lms_config.locked`. This layer does not add a second spelling.
 
-The Python record is `lms.staff.elections.ElectionValues`. The organisation and product tables gain the two campaign fall-away columns in `db/migrations/0008_layer2_staff.sql`. The other columns already exist on `lms.cfg_organisation_settings` and `lms.cfg_product_terms`.
+The Python record is `lms.staff.elections.ElectionValues`. The organisation and product tables gain the two campaign fall-away columns in `db/migrations/0009_layer2_staff.sql`. The other columns already exist on `lms.cfg_organisation_settings` and `lms.cfg_product_terms`.
 
 | Field | Allowed values | Fail-closed resolve |
 | --- | --- | --- |
