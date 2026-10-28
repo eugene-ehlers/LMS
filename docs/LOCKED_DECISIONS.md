@@ -318,22 +318,18 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - The NCR registration number must be displayed on all NCA communications.
 - The LMS sends a regular push when the monthly statement for the month is ready. The push tells the consumer the statement is available. It does not contain collection content.
 
-## Open gaps (not decisions)
+## 28. Collection campaigns
 
-Found while implementing the Layer 1 regulatory extracts. Nothing in this section is a rule. No default was chosen.
-
-### Residual write-off threshold
-
-Decisions 8 and 19 set the residual write-off threshold default at R100. `lms_config.locked` on this branch still resolves a null threshold to 5 000 cents, and its comments still say R50. The extracts do not write off and do not apply the threshold. That code was not changed.
-
-### NCR product words and ledger classifications
-
-Decision 21 requires an NCR number on regulatory extracts for micro and unsecured personal loans, and not for pure hosting or Laybye/BNPL. The ledger classifications are `short_term`, `unsecured`, `zero_cost`, and `cpa_layby`. `pure_hosting` is not a column. The extract treats `short_term` as micro and `zero_cost` and `cpa_layby` as Laybye/BNPL, because those are the classifications of the Day-1 templates `micro_short_term`, `unsecured_personal`, `bnpl_zero`, and `layby_goods`. That map is not locked. A missing `pure_hosting` value fails closed when a row would require the number. `layby_security_short_term` is classified `short_term`, so it requires the number. Decision 21 does not say whether that linked parent is the exempt Laybye.
-
-### SACRRA columns with no locked rule
-
-Status codes, months in arrears, account-type codes, and the L700 N 9 amount scale are not locked. Decision 16 stores name, ID number, and service address as one string each, and the L700 columns that would split those strings are not locked either. The monthly layout is produced with those columns empty. No L700 file is emitted.
-
-### Form 39 write-off cell
-
-The Form 39 write-off cell is left empty. The ledger can post a full write-off journal. That journal is not mapped onto the cell. No count or rand total was invented.
+- A collection campaign is a bulk change applied to existing accounts. It does not create a new credit agreement (section 95).
+- Staff define a collection campaign with a start date, an end date (or open-ended), and one or more of the following changes:
+  - Reduce or zero the interest rate for the campaign period or the rest of the term.
+  - Reduce or zero one or more fees for the campaign period or the rest of the term.
+  - Waive the contractual instalment for the campaign period (payment holiday).
+- The campaign is applied to a selected set of accounts (by organisation, product, or an explicit list).
+- During the campaign period the ledger applies the reduced rate or fee, or skips the instalment. The contractual term and the contractual instalment amount are not changed.
+- When the campaign ends, the original rate and fees resume unless the campaign was open-ended.
+- A payment holiday does not reset in-duplum. Interest continues to accrue on the outstanding balance unless the campaign also zeros the rate.
+- A reduction in rate or fee is not an increase. Section 104(1) prohibits unilateral increases. A written notice of at least five business days is required before the change takes effect (section 104(2)).
+- The original contractual rate, fees, and instalment remain stored for disclosure. The campaign values are stored separately and are used for accrual during the campaign period.
+- Every collection-campaign change is audited. The audit record includes who applied it, when, the accounts affected, and the before and after values.
+- A change that alters the contractual term or the contractual instalment amount is a restructure and is not a collection campaign.
