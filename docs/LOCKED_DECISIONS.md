@@ -317,3 +317,19 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Staff with the appropriate role can access account information and provide it to a consumer who phones a call centre.
 - The NCR registration number must be displayed on all NCA communications.
 - The LMS sends a regular push when the monthly statement for the month is ready. The push tells the consumer the statement is available. It does not contain collection content.
+
+## Open gaps (not decisions)
+
+Found while adding the external-system dummies. Nothing in this section is a rule. No default was locked.
+
+### Decision-engine wire format
+
+Decision 13 requires the decision engine to supply the contractual rate, term, instalment, credit-life premium, application number, and the 5 % / 3 % short-term distinction. It does not define the wire representation of the rate, the unit of the term, or the application-number format. Decision 14 names the payment frequencies. Decision 17 defines nominal annual disclosure as the periodic rate times the number of periods per year, and weekly periods as actual days in the year / 7. A weekly figure needs the year. The fortnightly period count is not specified. `docs/dummies/decision-engine.md` uses a provisional contract (integer basis points, term count plus frequency, a dummy application-number format) and does not calculate a nominal annual rate. That contract is not a locked rule. The provisional consumer-identity fields on an application are `person_id`, name and ID number. That field list is not a locked rule.
+
+### Consumer service address versus "Enigma does not return addresses"
+
+Decision 16 freezes name, ID number and service address at booking, and later changes in Enigma must not rewrite the concluded agreement. Decisions 15 and 21 say Enigma does not hold or return addresses, in a list of credit-provider compliance data (trading name, NCR number, payment-account details, and similar). The Enigma dummy returns the consumer's name, ID number and service address on the booking identity read, and it does not return organisation addresses. Which reading is correct is not locked.
+
+### Which identity wins at booking
+
+The decision-engine application carries a consumer name and ID number. The Enigma booking read also returns a name and ID number. Which value is frozen when they differ is not locked. The dummies do not reconcile them.
