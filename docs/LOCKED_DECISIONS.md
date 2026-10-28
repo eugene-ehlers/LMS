@@ -120,7 +120,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Capitalisation and payment allocation need not occur on the same calendar day. Capitalisation may be month-end; payment may be on the client's payday. Each is processed on its own recognition date.
 - Fees and interest charged may never exceed NCA limits.
 - If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment.
-- Small residual write-off threshold is client-configurable. Default value is R50. It is not automatic.
+- Small residual write-off threshold is client-configurable. Default value is R100. It is not automatic.
 - If the client does not pay exactly the contractual instalment, the difference becomes part of arrears. Normal arrears, in-duplum and collections rules then apply. The client either continues paying until the loan is fully repaid, or the outstanding amount is written off.
 - Write-off can be manual. If automated, the external formula is the mandate.
 - A write-off can never be more or less than the outstanding balance. Payments received must be accounted for first. If the balance does not reduce to R0 it is not a write-off.
@@ -234,10 +234,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Interest on deferred initiation fee
   - Repo-rate fall choice
   - In-duplum trigger (contractual_breach / collections_default)
-  - Residual write-off threshold (default R50)
+  - Residual write-off threshold (default R100)
   - Campaign discount fall-away choice (falls_away_on_default / does_not_fall_away)
   - Campaign fall-away trigger (contractual_breach / collections_default)
 - Unset values fail closed.
+- Campaign fall-away choice and trigger are stored per campaign.
 
 ## 20. Prescription (section 126B)
 
@@ -254,6 +255,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It is not required for pure hosting or for Laybye/BNPL.
 - A blank NCR number blocks those communications and extracts. It does not block booking.
 - Trading name, addresses, telephone numbers, payment-account details and brand assets are also LMS-owned and are not supplied by Enigma.
+- Compliance details (NCR number, trading name, addresses, telephone, payment-account details) are required for reporting, control and audits.
 
 ## 22. Operational rand ceilings
 
@@ -269,3 +271,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - All actions on the LMS, whether system changes or changes to accounts, must produce an audit record.
 - The audit record includes who did it (staff identity from Enigma), when it was done, and what was done.
 - A system-error correction is an audited action and must record the staff identity.
+- For any change (compliance, elections, brand, ceiling, campaign), a person must sign in with the correct role so the sign-in details can be stored in the audit record.
+- Role-based access and audit records are required to pass POPIA and other audits.
+
+## 24. Pricing
+
+- There is one price mechanism: R100 per month.
+- R100 per month drives the annual fee and any discount offered to entice annual payments.
+- Any reference to R50 must be replaced with R100.
