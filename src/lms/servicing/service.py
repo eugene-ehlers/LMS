@@ -24,6 +24,8 @@ from lms.calc.money import RuleError
 from lms.laybye.errors import LaybyeError
 from lms.laybye.service import grant_loan, prepare_pair, receive_pre_disbursement
 from lms.ledger.errors import LedgerError
+from lms.rate_fee_change.errors import RateFeeChangeError
+from lms.rate_fee_change.service import RateFeeChanges
 from lms.ledger.models import LoanAccount
 from lms.ledger.service import Ledger, _day_count, _prepayment, _repo_fall
 from lms.regulatory.audit import AuditLog
@@ -103,6 +105,7 @@ class Servicing:
     payments: dict[str, PaymentRecord] = field(default_factory=dict)
     statements: dict[tuple[str, str, date, date], IssuedStatement] = field(default_factory=dict)
     audit: AuditLog = field(default_factory=AuditLog)
+    rate_fee_changes: RateFeeChanges | None = None
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
 
     def book(
@@ -784,15 +787,23 @@ class Servicing:
             return
         day = start
         while day <= end:
+            override = None
+            if self.rate_fee_changes is not None:
+                override = self.rate_fee_changes.periodic_rate_override(
+                    organisation_id=record.organisation_id,
+                    loan_id=account.loan_id,
+                    recognised_at=value_instant(day),
+                )
             try:
                 self.ledger.accrue_day(
                     organisation_id=record.organisation_id,
                     loan_id=account.loan_id,
                     recognised_at=value_instant(day),
                     interest_cap_present=interest_cap_present,
+                    periodic_rate_override=override,
                 )
-            except LedgerError as exc:
-                if exc.code not in {"already-accrued", "outside-term"}:
+            except (LedgerError, RateFeeChangeError) as exc:
+                if getattr(exc, "code", "") not in {"already-accrued", "outside-term"}:
                     raise _from_downstream(exc) from exc
             day += timedelta(days=1)
         try:
@@ -824,20 +835,35 @@ class Servicing:
                 and levy_day.month == account.disbursement_value_date.month
                 and first_due > account.disbursement_value_date
             )
+            amount = monthly
+            due_on = first_due if opening else levy_day
+            if self.rate_fee_changes is not None:
+                amount = self.rate_fee_changes.service_fee_for_levy(
+                    organisation_id=record.organisation_id,
+                    loan_id=account.loan_id,
+                    recognised_at=value_instant(levy_day),
+                    monthly_cents=monthly,
+                )
+                due_on = self.rate_fee_changes.fee_due_on(
+                    organisation_id=record.organisation_id,
+                    loan_id=account.loan_id,
+                    recognised_at=value_instant(levy_day),
+                    contractual_due_on=due_on,
+                )
             try:
                 self.ledger.levy_service_fee(
                     organisation_id=record.organisation_id,
                     loan_id=account.loan_id,
                     recognised_at=value_instant(levy_day),
-                    monthly_cents=monthly,
-                    due_on=first_due if opening else levy_day,
+                    monthly_cents=amount,
+                    due_on=due_on,
                     interest_cap_present=interest_cap_present,
                     vat_rate=vat_rate,
                     opening=opening,
                     first_due=first_due if opening else None,
                 )
-            except LedgerError as exc:
-                if exc.code != "service-fee-once":
+            except (LedgerError, RateFeeChangeError) as exc:
+                if getattr(exc, "code", "") != "service-fee-once":
                     raise _from_downstream(exc) from exc
             if month_cursor.month == 12:
                 month_cursor = date(month_cursor.year + 1, 1, 1)

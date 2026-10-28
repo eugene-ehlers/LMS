@@ -532,6 +532,25 @@ class Ledger:
             leftover -= take
         return taken + additional_taken
 
+    def contractual_periodic_rate(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+        repos: tuple[RepoRate, ...] = (),
+    ) -> Decimal:
+        """Periodic rate ``accrue_day`` would use. Does not post.
+
+        Day count and the interest base stay on the existing path. A caller
+        that passes this rate back as ``periodic_rate_override`` replaces only
+        the rate value.
+        """
+        account = self._loan(organisation_id, loan_id)
+        day = value_date(recognised_at)
+        rate, _weight, _divisor = self._rate_and_divisor(account, day, repos)
+        return rate
+
     def accrue_day(
         self,
         *,
@@ -541,6 +560,7 @@ class Ledger:
         interest_cap_present: bool,
         repos: tuple[RepoRate, ...] = (),
         repo_annual: Decimal | None = None,
+        periodic_rate_override: Decimal | None = None,
     ) -> Accrual:
         account = self._loan(organisation_id, loan_id)
         day = value_date(recognised_at)
@@ -562,6 +582,15 @@ class Ledger:
             )
         base, principal, hold = self._interest_base(account)
         rate, weight, divisor = self._rate_and_divisor(account, day, repos)
+        if periodic_rate_override is not None:
+            if periodic_rate_override < 0:
+                raise LedgerError("rate-negative", "A periodic rate cannot be negative.")
+            if periodic_rate_override > rate:
+                raise LedgerError(
+                    "rate-increase",
+                    "Section 104(1) prohibits a unilateral increase of the interest rate.",
+                )
+            rate = periodic_rate_override
         if classification in _ZERO_PRICE:
             day_rands = daily_interest_rands(0, Decimal(0), 1, weight=1)
             weight = 1
