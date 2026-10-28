@@ -2,7 +2,16 @@
 
 Orchestration contract for booking, disbursement, payments, and statements. The Calculation Engine and the Ledger are not implemented here. This note defines the calls servicing makes and the invariants it checks before it commits.
 
-`docs/LOCKED_DECISIONS.md` is the source of truth (last updated 2026-10-27). This note says how servicing carries those decisions. It does not add a rule. Gaps are in [implementation-checklist.md](implementation-checklist.md).
+`docs/LOCKED_DECISIONS.md` (28 October 2026) is the source of truth. The running orchestration is `src/lms/servicing/`. Stable routes, call sites, and open gaps are in [implementation-note.md](implementation-note.md).
+
+| Route | Locked sections |
+| --- | --- |
+| `POST /v1/agreements` | §1, §2, §5, §6, §10, §11, §13, §14, §15, §16, §17, §19 |
+| `POST /v1/agreements/{id}/disbursements` | §1, §2, §13, §16 |
+| `POST /v1/payments` and `POST /v1/payments/{id}/applications` | §1, §8 |
+| `POST /v1/payments/{id}/reversals` | §1 |
+| `POST /v1/organisations/{organisation_id}/clients/{person_id}/statements` | §5, §9, §12, §17 |
+| Morning check | §1, §6, §7 |
 
 Dates are civil dates in Africa/Johannesburg. Timestamps are UTC. Money is integer cents, currency `ZAR`.
 
@@ -515,6 +524,4 @@ sequenceDiagram
 
 ## 11. Open points
 
-Unsigned points are listed in [implementation-checklist.md](implementation-checklist.md). VAT treatment, the per-organisation subsequent-loan count, the provider's prepayment choice, the flag date, half-up billing, and the lay-by parent/child pair are locked. The in-duplum clip stays off. A lay-by hold is not booked as a cession that makes the loan secured.
-
-The statement sequence above is one document per client. The `{id}` in that diagram is the client statement run, and each loan section keeps its own opening and closing balance. The client key is unsigned.
+Unsigned points are in [implementation-note.md](implementation-note.md). The 28 October lock sets the statement to one document per client per credit-provider organisation (§12). Each loan section keeps its own opening and closing balance. The in-duplum clip stays off (§7). A lay-by hold is not booked as security (§4).

@@ -1,8 +1,29 @@
 # Primary servicing flows
 
-Design note for the post-origination LMS. Date of the sources checked: 26 October 2026 (Africa/Johannesburg). Aligned to `docs/LOCKED_DECISIONS.md` (last updated 2026-10-27) on 27 October 2026 (Africa/Johannesburg).
+Design note for the post-origination LMS. Date of the sources checked: 26 October 2026 (Africa/Johannesburg). The source of truth is `docs/LOCKED_DECISIONS.md`, last updated 28 October 2026. Where this note disagrees with that file, that file wins.
 
-That file is the source of truth. Where this note disagrees with it, that file wins. This note does not add a rule that file does not contain. Gaps are flagged and collected in [implementation-checklist.md](implementation-checklist.md).
+The orchestration that now runs these flows is `src/lms/servicing/`. What is stable, what it calls, and the gaps that are still open are in [implementation-note.md](implementation-note.md).
+
+| Behaviour | Locked section |
+| --- | --- |
+| Value date is the system recognition date, at 00:00. A reversal uses that same date. Same-day events keep recognition order. | §1 |
+| Capitalised initiation is principal. Otherwise it is a section 126 charge. Day-1 short-term and unsecured default to non-capitalised. | §2 |
+| A campaign stores base rate and discount. The discount stays through leniency, falls away on the flag date, and does not return. Zero rates and zero fees are valid. | §3 |
+| A linked lay-by is one loan with its parent. Interest uses principal minus the hold. One service fee, on the parent. | §4 |
+| Day count is actual/actual or 30/360. Accrual is daily. | §5 |
+| Default is the due date plus leniency. Unset leniency or threshold fails closed. | §6 |
+| In-duplum ceiling is per episode. The clip stays off. | §7 |
+| Allocate due interest, then the named fee order, then principal. Memo accruals are not allocated. | §8 |
+| Opening service fee uses inclusive days from disbursement through the day before first due, over the days in the disbursement month. Rand caps exclude VAT unless the provider elects inclusive. | §9 |
+| Interest on a deferred initiation fee defaults to none only when the provider has stored `none`. An unset value fails closed. | §10, §19 |
+| Repo-fall choice has no platform default. | §11, §19 |
+| One statement per client per credit-provider organisation. Each loan keeps its own opening and closing balance. | §12 |
+| Late disbursement and partial prepayment are provider choices. A subsequent short-term loan is counted per organisation and per calendar year. | §13, §19 |
+| Frequencies are weekly, fortnightly, monthly, quarterly, bi-annual, and annual. | §14 |
+| Enigma timeout, ambiguous status, or a suspended enrolment fails closed. Only opaque ids are stored. | §15 |
+| Name, identity number, and service address are frozen at booking. | §16 |
+| Billing rounds half-up. The disclosed annual equivalent is the periodic rate times the periods per year. | §17 |
+| A default-administration or collection charge needs a tariff row. | §18 |
 
 This note specifies how servicing books an activated agreement, takes payments, allocates them, and produces statements. It also specifies the calls servicing makes into the Calculation Engine and the Ledger. It does not design those two components. It states the contracts they must honour so that servicing can enforce the National Credit Act 34 of 2005 (NCA) without re-implementing them.
 
@@ -792,22 +813,6 @@ Origination, which this design consumes and does not build:
 
 ## 11. What remains unsigned
 
-Locked behaviour is in `docs/LOCKED_DECISIONS.md`. Points that were open in earlier drafts and are now locked include VAT (exclusive by default), subsequent short-term loans (per organisation), prepayment restructuring (provider choice), the default flag date (due date plus customer leniency), lay-by as one loan with the parent, one statement per client, half-up rounding on billing, and the in-duplum clip staying off.
+The 28 October 2026 lock closed the earlier open points on memo allocation (§8), fee-bucket order (§8), the opening-month numerator (§9), the calendar-year limb of a subsequent short-term loan (§13), the annual-equivalent formula (§17), Day-1 non-capitalisation (§2), and the statement key (§12: one statement per client per credit-provider organisation, with each loan's own balance chain).
 
-Still unsigned, and not given a servicing default:
-
-| Id | Gap |
-| --- | --- |
-| E2 | Whether section 126 takes interest and fees that are not yet debitable. The threshold test's exclusion of unbilled interest does not decide this |
-| E3 | Order among fee buckets that are all already due |
-| E5 | Initiation-fee cap base: cash advanced, or cash plus the fee |
-| G4 | Numerator of the opening-month service-fee fraction |
-| G7 | Calendar-year limb of "subsequent" beside the locked per-organisation count |
-| G3 | Which rate is the contractual ceiling on penalty interest when a campaign discount is in force |
-| G12 | Order of allocation across the loan and the linked lay-by |
-| G14 | Formula for the annual equivalent rate |
-| G15 | Unbilled rounding scale, and where the affordability figure used as a rounding ceiling is stored |
-| G16 | What "small residual" means, and whether a restructure is a new agreement |
-| Clip | The three section 103(5) edges are not named. No clip is implemented |
-| s 102 | Which products may capitalise an initiation fee |
-| Statement key | "One statement per client" does not say whether the client is scoped to one credit-provider organisation. Section 109 still needs a per-agreement opening and closing chain inside that document |
+Gaps that are still open are listed in [implementation-note.md](implementation-note.md). They are not given a servicing default. The in-duplum clip stays off (§7).
