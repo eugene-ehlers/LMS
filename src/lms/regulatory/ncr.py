@@ -47,6 +47,7 @@ def read_ncr_number(compliance: ComplianceStore, organisation_id: str) -> str | 
     if record is None:
         return None
     number = record.ncr_registration_number.strip()
+    # A test number of all zeros is a real value (decision 21). Only a blank is missing.
     if not number:
         return None
     return number
@@ -75,6 +76,11 @@ def require_ncr_for_extract(
                 "The extract does not assume the tenant is a credit provider.",
             )
         return read_ncr_number(compliance, organisation_id)
+    if not isinstance(pure_hosting, bool):
+        raise RegulatoryError(
+            "pure-hosting-unset",
+            "Decision 21: pure hosting must be true or false. The extract does not coerce it.",
+        )
 
     required = any(
         ncr_number_required(classification=code, pure_hosting=pure_hosting) for code in classifications
