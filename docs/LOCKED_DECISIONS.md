@@ -45,12 +45,15 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 ## 4. Laybye linked to a loan (parent/child)
 
 - Parent/child relationship required. Contracts must treat the pair as one loan (not as security that would make the loan secured).
-- Payments can be allocated across both the loan and the linked Laybye.
+- Once a loan is granted, the default allocation is: all payments go to the loan first (section 126 order). Any excess then goes to the Laybye account.
 - Interest is calculated on the net balance (loan principal minus Laybye hold). The hold reduces only the interest base; principal remains gross for in-duplum and settlement.
 - Only one monthly service fee (levied on the parent).
 - Client can consolidate or settle when Laybye ≥ settlement balance.
-- Credit life pays the loan first; Laybye covers any shortfall; surplus goes to the estate if treated as a cash deposit. If structured as insurance, treatment follows whether a beneficiary was named.
-- Funeral benefit is paid to the named beneficiary and leaves the loan and Laybye as they are.
+- Day-1 treatment is cash-deposit until the insurer develops an appropriate insurance product. If a mirror insurance product exists later, the Laybye is called by that product name. If no mirror exists, it is called a credit-improvement loan child.
+- Pre-disbursement receipts sit in the Laybye if a Laybye account exists. Accounting on the loan account is the same as any other account except it is cash in, not loan out.
+- A top-up of the loan is treated like any other loan top-up. The existence of a linked Laybye does not change the top-up treatment.
+- Credit life pays the loan first; Laybye covers any shortfall; surplus goes to the estate (cash-deposit treatment).
+- Funeral is an insurance product; the beneficiary sits with the insurer, not in the LMS.
 - Death may not apply the Laybye without a section 124 authority signed in life; otherwise the Laybye stays with the estate.
 - Structured as a deposit-insurance style arrangement (client pays for a period, then loan is disbursed). Not deposit-taking under the Banks Act for Day-1 purposes.
 - Credit life statements and accounts sit in the insurer’s domain. The LMS does not keep them.
