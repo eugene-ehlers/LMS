@@ -78,11 +78,21 @@ class ProductTerms:
     full_payment_threshold_percent: Decimal | None = None
     interest_on_deferred_initiation: str | None = None
     repo_rate_fall: str | None = None
+    vat_on_rand_maxima: str | None = None
+    late_disbursement: str | None = None
+    partial_prepayment: str | None = None
+    # Decision 2. Day-1 classifications may not capitalise initiation.
+    initiation_capitalised: bool = False
 
 
 def validate_terms(terms: ProductTerms) -> None:
     if not terms.instruments:
         raise CalculationInputError("a product needs at least one instrument")
+    if terms.initiation_capitalised:
+        raise CalculationInputError(
+            "decision 2: Day-1 classifications are not section 102 agreements, "
+            "so the initiation fee stays non-capitalised"
+        )
     if terms.classification == ZERO_COST:
         _reject_any_charge(terms, "a zero-cost product cannot carry a charge")
         return
@@ -147,16 +157,21 @@ def _validate_layby(terms: ProductTerms) -> None:
 
 def _validate_short_term(terms: ProductTerms) -> None:
     credit = _single(terms, "credit")
-    if credit.day_count not in PROVIDER_DAY_COUNTS:
+    if credit.day_count is not None and credit.day_count not in PROVIDER_DAY_COUNTS:
         raise CalculationInputError("short-term day count must be actual/actual or 30/360")
-    if credit.monthly_rate is None:
-        raise CalculationInputError("short-term terms need a contractual monthly rate")
-    _require_campaign(credit, credit.monthly_rate, "short-term")
-    if credit.base_rate > SHORT_TERM_FIRST_MONTHLY:
+    if credit.base_rate is None and credit.monthly_rate is None:
+        pass
+    elif credit.base_rate is None or credit.monthly_rate is None:
+        raise CalculationInputError(
+            "short-term base rate and contractual monthly rate must both be set, or both left unset to inherit"
+        )
+    else:
+        _require_campaign(credit, credit.monthly_rate, "short-term")
+    if credit.base_rate is not None and credit.base_rate > SHORT_TERM_FIRST_MONTHLY:
         raise CalculationInputError(
             "short-term base rate exceeds 5% per month; that base is charged when a campaign discount falls away"
         )
-    if credit.monthly_rate > SHORT_TERM_SUBSEQUENT_MONTHLY:
+    if credit.monthly_rate is not None and credit.monthly_rate > SHORT_TERM_SUBSEQUENT_MONTHLY:
         # Allowed only as the first-loan rate. The origination path must
         # still cap later loans at the subsequent rate. Recorded here so a
         # 5% product is visibly a first-loan rate.
@@ -173,9 +188,11 @@ def _validate_short_term(terms: ProductTerms) -> None:
 
 def _validate_unsecured(terms: ProductTerms) -> None:
     credit = _single(terms, "credit")
-    if credit.day_count not in PROVIDER_DAY_COUNTS:
+    if credit.day_count is not None and credit.day_count not in PROVIDER_DAY_COUNTS:
         raise CalculationInputError("unsecured day count must be actual/actual or 30/360")
-    if credit.repo_margin is not None:
+    if credit.base_rate is None and credit.repo_margin is None and credit.annual_rate is None:
+        pass
+    elif credit.repo_margin is not None:
         _require_campaign(credit, credit.repo_margin, "unsecured margin")
         if credit.base_rate > UNSECURED_REPO_MARGIN:
             raise CalculationInputError(
@@ -184,7 +201,7 @@ def _validate_unsecured(terms: ProductTerms) -> None:
     elif credit.annual_rate is not None:
         _require_campaign(credit, credit.annual_rate, "unsecured")
     else:
-        raise CalculationInputError("unsecured terms need a fixed annual rate or a repo margin")
+        raise CalculationInputError("unsecured terms need a fixed annual rate or a repo margin, or both left unset to inherit")
     if terms.max_principal_cents is None or terms.max_principal_cents >= 25_000_000:
         raise CalculationInputError(
             "Day-1 unsecured products stay below R250 000 so the unsettled "

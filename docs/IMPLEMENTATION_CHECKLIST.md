@@ -1,8 +1,10 @@
 # Implementation checklist
 
-Documentation only. This file does not change `docs/LOCKED_DECISIONS.md` and it does not add a rule. Production code was not changed when this checklist was written.
+The 28 October lock closed several items this file left open. `docs/IMPLEMENTATION_NOTE.md` is the current storage note. Where this checklist disagrees with `docs/LOCKED_DECISIONS.md`, the lock wins. Opening-month days are the date subtraction in decision 9. Subsequent short-term loans restart each calendar year (decision 13). VAT, late disbursement, partial prepayment, initiation interest, and the repo-rate fall are organisation elections with a product override (decision 19). The lay-by hold reduces only the interest base (decision 4). The annual equivalent is periodic rate times periods per year (decision 17).
 
-Read `docs/LOCKED_DECISIONS.md` first (last updated 2026-10-27). Then this list. Then `docs/lms-owned-configuration.md`. Where they differ, the locked decisions win.
+This file does not change `docs/LOCKED_DECISIONS.md` and it does not add a rule. The storage that followed is `db/migrations/0003_elections.sql` and `docs/IMPLEMENTATION_NOTE.md`.
+
+Read `docs/LOCKED_DECISIONS.md` first. Then the implementation note. Then this list. Where they differ, the locked decisions win.
 
 A block marked **DRAFT** is a Layer 1 sketch. It is not an approved signature, not a schema change, and not a locked decision.
 

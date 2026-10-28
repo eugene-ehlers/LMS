@@ -105,15 +105,13 @@ def opening_service_fee_cents(
     *,
     monthly_cap_cents: int = SERVICE_FEE_MONTHLY_CENTS,
 ) -> int:
-    """Locked decision 9. Pro-rata only from disbursement to the first due date.
+    """Decision 9. Pro-rata only in the opening month.
 
-    The decision names that period and does not name the fraction's
-    denominator. This uses the actual number of days in the calendar month
-    of the disbursement value date, then clamps the result to one monthly
-    fee and to the monthly cap. A first due date more than a month after
-    disbursement therefore does not charge more than one monthly fee.
-    Every later month, including the settlement month, uses
-    ``subsequent_service_fee_cents``.
+    The locked fraction is the inclusive calendar days from the disbursement
+    date to the day before the first due date, divided by the actual days
+    in the disbursement month. Date subtraction is that count. The result
+    is clamped to one monthly fee. Later months, including the settlement
+    month, use ``subsequent_service_fee_cents``.
     """
     require_non_negative_cents(monthly_cents, "service fee")
     if monthly_cents > monthly_cap_cents:

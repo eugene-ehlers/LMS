@@ -41,17 +41,14 @@ ENGINE_READ_STEPS: tuple[str, ...] = (
     "service_fee_cap",
     "reference_rate",
     "interpretation",
-    "vat_vendor",
+    "vat_election",
+    "tariff_amount",
     "post_and_audit",
 )
 
 # Not created in this migration. The servicing module owns the agreement.
-# The count includes agreements that reached disbursement. A quote, a
-# rescission before advance, and a cancellation before advance do not count.
-# The gazette does not say whether a later calendar year resets the count;
-# this query is the adopted reading (first loan ever with this
-# organisation). The calendar-year reading replaces the predicate with
-# ``originated_on >= date_trunc('year', :business_date)``.
+# Decision 13: subsequent is counted per credit-provider organisation and
+# per calendar year. A quote that never disburses does not count.
 SHORT_TERM_ORDINAL_SQL = """
 SELECT count(*) + 1 AS ordinal
 FROM servicing.agreement
@@ -59,6 +56,7 @@ WHERE organisation_id = :organisation_id
   AND enigma_person_id = :enigma_person_id
   AND regulatory_classification = 'short_term'
   AND disbursed_on IS NOT NULL
+  AND disbursed_on >= date_trunc('year', :business_date::timestamp)::date
   AND disbursed_on < :business_date
 """
 
@@ -91,9 +89,10 @@ ORDER BY effective_from DESC
 LIMIT 1
 """
 
-# Product null inherits the organisation. A null result is not a number:
-# leniency and the threshold fail closed, and repo_rate_fall fails closed
-# when a later accrual has to apply locked decision 11.
+# Decision 19. A product null inherits the organisation. Campaign base and
+# discount inherit as a pair, so a product discount of zero is not read
+# when the product base is null. A null result fails closed in
+# ``resolve_customer_settings``. This statement does not substitute a value.
 CUSTOMER_SETTINGS_SQL = """
 SELECT
   COALESCE(terms.leniency_days, settings.leniency_days) AS leniency_days,
@@ -106,8 +105,12 @@ SELECT
     settings.interest_on_deferred_initiation
   ) AS interest_on_deferred_initiation,
   COALESCE(terms.repo_rate_fall, settings.repo_rate_fall) AS repo_rate_fall,
-  terms.base_rate,
-  terms.discount_rate
+  COALESCE(terms.day_count_code, settings.day_count_code) AS day_count_code,
+  CASE WHEN terms.base_rate IS NULL THEN settings.base_rate ELSE terms.base_rate END AS base_rate,
+  CASE WHEN terms.base_rate IS NULL THEN settings.discount_rate ELSE terms.discount_rate END AS discount_rate,
+  COALESCE(terms.vat_on_rand_maxima, settings.vat_on_rand_maxima) AS vat_on_rand_maxima,
+  COALESCE(terms.late_disbursement, settings.late_disbursement) AS late_disbursement,
+  COALESCE(terms.partial_prepayment, settings.partial_prepayment) AS partial_prepayment
 FROM lms.cfg_product_terms AS terms
 JOIN lms.cfg_product AS product ON product.id = terms.product_id
 JOIN lms.cfg_organisation_settings AS settings
@@ -116,6 +119,37 @@ WHERE terms.id = :terms_version_id
   AND terms.status = 'published'
   AND product.organisation_id = :organisation_id
 """
+
+TARIFF_SQL = """
+SELECT amount_cents
+FROM lms.ref_tariff_amount
+WHERE code = :code
+  AND effective_from <= :business_date
+ORDER BY effective_from DESC
+LIMIT 1
+"""
+
+
+def require_reference_for_posting(
+    *,
+    interest_cap_present: bool,
+    repo_annual: Decimal | None,
+    repo_required: bool,
+    tariff_cents: int | None,
+    tariff_required: bool,
+) -> None:
+    """Decisions 11 and 18, and the cap tables. A missing row fails the posting.
+
+    An interest posting sets ``repo_required`` when the cap or the contract
+    is repo-linked. A default-administration or collection posting sets
+    ``tariff_required``. An empty tariff table is the Day-1 seed on purpose.
+    """
+    if not interest_cap_present:
+        raise CalculationInputError("no interest cap covers the value date")
+    if repo_required and repo_annual is None:
+        raise CalculationInputError("no confirmed repo rate covers the value date")
+    if tariff_required and tariff_cents is None:
+        raise CalculationInputError("no tariff row covers the value date")
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +197,7 @@ def resolve_charge(
     on: date,
     *,
     in_default: bool = False,
+    discount_fallen_away: bool = False,
 ) -> ResolvedCharge:
     """The rate used to accrue on ``on``.
 
@@ -189,18 +224,37 @@ def resolve_charge(
         if pin.short_term_ordinal is None:
             raise CalculationInputError("short-term agreement is missing its ordinal")
         statutory = cap_monthly_rate(cap, pin.short_term_ordinal)
-        agreed = _component(pin, pin.contractual_monthly_rate, in_default=in_default)
+        agreed = _component(
+            pin,
+            pin.contractual_monthly_rate,
+            in_default=in_default,
+            discount_fallen_away=discount_fallen_away,
+        )
         _guard_origination(pin, pin.contractual_monthly_rate, statutory, on)
         rate = chargeable_rate(agreed, statutory)
         return ResolvedCharge(rate, "month", agreed, statutory, rate < agreed)
     if repo_annual is None:
         raise CalculationInputError("annual cap requires a confirmed repo rate on the accrual date")
     if pin.contractual_repo_margin is not None:
-        agreed = repo_annual + _component(pin, pin.contractual_repo_margin, in_default=in_default)
-        penalty = repo_annual + _component(pin, pin.contractual_repo_margin, in_default=True)
+        agreed = repo_annual + _component(
+            pin,
+            pin.contractual_repo_margin,
+            in_default=in_default,
+            discount_fallen_away=discount_fallen_away,
+        )
+        penalty = repo_annual + _component(
+            pin, pin.contractual_repo_margin, in_default=True, discount_fallen_away=True
+        )
     elif pin.contractual_annual_rate is not None:
-        agreed = _component(pin, pin.contractual_annual_rate, in_default=in_default)
-        penalty = _component(pin, pin.contractual_annual_rate, in_default=True)
+        agreed = _component(
+            pin,
+            pin.contractual_annual_rate,
+            in_default=in_default,
+            discount_fallen_away=discount_fallen_away,
+        )
+        penalty = _component(
+            pin, pin.contractual_annual_rate, in_default=True, discount_fallen_away=True
+        )
     else:
         raise CalculationInputError("agreement has no contractual rate")
     statutory = cap_annual_rate(cap, repo_annual)
@@ -211,7 +265,13 @@ def resolve_charge(
     return _annual_after_origination(pin, agreed, statutory, on)
 
 
-def _component(pin: AgreementPin, contractual: Decimal | None, *, in_default: bool) -> Decimal:
+def _component(
+    pin: AgreementPin,
+    contractual: Decimal | None,
+    *,
+    in_default: bool,
+    discount_fallen_away: bool = False,
+) -> Decimal:
     if pin.base_rate is None:
         if pin.discount_rate != 0:
             raise CalculationInputError("a campaign discount requires a base rate")
@@ -223,7 +283,12 @@ def _component(pin: AgreementPin, contractual: Decimal | None, *, in_default: bo
         raise CalculationInputError(
             "pinned contractual rate must equal base rate minus campaign discount"
         )
-    return campaign_rate(pin.base_rate, pin.discount_rate, in_default=in_default)
+    return campaign_rate(
+        pin.base_rate,
+        pin.discount_rate,
+        in_default=in_default,
+        discount_fallen_away=discount_fallen_away,
+    )
 
 
 def _guard_origination(
@@ -240,7 +305,7 @@ def _guard_origination(
     """
     if on != pin.originated_on:
         return
-    penalty = _component(pin, contractual, in_default=True)
+    penalty = _component(pin, contractual, in_default=True, discount_fallen_away=True)
     if penalty > statutory:
         raise CalculationInputError(
             "base rate exceeds the statutory maximum on the origination date"

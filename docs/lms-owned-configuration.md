@@ -38,10 +38,14 @@ The servicing agreement table is not in this migration. Origination writes a pin
 | Contractual rate as base rate minus campaign discount | The terms. The performing rate is base minus discount, and may be zero. The discount stays through the leniency window. It falls away on the default flag date. It does not return if the account is later cured. The rate is then the base. Penalty interest is that rate, so it does not exceed the contract | The base and the discount are pinned. A later campaign does not reprice this agreement |
 | `leniency_days`, `full_payment_threshold_percent` | Organisation, unless the product overrides it. Copied onto the agreement. Null at either resolved value fails closed. Leniency counts calendar days, including weekends and public holidays. The examples 4, 5, and 95 are not defaults | No |
 | Threshold instalment | For the due date being tested: the original principal slice, plus levied charges that share that due date (monthly service fee, non-capitalised initiation fee, and credit life). Unbilled interest is excluded until it is debited. The amount received is the amount received for that due date | No |
-| `interest_on_deferred_initiation` | Organisation, product override. Locked default is `none` | No |
-| `repo_rate_fall` | Organisation, product override. No platform default. Null fails closed | No |
-| `day_count` | The terms. Decision 5: `actual_actual` (recommended for a new product) or `thirty_360`. A 360-day year is not required for a Day-1 product. Both conventions stay available | No |
-| `short_term_ordinal` | Decision 13: a subsequent short-term loan is counted per credit-provider organisation. The lock does not say whether a new calendar year starts the count again | The organisation scope does not change. The calendar-year question is not locked |
+| `interest_on_deferred_initiation` | Organisation, optional product override. Decision 10 names `none` as the substantive default. Decision 19 says an unset value fails closed, so the column is nullable and the provider stores `none` or `permitted`. Null is not filled in | No |
+| `repo_rate_fall` | Organisation, optional product override. Decision 11 and decision 19. `contract_rate` or `lower_of_contract_and_cap`. Null fails closed | No |
+| `day_count` | Organisation, optional product override. Decision 5: `actual_actual` (recommended for a new product) or `thirty_360`. A credit product with neither set fails closed. A 360-day year is not required for a Day-1 product. Both conventions stay available | No |
+| `vat_on_rand_maxima` | Organisation, optional product override. Decision 9 and decision 19. `exclusive` or `inclusive`. Null fails closed. Storing `exclusive` is how the provider takes the decision 9 treatment of R60, R165, and R1 050 | No |
+| `late_disbursement` | Organisation, optional product override. Decision 13 and decision 19. `adjust_instalment` or `keep_instalment`. Null fails closed | No |
+| `partial_prepayment` | Organisation, optional product override. Decision 13 and decision 19. `shorten_term` or `drop_instalment`. Null fails closed. The preference to keep the contractual instalment is not a silent default | No |
+| Campaign `base_rate` and `discount_rate` | Organisation pair, optional product pair. Decision 3. The pair inherits together. A product discount of zero is not read while the product base is null. Zero is a valid effective rate | The resolved pair is pinned. A later campaign does not reprice this agreement |
+| `short_term_ordinal` | Decision 13: a subsequent short-term loan is counted per credit-provider organisation and per calendar year. A quote that does not disburse does not count | The count restarts in January. The organisation scope does not change |
 | `ncr_registration_number` | Enigma, copied at origination. This copy is a design fact. It is not one of the three fields decision 16 freezes | No |
 
 The statutory ceiling is not pinned. On each accrual date the engine reads the cap in force that day. A short-term monthly cap is applied on every accrual, because it is the cap for that loan's ordinal. For a repo-linked rate, locked decision 11 is a provider choice stored as `repo_rate_fall`: `contract_rate` keeps the contract rate when the repo falls, and `lower_of_contract_and_cap` accrues at the lower figure and the section 104 notice is issued. Null fails closed. Section 104 still forbids a unilateral increase, so a later rise in the cap does not raise a fixed contract. A rate above the cap on the origination date is refused, including a campaign base that would apply only after the discount falls away.
@@ -50,7 +54,7 @@ Sub-ledgers the future ledger has to keep, because section 126 and section 103(5
 
 `principal`, `interest`, `initiation_fee`, `service_fee`, `default_admin`, `collection`, `credit_insurance`, `deposit`, `layby_penalty`, `early_termination`.
 
-The interest base for the next day is the outstanding balance decision 6 names, minus a linked lay-by hold, and minus a deferred initiation fee unless the provider chose to charge interest on it. Decision 4 calculates interest on loan principal minus the lay-by hold, and treats that net figure as evidence that the hold is a payment against the loan rather than a separate savings product. It does not, by itself, say the hold is posted through section 126. A capitalised initiation fee is part of `principal` (decisions 2 and 7), including inside the in-duplum ceiling when it was capitalised before the default date. The same capitalised-versus-due-fee logic applies to related fee points. The lock does not name those related points. Post-default interest and fees stay in their own sub-ledgers even when a statement shows them as capitalised. Charges that cause the default do not count toward the in-duplum cap. Only charges that accrue during the default episode do.
+The interest base for the next day is the outstanding balance decision 6 names, minus a linked lay-by hold, and minus a deferred initiation fee unless the provider stored `permitted`. Decision 4 says the hold reduces only the interest base. Principal stays gross for in duplum and for settlement. The lock does not say the hold is posted through section 126. A capitalised initiation fee is part of `principal` (decisions 2 and 7), including inside the in-duplum ceiling when it was capitalised before the default date. Day-1 short-term and unsecured stay non-capitalised (decision 2). `initiation_capitalised` defaults to false and publish rejects true for the Day-1 classifications. The same capitalised-versus-due-fee logic applies to related fee points. The lock does not name those related points. Post-default interest and fees stay in their own sub-ledgers even when a statement shows them as capitalised. Charges that cause the default do not count toward the in-duplum cap. Only charges that accrue during the default episode do.
 
 ## How the engine reads configuration
 
@@ -63,8 +67,9 @@ One `REPEATABLE READ` transaction. No call to Enigma. If a required row is missi
 5. **`ref_initiation_fee_cap`**, **`ref_service_fee_cap`**, **`ref_charge_rule`**, **`ref_threshold`** the same way, when the posting is a fee, a size test, or a short-term limit.
 6. **`ref_reference_rate`** code `SARB_REPO`, `confidence = 'confirmed'`, covering that date. A variable rate, and any `RR + margin` cap, fails closed without it.
 7. **`ref_interpretation_set`** with status `adopted` covering that date, and its choices. The set id is written on the audit row.
-8. **`cfg_organisation_settings.vat_vendor`** for that organisation. Decision 9 also needs the provider's VAT election (exclusive by default, or inclusive). That election is not a column yet. The lock does not say where it is stored.
-9. **Post the ledger and the audit rows in the same transaction.** If the audit insert fails, the ledger rolls back.
+8. **Resolved elections** from `cfg_organisation_settings` with the product override: leniency, threshold, campaign pair, day count, `vat_vendor`, and the decision 19 elections (`vat_on_rand_maxima`, `late_disbursement`, `partial_prepayment`, `interest_on_deferred_initiation`, `repo_rate_fall`). Unset fails closed. This read does not call Enigma. Decision 15's fail-closed rule for a timeout, an ambiguous status, or a suspended enrolment is the boundary of that call, which this repository does not make.
+9. **`ref_tariff_amount`** when the posting is default administration or collection. A missing row fails that posting (decision 18). An interest accrual does not require a tariff row.
+10. **Post the ledger and the audit rows in the same transaction.** If the audit insert fails, the ledger rolls back. The seal assigns `recognition_sequence` (decision 1).
 
 Business dates are `Africa/Johannesburg`. `2026-10-31 22:30 UTC` is `2026-11-01` in Johannesburg. Day-1 organisation settings reject any other zone, so a tenant cannot move a due date across a cap change by picking a timezone. South Africa does not observe daylight saving; the zone is still named rather than hard-coded as UTC+2.
 
@@ -165,7 +170,7 @@ A gazette sweep from 2016 through October 2026 was not completed for every thres
 
 Every configuration row carries `organisation_id` except the child rows of a product, which inherit it through `cfg_product`.
 
-`cfg_organisation_settings` is one row per organisation: Johannesburg timezone, ZAR, locale, and `vat_vendor`. It also stores `leniency_days`, `full_payment_threshold_percent`, `interest_on_deferred_initiation` (default `none`), and `repo_rate_fall` (null until the provider chooses). No legal name, no NCR number. "Customer" in locked decision 6 is this organisation. A product column of the same name overrides it. Null does not mean zero days or 100 percent.
+`cfg_organisation_settings` is one row per organisation: Johannesburg timezone, ZAR, locale, and `vat_vendor`. It also stores the elections in the table above. No legal name, no NCR number. "Customer" in locked decision 6 is this organisation. A product column of the same name overrides it. Null does not mean zero days, 100 percent, `none`, or `exclusive`.
 
 `cfg_brand` is display name, support contacts, logo key, statement footer. Presentation only.
 
@@ -173,7 +178,7 @@ Every configuration row carries `organisation_id` except the child rows of a pro
 
 `cfg_product` is the stable id. `enigma_enrolment_code` is the code Enigma uses. The row does not grant enrolment.
 
-`cfg_product_terms` is the priced version. `rate_kind` is `zero`, `fixed_monthly`, `fixed_annual`, or `variable_rr_plus`, and the check constraint allows only the matching rate column. A credit rate is stored as `base_rate` minus `discount_rate`, and the effective column must equal that difference, including zero. `intraday` is `start_of_day` (locked decision 1). `prorate_settlement_service_fee` cannot be true (locked decision 9). The same row may override the organisation's leniency, full-payment threshold, initiation-interest choice, and repo-fall choice.
+`cfg_product_terms` is the priced version. `rate_kind` is `zero`, `fixed_monthly`, `fixed_annual`, or `variable_rr_plus`. A null rate column on a fixed kind means the product inherits the organisation campaign. When the product sets a base, the effective column must equal base minus discount, including zero (decision 3). `day_count_code` null inherits the organisation (decision 5). `intraday` is `start_of_day` (decision 1). `prorate_settlement_service_fee` cannot be true (decision 9). The same row may override every decision 19 election, plus leniency and the threshold (decision 6). `payment_frequency` is one of the decision 14 codes, or null. The lock does not say a null frequency fails closed. `initiation_capitalised` is false for Day-1 (decision 2).
 
 `cfg_fee_rule.charge` is `zero`, `fixed`, `statutory_formula`, or `tariff`. Initiation is published as `statutory_formula` so the engine caps each agreement. A fixed initiation amount is rejected at publish, because an amount that is lawful on R8 000 can break the 15 percent limb on a smaller loan. `tariff` is how default administration and collection are represented, and it still cannot post without `ref_tariff_amount`.
 
@@ -243,28 +248,24 @@ Locked by `docs/LOCKED_DECISIONS.md` and reflected in this note:
 - One default test for in duplum and for collections. Leniency is calendar days. Unset leniency or threshold fails closed. The threshold instalment is defined in decision 6.
 - In duplum is an episode ceiling, not a lifetime ceiling. A cure closes the episode. The next default takes a new ceiling. Three unnamed section 103(5) edges stay unsigned and the clip stays off until counsel confirms (decision 7).
 - Section 126 order is interest, then fees or charges, then principal (decision 8).
-- Service-fee pro-rata is the opening month only. The locked fraction is inclusive days in the month over actual days in that month. Later months, including settlement, are the full monthly fee, subject to the R60 cap. The named rand maxima are excluding VAT unless the provider elects inclusive (decision 9).
-- Interest on a deferred initiation fee defaults to none. The alternative is stored per organisation or product (decision 10).
-- A fall in the repo rate is option A or option B, stored per organisation or product, with no platform default (decision 11).
-- One statement per client shows all of that client's loans (decision 12).
-- External decision engines must be acceptable. Quote-date versus disbursement date has two options. A partial prepayment has two options. Extra costs are a further monthly fee, not capitalised into the schedule. Restructuring can set a new instalment, price, and term. Subsequent short-term loans are counted per organisation (decision 13).
+- Service-fee pro-rata is the opening month only. The fraction is the days from the disbursement date to the day before the first due date, over the actual days in the disbursement month. Later months, including settlement, are the full monthly fee, subject to the R60 cap. The named rand maxima are excluding VAT unless the provider stores `inclusive` (decision 9, decision 19).
+- Interest on a deferred initiation fee is `none` or `permitted`, stored per organisation with a product override. Unset fails closed (decision 10, decision 19).
+- A fall in the repo rate is `contract_rate` or `lower_of_contract_and_cap`, stored the same way. Unset fails closed (decision 11, decision 19).
+- One statement per client per credit-provider organisation shows all of that client's loans with that organisation. Each loan keeps its own opening and closing balance (decision 12).
+- External decision engines must be acceptable. Late disbursement and partial prepayment are stored elections (decision 13, decision 19). Extra costs are a further monthly fee, not capitalised into the schedule. Restructuring can set a new instalment, price, and term. Subsequent short-term loans are counted per organisation and per calendar year (decision 13).
 - Frequencies are weekly, fortnightly, monthly, quarterly, bi-annual, and annual (decision 14).
-- Enigma owns identity. The LMS stores opaque ids and fails closed on timeout or an ambiguous status (decision 15).
+- Enigma owns identity. The LMS stores opaque ids and fails closed on timeout, an ambiguous status, or a suspended enrolment (decision 15).
 - Name, ID number, and service address freeze at booking (decision 16).
-- Billing rounds half-up to the cent, everywhere rounding is required, and must not create a compliance breach (decision 17).
+- Billing rounds half-up to the cent, everywhere rounding is required, and must not create a compliance breach. The disclosed annual equivalent is the periodic rate times the number of periods in the year, a simple nominal, and both rates are disclosed (decision 17).
 - Tariff amounts fail closed until a row exists. Allowable extra costs are preferred as an additional monthly fee (decision 18).
+- VAT, late disbursement, partial prepayment, interest on deferred initiation, and the repo-rate fall are organisation elections with an optional product override. Unset fails closed (decision 19).
 
 Still not settled by the lock, so this note does not choose them:
 
 - The early-termination base for a large agreement. Day-1 unsecured products stay below R250 000 so the charge is not reached.
 - Which three section 103(5) edges are unsigned, and whether "the clip stays off" suspends only those edges or the episode ceiling stated in the same section.
-- The integer for "inclusive days in the month" when disbursement and the first due date fall in different months.
-- Whether "within a calendar year" in Table A still restarts the subsequent-loan count. Decision 13 locks the organisation and does not mention the year.
-- Where the provider's VAT election, quote-versus-disbursement choice, and partial-prepayment choice are stored. Decisions 10 and 11 name organisation or product. These do not.
-- The annual-equivalent-rate formula required by decision 17.
-- Whether a late system recognition keeps the calendar day the consumer concluded, or moves the value date to the recognition day. Decision 1 states both "system recognition date" and "the calendar day" of conclusion.
-- Whether the lay-by hold is itself a section 126 payment, or only the interest base. Decision 4 calls the net balance evidence of a payment and, separately, allows payments to be allocated across the loan and the lay-by.
-- Which balance is compared when the lay-by is at least the settlement balance, if the hold is already treated as a payment.
+- Whether a late system recognition keeps the calendar day the consumer concluded, or moves the value date to the recognition day. Decision 1 states both "system recognition date" and "the calendar day" of conclusion. This repository uses the Johannesburg calendar date of the recognised instant. It does not invent backdating.
+- Which balance is compared when the lay-by is at least the settlement balance. Decision 4 says principal stays gross. It does not say whether "settlement balance" is already net of the hold.
 - Which credit-life branch applies on Day-1. The lock gives a cash-deposit branch and an insurance branch, and also says the Day-1 arrangement is deposit-insurance style.
 - The shape of a service address, the weekday a weekly instalment uses, and whether a restructure is a new agreement or an amendment of the frozen one.
 
@@ -288,7 +289,7 @@ Day-1 charges the cash-base column. On every amount tested it is less than or eq
 
 ### VAT
 
-Decision 9: the rand maxima R60, R165, and R1 050 are excluding VAT by default. The provider may elect inclusive. The lock cites an NCR note of January 2019. It names those three maxima. It does not say that every other gazetted rand amount follows them, and it does not say whether the election is stored on the organisation, the product, or the agreement.
+Decision 9: the rand maxima R60, R165, and R1 050 are excluding VAT by default. The provider may elect inclusive. Decision 19 stores that election on the organisation, with an optional product override, and an unset value fails closed. The column is nullable. Storing `exclusive` is the provider's act of taking the decision 9 treatment. The lock names those three maxima. It does not say that every other gazetted rand amount follows them.
 
 On a R265 initiation fee the two elections differ by **R39.75** (R304.75 against R265.00). On the R786.36 capitalised short-term fee the gap is **R117.95**. Adding that VAT to a loan already at the R8 000 deferred-amount line pushes it through the line. That interaction is a consequence of the exclusive default. It is not a new cap.
 
@@ -296,9 +297,9 @@ The earlier reading, that the gazetted figure is already the most the consumer p
 
 ### Subsequent short-term loan
 
-Table A says "5% per month on the first loan and 3% per month on subsequent loans within a calendar year". Decision 13 says a subsequent loan is counted per credit-provider organisation. It does not say whether the count restarts in January.
+Table A says "5% per month on the first loan and 3% per month on subsequent loans within a calendar year". Decision 13 counts a subsequent loan per credit-provider organisation and per calendar year. January can be a first loan again. A quote that never disburses does not count.
 
-On a R1 000 balance the two rates are **R50** and **R30** for a month. The code currently counts every later disbursed short-term loan with the same organisation, in any year. That matches the organisation scope. It is not, by itself, a locked answer to the calendar-year words in Table A. A quote that never paid out does not move the ordinal. The contractual rate on a first loan may still be 5 percent. The 3 percent cap is the subsequent-loan cap once the ordinal is subsequent.
+On a R1 000 balance the two rates are **R50** and **R30** for a month. The contractual rate on a first loan in that year may still be 5 percent. The 3 percent cap is the subsequent-loan cap once the ordinal is subsequent. The ordinal query filters disbursements in the calendar year of the business date, for the same organisation and person.
 
 ### In duplum
 
@@ -343,7 +344,7 @@ A R500 payment. Payable interest R80. Service fee R60 payable on 1 March. Defaul
 
 Principal left is R680. Holding R320 as a suspense credit for the next instalment is the alternative, and it is not what section 126(3)(c) says. The receipt has to show the split, because the consumer may have meant to cover the next instalment and will otherwise fall due again.
 
-Two fees payable the same day share a short payment in proportion. R45 against a R60 fee and a R30 fee the same day is R30 and R15. The total applied to fees does not change; only which fee is cleared does. Where the cents do not divide, the largest remainder gets the extra cent, and the fee code breaks a tie.
+Decision 8 now orders fee buckets that are already due: collection costs, default administration, credit insurance, service fee, initiation fee, and within a bucket the earliest due date first. The allocation function in this repository still shares a short payment on the same day in proportion, oldest date first. That function is unchanged in this pass. It does not yet follow the bucket order. R45 against a R60 fee and a R30 fee the same day is still R30 and R15 in that function.
 
 ### Day count
 
@@ -364,7 +365,7 @@ Unsecured, R10 000, 28.25 percent, divisor 365, 31 days: **R239.93**.
 
 Decision 9. Pro-rata only in the opening month, described as disbursement to the first payment due. The fraction is inclusive days in the month divided by the actual days in that month. Every later month, including the settlement month, is the full monthly fee, subject to the R60 cap. A product cannot prorate the settlement month. The R60 cap is excluding VAT unless the provider elects inclusive.
 
-The lock states that fraction and does not define the inclusive-day count when the first due date is in a later month. The code's current function uses the number of days from the disbursement date until the first due date, over the length of the disbursement month. For 20 March 2026 to 3 April 2026 that is 14/31, which floors to R27.09. That integer is what the code does. It is not the locked charge. The checklist shows the other integers the same words can produce. None of them is selected here.
+Decision 9 defines that count as the inclusive calendar days from the disbursement date to the day before the first due date. Date subtraction is that count. For 20 March 2026 to 3 April 2026 it is 14/31. The function floors that to R27.09. Decision 17's half-up rule, applied to the unrounded 2709.68 cents, is a separate question: half-up must not create a compliance breach, and this note does not choose which sentence wins for a statutory cap.
 
 A settlement in a later month is the full contractual monthly fee, still subject to the cap.
 
@@ -392,7 +393,7 @@ A lay-by linked to a loan is not this CPA goods lay-by. Decision 4:
 
 - The pair is parent and child, and the contracts treat it as one loan. It is not security that would make the loan a secured loan.
 - Payments can be allocated across the loan and the linked lay-by.
-- Interest is calculated on loan principal minus the lay-by hold. The lock calls that net balance evidence that the hold is a payment against the loan rather than a separate savings product.
+- Interest is calculated on loan principal minus the lay-by hold. The hold reduces only the interest base. Principal remains gross for in duplum and for settlement (decision 4).
 - One monthly service fee, levied on the parent.
 - The client can consolidate or settle when the lay-by is at least the settlement balance.
 - Credit life pays the loan first. The lay-by covers any shortfall. Surplus goes to the estate if the lay-by is treated as a cash deposit. If it is structured as insurance, treatment follows whether a beneficiary was named.
@@ -408,14 +409,14 @@ Section 8 generally requires a fee, charge, or interest before an arrangement is
 
 ## Statements, instalments, and extra fees
 
-Decision 12: one statement per client, showing all of that client's loans. Not one statement per loan. The lock does not say whether "all loans" crosses organisation boundaries. Tenant isolation today is one organisation per request.
+Decision 12: one statement per client per credit-provider organisation, showing all of that client's loans with that organisation. Each loan keeps its own opening and closing balance. The statement does not cross organisations.
 
 Decision 13, when disbursement is later than the quote date, both of these must be possible:
 
 - adjust the instalment from the actual disbursement date and the remaining term
 - keep the original instalment, and either settle early or write off a small residual at the contractual end. The write-off is not required if the account is already in default
 
-After a partial prepayment the provider chooses whether to shorten the term or drop the instalment. Decisions 6 and 13 also prefer keeping the contractual instalment the same during the term. The preference and the choice are both in the lock. The lock does not say where either choice is stored.
+After a partial prepayment the provider chooses `shorten_term` or `drop_instalment`. Decision 19 stores that choice on the organisation, with a product override. Unset fails closed. The preference to keep the contractual instalment is not written in as a default. Late disbursement is `adjust_instalment` or `keep_instalment`, stored the same way.
 
 Fees other than interest, initiation, the monthly service fee, and credit life are added as a further monthly fee, fixed or variable. They are not capitalised into the amortisation schedule. Collection costs are the example. Decision 18 says the same preference for allowable extra costs, and the posting still fails closed until a tariff row exists.
 
@@ -425,15 +426,15 @@ Decision 14 requires weekly, fortnightly, monthly, quarterly, bi-annual, and ann
 
 Credit life is part of the loan instalment for affordability, and it is one of the levied charges in the default-threshold instalment when it shares that due date. The lock does not restate an affordability formula.
 
-Decision 17 requires the annual equivalent rate to be disclosed with the half-up billing rounding. The formula is not in the lock.
+Decision 17 discloses the periodic rate and the nominal annual rate. The nominal annual rate is the periodic rate times the number of periods in the year. `nominal_annual_rate` takes that integer from the caller. The lock does not say whether weekly means 52 or 365/7.
 
 ## Failure closed
 
 The posting does not proceed when:
 
 - the cap row, the confirmed repo rate, or the adopted interpretation set does not cover the business date
-- leniency or the full-payment threshold is unset
-- `repo_rate_fall` is unset on a repo-linked accrual after origination
+- leniency, the full-payment threshold, the campaign pair on a credit product, day count on a credit product, or any decision 19 election is unset
+- `repo_rate_fall` is unset, including on a monthly short-term product, because decision 19 lists it
 - the contractual rate, including a campaign base that would apply once a discount falls away, is above the statutory maximum on the origination date
 - default administration or collection costs are posted with no tariff row (decision 18)
 - a short-term deferred amount would exceed R8 000, or the term would exceed 6 months

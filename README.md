@@ -10,7 +10,9 @@ Post-origination loan management for a South African white-label LMaaS. Enigma o
 | --- | --- |
 | `db/migrations/0001_lms_owned.sql` | Aurora PostgreSQL schema. Apply as the migration role, with `TimeZone=UTC` |
 | `db/migrations/0002_locked_decisions.sql` | Leniency, full-payment threshold, campaign base and discount, and the other stored choices in the locked decisions |
+| `db/migrations/0003_elections.sql` | Decision 19 elections, calendar-year subsequent count, and the audit recognition sequence |
 | `db/seed/001_reference.sql` | Gazette figures, the adopted interpretation set, and public holidays for 2026–2032 |
+| `docs/IMPLEMENTATION_NOTE.md` | Stable columns, callable signatures, remaining gaps, and the test result |
 | `src/lms_config` | Ceiling arithmetic and the engine read contract. One implementation, so the formula is not copied into SQL |
 | `scripts/render_holidays.py` | Regenerates the holiday block in the seed from the Public Holidays Act rules |
 | `docs/IMPLEMENTATION_CHECKLIST.md` | Data structures, draft signatures, invariants, and technical gaps. Not production code |
@@ -30,6 +32,7 @@ The tests are the worked examples in the design note. A change to a gazetted fig
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0001_lms_owned.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0002_locked_decisions.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/0003_elections.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/seed/001_reference.sql
 ```
 

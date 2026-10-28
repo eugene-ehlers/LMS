@@ -10,6 +10,7 @@ from lms_config.context import (
     PUBLISHED_TERMS_SQL,
     REFERENCE_RATE_SQL,
     SHORT_TERM_ORDINAL_SQL,
+    TARIFF_SQL,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,8 @@ def test_engine_steps_include_the_pin_the_ceiling_and_the_audit():
     assert "customer_settings" in ENGINE_READ_STEPS
     assert "interest_cap" in ENGINE_READ_STEPS
     assert "reference_rate" in ENGINE_READ_STEPS
+    assert "tariff_amount" in ENGINE_READ_STEPS
+    assert "vat_election" in ENGINE_READ_STEPS
     assert ENGINE_READ_STEPS[-1] == "post_and_audit"
     assert "feature_flag" not in ENGINE_READ_STEPS
     assert "brand" not in ENGINE_READ_STEPS
@@ -33,6 +36,11 @@ def test_read_sql_uses_tables_this_migration_owns_except_the_agreement():
     assert "full_payment_threshold_percent" in CUSTOMER_SETTINGS_SQL
     assert "base_rate" in CUSTOMER_SETTINGS_SQL
     assert "discount_rate" in CUSTOMER_SETTINGS_SQL
+    assert "vat_on_rand_maxima" in CUSTOMER_SETTINGS_SQL
+    assert "late_disbursement" in CUSTOMER_SETTINGS_SQL
+    assert "partial_prepayment" in CUSTOMER_SETTINGS_SQL
+    assert "lms.ref_tariff_amount" in TARIFF_SQL
+    assert "date_trunc('year'" in SHORT_TERM_ORDINAL_SQL
     assert "lms.ref_interest_cap" in INTEREST_CAP_SQL
     assert "lms.ref_reference_rate" in REFERENCE_RATE_SQL
     assert "confidence = 'confirmed'" in REFERENCE_RATE_SQL
@@ -62,6 +70,20 @@ def test_locked_decision_columns_are_in_the_second_migration():
         "thirty_360",
     ):
         assert name in migration
+    later = (ROOT / "db" / "migrations" / "0003_elections.sql").read_text()
+    for name in (
+        "vat_on_rand_maxima",
+        "late_disbursement",
+        "partial_prepayment",
+        "adjust_instalment",
+        "keep_instalment",
+        "shorten_term",
+        "drop_instalment",
+        "recognition_sequence",
+        "weekly",
+        "bi_annual",
+    ):
+        assert name in later
     assert "docs/LOCKED_DECISIONS.md" in migration
 
 
@@ -78,7 +100,7 @@ def test_seed_carries_the_gazetted_figures_the_tests_charge():
     assert "2026-09-25" in SEED
     assert "cash_advanced" in SEED
     assert "cumulative" in SEED
-    assert "first_disbursed_loan" in SEED
+    assert "per_organisation_and_calendar_year" in SEED
     # The May 2026 7.00% figure is deliberately not a confirmed row.
     assert "0.07000000" not in SEED
 

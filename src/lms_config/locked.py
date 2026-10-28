@@ -13,30 +13,54 @@ of the organisation or the product does not rewrite an existing agreement.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Sequence
 
+from lms_config.calendar import value_date
 from lms_config.exceptions import CalculationInputError
 from lms_config.money import require_non_negative_cents
-from lms_config.validate import ProductTerms
+from lms_config.statute import DAY_COUNT_30_360, DAY_COUNT_ACTUAL_ACTUAL
+from lms_config.validate import ZERO_COST, CPA_LAYBY, ProductTerms
 
 
 INTEREST_ON_INITIATION_NONE = "none"
 INTEREST_ON_INITIATION_PERMITTED = "permitted"
 REPO_FALL_CONTRACT = "contract_rate"
 REPO_FALL_LOWER = "lower_of_contract_and_cap"
+VAT_EXCLUSIVE = "exclusive"
+VAT_INCLUSIVE = "inclusive"
+LATE_DISBURSEMENT_ADJUST = "adjust_instalment"
+LATE_DISBURSEMENT_KEEP = "keep_instalment"
+PREPAY_SHORTEN = "shorten_term"
+PREPAY_DROP = "drop_instalment"
+PROVIDER_DAY_COUNTS = {DAY_COUNT_ACTUAL_ACTUAL, DAY_COUNT_30_360}
+
+# Decision 7. Three unnamed section 103(5) edges are unsigned. The clip
+# stays off. No posting may treat this flag as true until counsel lists
+# those edges. The arithmetic in duplum.py is not a posting.
+IN_DUPLUM_CLIP_POSTS = False
 
 
 @dataclass(frozen=True, slots=True)
 class OrganisationSettings:
-    """Lender-level settings. Null means the organisation has not chosen."""
+    """Lender-level elections. Null means the organisation has not chosen.
+
+    Decision 19 stores these at organisation level. A product value, when
+    set, overrides. Nothing here is filled with an example or with the
+    substantive default named in an earlier decision.
+    """
 
     leniency_days: int | None
     full_payment_threshold_percent: Decimal | None
-    # Decision 10 states the default: no interest on a deferred initiation fee.
-    interest_on_deferred_initiation: str = INTEREST_ON_INITIATION_NONE
-    # Decision 11 does not pick option A or option B.
+    interest_on_deferred_initiation: str | None = None
     repo_rate_fall: str | None = None
+    day_count_code: str | None = None
+    base_rate: Decimal | None = None
+    discount_rate: Decimal | None = None
+    vat_on_rand_maxima: str | None = None
+    late_disbursement: str | None = None
+    partial_prepayment: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +68,13 @@ class ResolvedCreditSettings:
     leniency_days: int
     full_payment_threshold_percent: Decimal
     interest_on_deferred_initiation: str
-    repo_rate_fall: str | None
+    repo_rate_fall: str
+    day_count_code: str | None
+    base_rate: Decimal
+    discount_rate: Decimal
+    vat_on_rand_maxima: str
+    late_disbursement: str
+    partial_prepayment: str
 
 
 def resolve_customer_settings(
@@ -53,8 +83,12 @@ def resolve_customer_settings(
 ) -> ResolvedCreditSettings:
     """Product override wins. Null at both levels fails closed.
 
-    ``repo_rate_fall`` may still be null. Accrual of a repo-linked rate
-    then fails closed. This function does not pick option A or option B.
+    Decision 19. A zero-cost or CPA lay-by product has an explicit zero
+    price, so it does not inherit a campaign rate. Decision 5 does not
+    say a product with no accrual must store a day-count divisor, so a
+    missing day count is allowed only for those two classifications. A
+    credit product still fails closed. Decision 10's ``none`` is stored
+    by the provider. It is not written in when the column is null.
     """
     leniency = _override(product.leniency_days, organisation.leniency_days)
     threshold = _override(
@@ -66,6 +100,11 @@ def resolve_customer_settings(
         organisation.interest_on_deferred_initiation,
     )
     fall = _override(product.repo_rate_fall, organisation.repo_rate_fall)
+    day_count = _override(_product_day_count(product), organisation.day_count_code)
+    base_rate, discount_rate = _resolve_campaign(organisation, product)
+    vat = _override(product.vat_on_rand_maxima, organisation.vat_on_rand_maxima)
+    late = _override(product.late_disbursement, organisation.late_disbursement)
+    prepay = _override(product.partial_prepayment, organisation.partial_prepayment)
     if leniency is None:
         raise CalculationInputError(
             "leniency_days is not set on the product or the organisation"
@@ -79,31 +118,70 @@ def resolve_customer_settings(
     _check_threshold(threshold)
     if initiation not in {INTEREST_ON_INITIATION_NONE, INTEREST_ON_INITIATION_PERMITTED}:
         raise CalculationInputError(
-            "interest_on_deferred_initiation must be 'none' or 'permitted'"
+            "interest_on_deferred_initiation is not set on the product or the organisation"
         )
-    if fall not in {None, REPO_FALL_CONTRACT, REPO_FALL_LOWER}:
+    if fall not in {REPO_FALL_CONTRACT, REPO_FALL_LOWER}:
         raise CalculationInputError(
-            "repo_rate_fall must be 'contract_rate' or 'lower_of_contract_and_cap'"
+            "repo_rate_fall is not set on the product or the organisation"
         )
-    return ResolvedCreditSettings(leniency, threshold, initiation, fall)
+    if product.classification in {ZERO_COST, CPA_LAYBY}:
+        if day_count is not None and day_count not in PROVIDER_DAY_COUNTS:
+            raise CalculationInputError(
+                "day_count must be actual/actual or 30/360 when a zero-price product sets one"
+            )
+    elif day_count not in PROVIDER_DAY_COUNTS:
+        raise CalculationInputError(
+            "day_count is not set to actual/actual or 30/360 on the product or the organisation"
+        )
+    if vat not in {VAT_EXCLUSIVE, VAT_INCLUSIVE}:
+        raise CalculationInputError(
+            "vat_on_rand_maxima is not set on the product or the organisation"
+        )
+    if late not in {LATE_DISBURSEMENT_ADJUST, LATE_DISBURSEMENT_KEEP}:
+        raise CalculationInputError(
+            "late_disbursement is not set on the product or the organisation"
+        )
+    if prepay not in {PREPAY_SHORTEN, PREPAY_DROP}:
+        raise CalculationInputError(
+            "partial_prepayment is not set on the product or the organisation"
+        )
+    return ResolvedCreditSettings(
+        leniency,
+        threshold,
+        initiation,
+        fall,
+        day_count,
+        base_rate,
+        discount_rate,
+        vat,
+        late,
+        prepay,
+    )
 
 
-def campaign_rate(base_rate: Decimal, discount_rate: Decimal, *, in_default: bool) -> Decimal:
+def campaign_rate(
+    base_rate: Decimal,
+    discount_rate: Decimal,
+    *,
+    in_default: bool = False,
+    discount_fallen_away: bool = False,
+) -> Decimal:
     """Contractual rate after decision 3.
 
-    While the agreement is not in default the rate is ``base_rate`` minus
-    ``discount_rate``. That result may be zero. Once default is flagged and
-    the discount falls away, the rate is the base rate. That rate is the
-    contractual rate at that point, so the penalty does not exceed it.
+    While the discount still applies, the rate is ``base_rate`` minus
+    ``discount_rate``. That result may be zero. The discount stays through
+    the leniency window. It falls away on the default flag date. A later
+    cure does not bring it back: pass ``discount_fallen_away`` once the
+    flag date has removed it. The rate is then the base, which is the
+    contractual rate, so the penalty does not exceed the contract.
     """
     if base_rate < 0 or discount_rate < 0:
         raise CalculationInputError("rates cannot be negative")
     if discount_rate > base_rate:
         raise CalculationInputError("campaign discount cannot exceed the base rate")
-    performing = base_rate - discount_rate
-    if in_default:
+    if in_default or discount_fallen_away:
         return base_rate
-    return performing
+    return base_rate - discount_rate
 
 
 def is_full_payment(
@@ -159,10 +237,11 @@ def interest_bearing_cents(
 ) -> int:
     """Balance interest accrues on.
 
-    Decision 4: a linked lay-by hold is deducted, and the result is not
+    Decision 4: the lay-by hold reduces only this interest base. Principal
+    stays gross for in duplum and for settlement. The result is not
     negative. Decision 10: a deferred initiation fee earns interest only
-    when the provider chose ``permitted``. The fee can still sit inside
-    principal for section 126 and for the in-duplum base.
+    when the provider stored ``permitted``. The fee can still sit inside
+    principal for section 126 and for the in-duplum ceiling.
     """
     require_non_negative_cents(principal_cents, "principal")
     require_non_negative_cents(capitalised_initiation_cents, "capitalised initiation")
@@ -187,6 +266,124 @@ def duplum_base_cents(*, cash_balance_cents: int, capitalised_initiation_cents: 
     require_non_negative_cents(cash_balance_cents, "cash balance")
     require_non_negative_cents(capitalised_initiation_cents, "capitalised initiation")
     return cash_balance_cents + capitalised_initiation_cents
+
+
+@dataclass(frozen=True, slots=True)
+class RecognisedReceipt:
+    """One receipt the system has recognised. ``sequence`` is the seal order."""
+
+    recognised_at: datetime
+    sequence: int
+    amount_cents: int
+    due_on: date
+
+
+def order_recognised_events(receipts: Sequence[RecognisedReceipt]) -> tuple[RecognisedReceipt, ...]:
+    """Decision 1. Same value date keeps recognition sequence.
+
+    Python's sort is stable, so two receipts with the same value date and
+    the same sequence keep the order they were passed in.
+    """
+    return tuple(sorted(receipts, key=lambda item: (value_date(item.recognised_at), item.sequence)))
+
+
+def receipts_visible_at_morning_check(
+    receipts: Sequence[RecognisedReceipt],
+    *,
+    flag_on: date,
+    due_on: date,
+) -> tuple[RecognisedReceipt, ...]:
+    """Receipts for ``due_on`` whose value date is on or before the flag date.
+
+    A payment recognised at any time on the flag date has value date 00:00
+    that day and is visible to the morning check. A payment recognised on
+    the next calendar day is not.
+    """
+    ordered = order_recognised_events(receipts)
+    return tuple(
+        item
+        for item in ordered
+        if item.due_on == due_on and value_date(item.recognised_at) <= flag_on
+    )
+
+
+def is_in_default_at_morning_check(
+    *,
+    due_on: date,
+    check_on: date,
+    leniency_days: int,
+    receipts: Sequence[RecognisedReceipt],
+    instalment_cents: int,
+    threshold_percent: Decimal,
+) -> bool:
+    """Decision 6, after the flag-date receipts have been taken in.
+
+    ``instalment_cents`` is the original principal slice plus the levied
+    charges that share ``due_on``. The caller excludes unbilled interest.
+    """
+    if leniency_days < 0:
+        raise CalculationInputError("leniency_days cannot be negative")
+    flag_on = due_on + timedelta(days=leniency_days)
+    if check_on < flag_on:
+        return False
+    visible = receipts_visible_at_morning_check(receipts, flag_on=flag_on, due_on=due_on)
+    received = 0
+    for item in visible:
+        require_non_negative_cents(item.amount_cents, "received")
+        received += item.amount_cents
+    return not is_full_payment(received, instalment_cents, threshold_percent)
+
+
+def nominal_annual_rate(periodic_rate: Decimal, periods_per_year: int) -> Decimal:
+    """Decision 17. Simple nominal annual rate, not an effective rate.
+
+    ``periods_per_year`` is supplied by the caller. The lock does not say
+    whether weekly means 52 or 365/7.
+    """
+    if periodic_rate < 0:
+        raise CalculationInputError("periodic rate cannot be negative")
+    if periods_per_year <= 0:
+        raise CalculationInputError("periods per year must be positive")
+    return periodic_rate * periods_per_year
+
+
+def _product_day_count(product: ProductTerms) -> str | None:
+    counts = {
+        instrument.day_count
+        for instrument in product.instruments
+        if instrument.kind == "credit" and instrument.day_count is not None
+    }
+    if len(counts) > 1:
+        raise CalculationInputError("credit instruments on one product disagree on day count")
+    if not counts:
+        return None
+    return next(iter(counts))
+
+
+def _resolve_campaign(
+    organisation: OrganisationSettings,
+    product: ProductTerms,
+) -> tuple[Decimal, Decimal]:
+    if product.classification in {ZERO_COST, CPA_LAYBY}:
+        return Decimal(0), Decimal(0)
+    credits = [instrument for instrument in product.instruments if instrument.kind == "credit"]
+    bases = {instrument.base_rate for instrument in credits}
+    if len(bases) > 1:
+        raise CalculationInputError("credit instruments on one product disagree on the base rate")
+    product_base = next(iter(bases)) if bases else None
+    if product_base is not None:
+        discounts = {instrument.discount_rate for instrument in credits}
+        if len(discounts) != 1:
+            raise CalculationInputError("credit instruments on one product disagree on the discount")
+        discount = next(iter(discounts))
+        if discount is None:
+            raise CalculationInputError("a product base rate requires a campaign discount")
+        return product_base, discount
+    if organisation.base_rate is None or organisation.discount_rate is None:
+        raise CalculationInputError(
+            "campaign base_rate and discount_rate are not set on the product or the organisation"
+        )
+    return organisation.base_rate, organisation.discount_rate
 
 
 def _override(product_value, organisation_value):
