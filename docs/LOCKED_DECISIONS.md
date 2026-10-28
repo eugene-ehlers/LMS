@@ -216,10 +216,20 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A blank NCR number blocks those communications and extracts. It does not block booking.
 - Trading name, addresses, telephone numbers, payment-account details and brand assets are also LMS-owned and are not supplied by Enigma.
 
-## Gap: collection campaigns (no section 28)
+## 28. Collection campaigns
 
-Section 28 is not in this document. On `main`, commits `f75d1be` and `ecffee7` replace the locked-decisions file with a placeholder and do not state collection-campaign rules. This branch still ends at section 21.
+- A collection campaign is a bulk change applied to existing accounts. It does not create a new credit agreement (section 95).
+- Staff define a collection campaign with a start date, an end date (or open-ended), and one or more of the following changes:
+  - Reduce or zero the interest rate for the campaign period or the rest of the term.
+  - Reduce or zero one or more fees for the campaign period or the rest of the term.
+  - Waive the contractual instalment for the campaign period (payment holiday).
+- The campaign is applied to a selected set of accounts (by organisation, product, or an explicit list).
+- During the campaign period the ledger applies the reduced rate or fee, or skips the instalment. The contractual term and the contractual instalment amount are not changed.
+- When the campaign ends, the original rate and fees resume unless the campaign was open-ended.
+- A payment holiday does not reset in-duplum. Interest continues to accrue on the outstanding balance unless the campaign also zeros the rate.
+- A reduction in rate or fee is not an increase. Section 104(1) prohibits unilateral increases. A written notice of at least five business days is required before the change takes effect (section 104(2)).
+- The original contractual rate, fees, and instalment remain stored for disclosure. The campaign values are stored separately and are used for accrual during the campaign period.
+- Every collection-campaign change is audited. The audit record includes who applied it, when, the accounts affected, and the before and after values.
+- A change that alters the contractual term or the contractual instalment amount is a restructure and is not a collection campaign.
 
-Decision 3 on this branch is the origination discount (it falls away on the default flag date). That rule is not applied here as the collection-campaign rule. The task brief describes a separate servicing overlay. Treating them as one object would be a conflict, and this note does not choose a reading.
-
-Collection campaigns are implemented from the task brief. No locked rule is added here. Points the brief and the decisions above do not settle are listed in `docs/collection-campaigns/gaps.md`.
+Points section 28 does not settle are listed in `docs/collection-campaigns/gaps.md`.

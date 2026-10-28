@@ -45,7 +45,9 @@ POST /v1/organisations/{organisation_id}/loans/{loan_id}/registration
 
 For each selected loan it stores the contractual rate, fees, instalment lines, and contractual end. It does not write the loan's schedule, term, base rate, or origination discount.
 
-A payment holiday records a skip for each contractual due date that is on or after the apply recognition date and inside the campaign period. A due date that has already passed is not rewritten.
+A payment holiday records a skip for each contractual due date that is on or after the apply recognition date and inside the campaign period. It does not skip a due date for the rest of the term. A due date that has already passed is not rewritten.
+
+Apply does not book a loan. The selected accounts already exist.
 
 The same loan cannot take two collection campaigns whose periods overlap, including an open-ended campaign. No precedence is locked, so the apply stops (`campaign-overlap`) and nothing in that request is stored.
 
@@ -55,7 +57,7 @@ The staff actor must hold `lms.collection_campaign.write`. Enigma timeout, an am
 
 | Route | Effect |
 | --- | --- |
-| `POST /v1/collection-campaigns` | Create. `end_date` null is open-ended. |
+| `POST /v1/collection-campaigns` | Create. `end_date` null is open-ended. `rate_scope` is required when `rate_reduction` is positive and must be absent or null otherwise. `fee_scope` is the same for a positive fee reduction. The values are `campaign_period` or `rest_of_term`. A body with no reduction and no payment holiday is `change-unset`. |
 | `POST /v1/collection-campaigns/{campaign_id}` | Replace the campaign fields. Posted accruals are not reversed. |
 | `POST /v1/collection-campaigns/{campaign_id}/end` | Set `end_date`. The campaign applies on that date and not after it. |
 

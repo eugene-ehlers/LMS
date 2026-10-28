@@ -54,7 +54,9 @@ def _route(
             start_date=_date(_required(body, "start_date")),
             end_date=_optional_date(body.get("end_date")),
             rate_reduction=_rate(body, "rate_reduction"),
+            rate_scope=_scope(body, "rate_scope"),
             fee_reductions=_fee_map(_required(body, "fee_reductions")),
+            fee_scope=_scope(body, "fee_scope"),
             payment_holiday=_required_bool(body, "payment_holiday"),
             notice_date=_date(_required(body, "notice_date")),
         )
@@ -68,7 +70,9 @@ def _route(
             start_date=_date(_required(body, "start_date")),
             end_date=_optional_date(body.get("end_date")),
             rate_reduction=_rate(body, "rate_reduction"),
+            rate_scope=_scope(body, "rate_scope"),
             fee_reductions=_fee_map(_required(body, "fee_reductions")),
+            fee_scope=_scope(body, "fee_scope"),
             payment_holiday=_required_bool(body, "payment_holiday"),
             notice_date=_date(_required(body, "notice_date")),
         )
@@ -167,7 +171,9 @@ def _campaign(campaign) -> dict:
         "start_date": campaign.start_date.isoformat(),
         "end_date": None if campaign.end_date is None else campaign.end_date.isoformat(),
         "rate_reduction": format(campaign.rate_reduction, "f"),
+        "rate_scope": campaign.rate_scope,
         "fee_reductions_cents": dict(campaign.fee_reductions),
+        "fee_scope": campaign.fee_scope,
         "payment_holiday": campaign.payment_holiday,
         "notice_date": campaign.notice_date.isoformat(),
         "notice_business_days": NOTICE_BUSINESS_DAYS,
@@ -200,6 +206,19 @@ def _required_bool(body: dict, name: str) -> bool:
     if name not in body or not isinstance(body[name], bool):
         raise CollectionCampaignError("field-unset", f"{name} is required.")
     return body[name]
+
+
+def _scope(body: dict, name: str) -> str | None:
+    """Absent or null is no duration. A missing duration is not filled in."""
+    if name not in body or body[name] is None:
+        return None
+    raw = body[name]
+    if raw not in ("campaign_period", "rest_of_term"):
+        raise CollectionCampaignError(
+            "scope",
+            f"{name} is campaign_period or rest_of_term.",
+        )
+    return raw
 
 
 def _rate(body: dict, name: str) -> Decimal:

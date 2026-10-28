@@ -88,6 +88,12 @@ def opened_campaign(campaigns: CollectionCampaigns, **overrides):
         notice_date=date(2026, 3, 2),
     )
     values.update(overrides)
+    if "rate_scope" not in overrides:
+        values["rate_scope"] = "campaign_period" if values["rate_reduction"] > 0 else None
+    if "fee_scope" not in overrides:
+        values["fee_scope"] = (
+            "campaign_period" if any(cents > 0 for cents in values["fee_reductions"].values()) else None
+        )
     return campaigns.create(**values)
 
 
@@ -523,6 +529,8 @@ def test_audit_records_actor_recognition_date_accounts_and_before_after():
     assert before["periodic_rate"] == "0.05"
     assert after["effective_rate"] == "0.03"
     assert after["fee_reductions_cents"] == {"service": 1000}
+    assert after["rate_scope"] == "campaign_period"
+    assert after["fee_scope"] == "campaign_period"
     assert isinstance(before["fees_cents"]["service"], int)
 
 
@@ -569,7 +577,9 @@ def test_edit_changes_later_accrual_and_leaves_the_posted_day():
         start_date=date(2026, 3, 9),
         end_date=date(2026, 3, 31),
         rate_reduction=Decimal("0.01"),
+        rate_scope="campaign_period",
         fee_reductions={},
+        fee_scope=None,
         payment_holiday=False,
         notice_date=date(2026, 3, 2),
     )
@@ -706,7 +716,9 @@ def test_routes_apply_accrue_and_refuse_a_restructure():
             "start_date": "2026-03-09",
             "end_date": "2026-03-20",
             "rate_reduction": "0.02",
+            "rate_scope": "campaign_period",
             "fee_reductions": {"service": 1000},
+            "fee_scope": "campaign_period",
             "payment_holiday": False,
             "notice_date": "2026-03-02",
         },
@@ -714,6 +726,8 @@ def test_routes_apply_accrue_and_refuse_a_restructure():
     )
     assert status == 200
     assert created["notice_business_days"] == 5
+    assert created["rate_scope"] == "campaign_period"
+    assert created["fee_scope"] == "campaign_period"
     campaign_id = created["campaign_id"]
     status, applied = dispatch(
         campaigns,
@@ -760,6 +774,192 @@ def test_routes_apply_accrue_and_refuse_a_restructure():
     assert ROLE == "lms.collection_campaign.write"
 
 
+def test_rest_of_term_keeps_the_rate_and_fee_after_the_campaign_ends():
+    campaigns, ledger = service()
+    loan = book(ledger)
+    register(campaigns, loan)
+    campaign = opened_campaign(
+        campaigns,
+        end_date=date(2026, 3, 10),
+        rate_scope="rest_of_term",
+        fee_scope="rest_of_term",
+    )
+    campaigns.apply(
+        campaign.campaign_id,
+        organisation_id="org-a",
+        actor_id="staff-1",
+        recognised_at=at(2026, 3, 9),
+        selector="loans",
+        loan_ids=(loan.loan_id,),
+    )
+    after_campaign = campaigns.accrue(
+        organisation_id="org-a",
+        loan_id=loan.loan_id,
+        recognised_at=at(2026, 3, 11),
+        interest_cap_present=True,
+    )
+    assert after_campaign.periodic_rate == Decimal("0.03")
+    on_term_end = campaigns.periodic_rate_override("org-a", loan.loan_id, at(2026, 12, 15))
+    assert on_term_end == Decimal("0.03")
+    assert campaigns.periodic_rate_override("org-a", loan.loan_id, at(2026, 12, 16)) is None
+    ex_vat, _vat, _total = apply_ex_vat_discount(SERVICE_FEE_MONTHLY_CENTS, Decimal("0.15"), 1_000)
+    assert campaigns.service_fee_for_levy(
+        organisation_id="org-a",
+        loan_id=loan.loan_id,
+        recognised_at=at(2026, 4, 1),
+        monthly_cents=SERVICE_FEE_MONTHLY_CENTS,
+        vat_rate=Decimal("0.15"),
+    ) == ex_vat
+    assert loan.contractual_end == date(2026, 12, 15)
+    assert loan.snapshot.base_rate == Decimal("0.05")
+
+
+def test_payment_holiday_stops_at_the_campaign_end_while_the_rate_runs_on():
+    campaigns, ledger = service()
+    loan = ledger.book(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        organisation=settings(),
+        recognised_at=at(2026, 3, 1),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((date(2026, 3, 15), 40_000), (date(2026, 6, 15), 60_000)),
+        identity_name="Ada Borrower",
+        identity_number="8001015800085",
+        service_address="1 Main Road, Cape Town",
+    )
+    register(campaigns, loan)
+    campaign = opened_campaign(
+        campaigns,
+        end_date=date(2026, 3, 20),
+        fee_reductions={},
+        rate_scope="rest_of_term",
+        payment_holiday=True,
+    )
+    applications = campaigns.apply(
+        campaign.campaign_id,
+        organisation_id="org-a",
+        actor_id="staff-1",
+        recognised_at=at(2026, 3, 9),
+        selector="loans",
+        loan_ids=(loan.loan_id,),
+    )
+    assert applications[0].skipped_due_dates == (date(2026, 3, 15),)
+    assert applications[0].contractual_instalments == (
+        (date(2026, 3, 15), 40_000),
+        (date(2026, 6, 15), 60_000),
+    )
+    assert campaigns.instalment_skipped("org-a", loan.loan_id, date(2026, 6, 15)) is False
+    assert campaigns.periodic_rate_override("org-a", loan.loan_id, at(2026, 6, 1)) == Decimal("0.03")
+    assert loan.contractual_end == date(2026, 6, 15)
+
+
+def test_a_reduction_needs_a_duration_and_a_campaign_needs_a_change():
+    campaigns, _ledger = service()
+    with pytest.raises(CollectionCampaignError) as missing:
+        opened_campaign(campaigns, rate_scope=None)
+    assert missing.value.code == "scope-unset"
+    with pytest.raises(CollectionCampaignError) as missing_fee:
+        opened_campaign(campaigns, fee_scope=None)
+    assert missing_fee.value.code == "scope-unset"
+    with pytest.raises(CollectionCampaignError) as unused:
+        opened_campaign(
+            campaigns,
+            rate_reduction=Decimal(0),
+            fee_reductions={},
+            payment_holiday=True,
+            rate_scope="campaign_period",
+        )
+    assert unused.value.code == "scope-unused"
+    with pytest.raises(CollectionCampaignError) as empty:
+        opened_campaign(
+            campaigns,
+            rate_reduction=Decimal(0),
+            fee_reductions={},
+            payment_holiday=False,
+        )
+    assert empty.value.code == "change-unset"
+    with pytest.raises(CollectionCampaignError) as bad:
+        opened_campaign(campaigns, rate_scope="forever")
+    assert bad.value.code == "scope"
+    assert campaigns.campaigns == {}
+    status, body = dispatch(
+        campaigns,
+        "POST",
+        "/v1/collection-campaigns",
+        {
+            "organisation_id": "org-a",
+            "recognised_at": "2026-03-09T08:00:00+02:00",
+            "start_date": "2026-03-09",
+            "end_date": "2026-03-20",
+            "rate_reduction": "0.02",
+            "fee_reductions": {},
+            "payment_holiday": False,
+            "notice_date": "2026-03-02",
+        },
+        {"X-Actor-Id": "staff-1"},
+    )
+    assert status == 422
+    assert body["code"] == "scope-unset"
+
+
+def test_apply_does_not_create_a_credit_agreement():
+    campaigns, ledger = service()
+    loan = book(ledger)
+    register(campaigns, loan)
+    before = {item.loan_id for item in ledger.store.accounts_for("org-a")}
+    campaign = opened_campaign(campaigns)
+    campaigns.apply(
+        campaign.campaign_id,
+        organisation_id="org-a",
+        actor_id="staff-1",
+        recognised_at=at(2026, 3, 9),
+        selector="organisation",
+    )
+    after = {item.loan_id for item in ledger.store.accounts_for("org-a")}
+    assert before == after == {loan.loan_id}
+
+
+def test_rest_of_term_overlaps_a_later_campaign_on_the_same_loan():
+    campaigns, ledger = service()
+    loan = book(ledger)
+    register(campaigns, loan)
+    first = opened_campaign(
+        campaigns,
+        end_date=date(2026, 3, 20),
+        fee_reductions={},
+        rate_scope="rest_of_term",
+    )
+    campaigns.apply(
+        first.campaign_id,
+        organisation_id="org-a",
+        actor_id="staff-1",
+        recognised_at=at(2026, 3, 9),
+        selector="loans",
+        loan_ids=(loan.loan_id,),
+    )
+    later = opened_campaign(
+        campaigns,
+        start_date=date(2026, 4, 1),
+        end_date=date(2026, 4, 10),
+        notice_date=date(2026, 3, 25),
+        recognised_at=at(2026, 3, 25),
+        fee_reductions={},
+    )
+    with pytest.raises(CollectionCampaignError) as overlap:
+        campaigns.apply(
+            later.campaign_id,
+            organisation_id="org-a",
+            actor_id="staff-1",
+            recognised_at=at(2026, 4, 1),
+            selector="loans",
+            loan_ids=(loan.loan_id,),
+        )
+    assert overlap.value.code == "campaign-overlap"
+    assert len(campaigns.applications) == 1
+
+
 def test_migration_stores_cents_notice_and_the_original_contract():
     sql = (ROOT / "db" / "migrations" / "0008_collection_campaigns.sql").read_text()
     assert "CREATE TABLE lms.collection_campaign" in sql
@@ -767,6 +967,9 @@ def test_migration_stores_cents_notice_and_the_original_contract():
     assert "reduction_cents bigint NOT NULL CHECK (reduction_cents >= 0)" in sql
     assert "principal_cents bigint NOT NULL CHECK (principal_cents > 0)" in sql
     assert "does not update loan_account or schedule_line" in sql
+    assert "rate_scope text CHECK (rate_scope IN ('campaign_period', 'rest_of_term'))" in sql
+    assert "fee_scope text CHECK (fee_scope IN ('campaign_period', 'rest_of_term'))" in sql
+    assert "CHECK ((rate_reduction = 0) = (rate_scope IS NULL))" in sql
     assert "COLLECTION_CAMPAIGN_CHANGED" in sql
     seed = (ROOT / "db" / "seed" / "001_reference.sql").read_text()
     assert "COLLECTION_CAMPAIGN_CHANGED" in seed

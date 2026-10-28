@@ -1,6 +1,6 @@
 # Collection campaigns
 
-A collection campaign is a temporary overlay on loans that are already booked. It can reduce the rate, reduce one or more fees, or skip an instalment. It does not change the contractual term or the contractual instalment. That change is a restructure and is out of scope.
+A collection campaign is a bulk change on loans that are already booked (section 28, NCA section 95). It can reduce or zero the rate, reduce or zero one or more fees, or waive the contractual instalment for the campaign period. A rate or fee reduction says whether it lasts for the campaign period or the rest of the term. It does not change the contractual term or the contractual instalment. That change is a restructure and is out of scope.
 
 The implementation calls the Layer 0 ledger and the existing calculators. It does not keep a second interest, day-count, VAT, or in-duplum formula.
 

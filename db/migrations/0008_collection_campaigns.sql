@@ -16,20 +16,29 @@ CREATE TABLE lms.collection_campaign (
   start_date date NOT NULL,
   end_date date,
   rate_reduction numeric(12, 8) NOT NULL CHECK (rate_reduction >= 0),
+  rate_scope text CHECK (rate_scope IN ('campaign_period', 'rest_of_term')),
   payment_holiday boolean NOT NULL,
+  fee_scope text CHECK (fee_scope IN ('campaign_period', 'rest_of_term')),
   notice_date date NOT NULL,
   notice_business_days integer NOT NULL CHECK (notice_business_days = 5),
   created_by text NOT NULL CHECK (btrim(created_by) <> ''),
   created_at timestamptz NOT NULL,
   PRIMARY KEY (organisation_id, campaign_id),
-  CHECK (end_date IS NULL OR end_date >= start_date)
+  CHECK (end_date IS NULL OR end_date >= start_date),
+  CHECK ((rate_reduction = 0) = (rate_scope IS NULL))
 );
 
 COMMENT ON TABLE lms.collection_campaign IS
-  'Servicing overlay. Null end_date is open-ended. notice_business_days records NCA s 104(2) and is not an election. The notice document is not stored here.';
+  'Servicing overlay on existing accounts (NCA s 95). Null end_date is open-ended. notice_business_days records NCA s 104(2) and is not an election. The notice document is not stored here. Applying a row does not insert a loan_account.';
 
 COMMENT ON COLUMN lms.collection_campaign.rate_reduction IS
-  'Non-negative reduction in the same unit as the contractual periodic rate. Zero leaves the rate unchanged. A negative value is an increase and is rejected.';
+  'Non-negative reduction in the same unit as the contractual periodic rate. Zero leaves the rate unchanged. A negative value is an increase and is rejected (NCA s 104(1)).';
+
+COMMENT ON COLUMN lms.collection_campaign.rate_scope IS
+  'campaign_period or rest_of_term when rate_reduction is positive. Null when the rate is unchanged. Not defaulted.';
+
+COMMENT ON COLUMN lms.collection_campaign.fee_scope IS
+  'campaign_period or rest_of_term when a child fee row has a positive reduction. Null when no fee is reduced. The child rows are the amounts, so this null-iff-unreduced rule is enforced by the service rather than a cross-table check.';
 
 CREATE TABLE lms.collection_campaign_fee (
   organisation_id text NOT NULL,
@@ -49,7 +58,7 @@ CREATE TABLE lms.collection_campaign_fee (
 );
 
 COMMENT ON TABLE lms.collection_campaign_fee IS
-  'Fee reduction in integer cents. Zero is an explicit unchanged fee. The contractual fee is not updated.';
+  'Fee reduction in integer cents. Zero is an explicit unchanged fee and does not by itself require fee_scope. A positive reduction uses collection_campaign.fee_scope. The contractual fee is not updated.';
 
 CREATE TABLE lms.collection_campaign_application (
   organisation_id text NOT NULL,

@@ -1,9 +1,10 @@
 """Collection-campaign records.
 
-A collection campaign is a temporary servicing overlay. It is not the
-origination discount stored on the agreement at booking (LOCKED_DECISIONS §3
-on this branch). The contractual rate, fees, instalment, and term stay on
-the loan. The copies below are the values the campaign must not rewrite.
+A collection campaign is a bulk change on accounts that already exist
+(LOCKED_DECISIONS §28, NCA section 95). It is not the origination discount
+stored on the agreement at booking (LOCKED_DECISIONS §3 on this branch).
+The contractual rate, fees, instalment, and term stay on the loan. The
+copies below are the values the campaign must not rewrite.
 """
 
 from __future__ import annotations
@@ -23,10 +24,13 @@ FEE_TYPES = (
     "additional_monthly",
 )
 
-# NCA section 104(2), as stated in the collection-campaign brief: written
-# notice of at least five business days before the change takes effect.
-# This is not a client election.
+# NCA section 104(2), locked in section 28: written notice of at least five
+# business days before the change takes effect. This is not a client election.
 NOTICE_BUSINESS_DAYS = 5
+
+# Section 28: a rate or fee change is for the campaign period or the rest of
+# the term. A payment holiday is the campaign period only and has no scope.
+SCOPES = ("campaign_period", "rest_of_term")
 
 # Decision 19: role names are descriptive. This branch's examples include
 # lms.campaign.write for origination campaigns. Collection campaigns are a
@@ -42,7 +46,9 @@ class Campaign:
     start_date: date
     end_date: date | None
     rate_reduction: Decimal
+    rate_scope: str | None
     fee_reductions: dict[str, int]
+    fee_scope: str | None
     payment_holiday: bool
     notice_date: date
     notice_business_days: int

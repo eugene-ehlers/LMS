@@ -5,8 +5,11 @@ This module stores the campaign and calls ``Ledger.accrue_day``,
 ``campaign_rate``, and ``apply_ex_vat_discount``. It does not keep a second
 interest, day-count, VAT, or in-duplum formula.
 
-A change to the contractual term or the contractual instalment is a
-restructure. This module has no operation that writes those fields.
+Section 28: a campaign does not create a credit agreement. A rate or fee
+reduction is for the campaign period or the rest of the term. A payment
+holiday is the campaign period only. A change to the contractual term or
+the contractual instalment is a restructure. This module has no operation
+that writes those fields.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from lms.collection_campaigns.errors import CollectionCampaignError
 from lms.collection_campaigns.models import (
     FEE_TYPES,
     NOTICE_BUSINESS_DAYS,
+    SCOPES,
     Application,
     Campaign,
     RegisteredAccount,
@@ -33,6 +37,7 @@ from lms_config.exceptions import CalculationInputError
 from lms_config.locked import campaign_rate
 
 _FEE_TYPES = frozenset(FEE_TYPES)
+_SCOPES = frozenset(SCOPES)
 
 
 class CollectionCampaigns:
@@ -85,7 +90,9 @@ class CollectionCampaigns:
         start_date: date,
         end_date: date | None,
         rate_reduction: Decimal,
+        rate_scope: str | None,
         fee_reductions: dict[str, int],
+        fee_scope: str | None,
         payment_holiday: bool,
         notice_date: date,
         extra_holidays: frozenset[date] = frozenset(),
@@ -97,13 +104,16 @@ class CollectionCampaigns:
         _require_bool(payment_holiday)
         _require_period(start_date, end_date)
         _require_notice(notice_date, start_date, extra_holidays)
+        rate_scope, fee_scope = _durations(reduction, rate_scope, fees, fee_scope, payment_holiday)
         campaign = Campaign(
             campaign_id=str(uuid4()),
             organisation_id=organisation_id,
             start_date=start_date,
             end_date=end_date,
             rate_reduction=reduction,
+            rate_scope=rate_scope,
             fee_reductions=fees,
+            fee_scope=fee_scope,
             payment_holiday=payment_holiday,
             notice_date=notice_date,
             notice_business_days=NOTICE_BUSINESS_DAYS,
@@ -134,7 +144,9 @@ class CollectionCampaigns:
         start_date: date,
         end_date: date | None,
         rate_reduction: Decimal,
+        rate_scope: str | None,
         fee_reductions: dict[str, int],
+        fee_scope: str | None,
         payment_holiday: bool,
         notice_date: date,
         repos: tuple = (),
@@ -148,13 +160,16 @@ class CollectionCampaigns:
         _require_bool(payment_holiday)
         _require_period(start_date, end_date)
         _require_notice(notice_date, start_date, extra_holidays)
+        rate_scope, fee_scope = _durations(reduction, rate_scope, fees, fee_scope, payment_holiday)
         proposed = Campaign(
             campaign_id=campaign.campaign_id,
             organisation_id=campaign.organisation_id,
             start_date=start_date,
             end_date=end_date,
             rate_reduction=reduction,
+            rate_scope=rate_scope,
             fee_reductions=fees,
+            fee_scope=fee_scope,
             payment_holiday=payment_holiday,
             notice_date=notice_date,
             notice_business_days=NOTICE_BUSINESS_DAYS,
@@ -166,7 +181,9 @@ class CollectionCampaigns:
         campaign.start_date = proposed.start_date
         campaign.end_date = proposed.end_date
         campaign.rate_reduction = proposed.rate_reduction
+        campaign.rate_scope = proposed.rate_scope
         campaign.fee_reductions = proposed.fee_reductions
+        campaign.fee_scope = proposed.fee_scope
         campaign.payment_holiday = proposed.payment_holiday
         campaign.notice_date = proposed.notice_date
         self._refresh_skips(campaign, day)
@@ -193,7 +210,13 @@ class CollectionCampaigns:
         end_date: date,
         repos: tuple = (),
     ) -> Campaign:
-        """Set the last recognition date on which the campaign applies."""
+        """Set ``end_date``.
+
+        A campaign-period reduction and a payment holiday stop after that
+        date. A rest-of-term reduction continues through the contractual end
+        stored on each application. A null end date is open-ended; setting
+        the date is what ends it, and campaign-period values then resume.
+        """
         actor = authorise(self.access, organisation_id=organisation_id, actor_id=actor_id)
         day = _recognition_day(recognised_at)
         campaign = self._campaign(campaign_id, organisation_id)
@@ -206,7 +229,9 @@ class CollectionCampaigns:
             start_date=campaign.start_date,
             end_date=end_date,
             rate_reduction=campaign.rate_reduction,
+            rate_scope=campaign.rate_scope,
             fee_reductions=dict(campaign.fee_reductions),
+            fee_scope=campaign.fee_scope,
             payment_holiday=campaign.payment_holiday,
             notice_date=campaign.notice_date,
             notice_business_days=campaign.notice_business_days,
@@ -276,9 +301,15 @@ class CollectionCampaigns:
         recognised_at: datetime,
         repos: tuple = (),
     ) -> Decimal | None:
-        """Rate to pass into ``Ledger.accrue_day``, or None when no campaign covers the day."""
+        """Rate to pass into ``Ledger.accrue_day``.
+
+        None when no applied rate reduction covers the day. A campaign-period
+        reduction covers the campaign window. A rest-of-term reduction covers
+        from the start date through the contractual end, including after the
+        campaign end date. A zero reduction is not a rate change.
+        """
         day = _recognition_day(recognised_at)
-        application = self._active(organisation_id, loan_id, day)
+        application = self._application_for(organisation_id, loan_id, day, _rate_applies)
         if application is None:
             return None
         campaign = self._campaign(application.campaign_id, organisation_id)
@@ -442,7 +473,7 @@ class CollectionCampaigns:
         if contractual_cents < 0:
             raise CollectionCampaignError("fee", "A contractual fee cannot be negative.")
         day = _recognition_day(recognised_at)
-        application = self._active(organisation_id, loan_id, day)
+        application = self._application_for(organisation_id, loan_id, day, _fee_applies)
         if application is None:
             return contractual_cents
         campaign = self._campaign(application.campaign_id, organisation_id)
@@ -483,14 +514,20 @@ class CollectionCampaigns:
                 "already-applied",
                 "This campaign is already applied to that loan. Nothing further was applied.",
             )
-        other = self._overlapping(registered.organisation_id, registered.loan_id, campaign, None)
+        account = self._loan(registered.organisation_id, registered.loan_id)
+        other = self._overlapping(
+            registered.organisation_id,
+            registered.loan_id,
+            campaign,
+            None,
+            account.contractual_end,
+        )
         if other is not None:
             raise CollectionCampaignError(
                 "campaign-overlap",
                 "Another collection campaign already covers this loan on an overlapping period. "
                 "No precedence is locked, so the apply stops.",
             )
-        account = self._loan(registered.organisation_id, registered.loan_id)
         _require_schedule(account)
         contractual = self.ledger.contractual_periodic_rate(
             organisation_id=registered.organisation_id,
@@ -607,6 +644,7 @@ class CollectionCampaigns:
                 application.loan_id,
                 proposed,
                 ignore_campaign_id,
+                application.contractual_end,
             )
             if other is not None:
                 raise CollectionCampaignError(
@@ -630,6 +668,7 @@ class CollectionCampaigns:
         loan_id: str,
         campaign: Campaign,
         ignore_campaign_id: str | None,
+        contractual_end: date,
     ) -> Campaign | None:
         for application in self.applications.values():
             if application.organisation_id != organisation_id or application.loan_id != loan_id:
@@ -637,17 +676,32 @@ class CollectionCampaigns:
             if ignore_campaign_id is not None and application.campaign_id == ignore_campaign_id:
                 continue
             other = self.campaigns[application.campaign_id]
-            if _overlaps(campaign.start_date, campaign.end_date, other.start_date, other.end_date):
+            # The loan has one contractual end. A rest-of-term reduction occupies
+            # dates through that end, so a later campaign on the same loan overlaps
+            # it even when the campaign windows themselves do not meet.
+            end = application.contractual_end
+            if _overlaps(
+                campaign.start_date,
+                _occupied_end(campaign, contractual_end),
+                other.start_date,
+                _occupied_end(other, end),
+            ):
                 return other
         return None
 
-    def _active(self, organisation_id: str, loan_id: str, day: date) -> Application | None:
+    def _application_for(
+        self,
+        organisation_id: str,
+        loan_id: str,
+        day: date,
+        applies,
+    ) -> Application | None:
         found: list[Application] = []
         for application in self.applications.values():
             if application.organisation_id != organisation_id or application.loan_id != loan_id:
                 continue
             campaign = self.campaigns[application.campaign_id]
-            if _covers(campaign, day):
+            if applies(campaign, day, application.contractual_end):
                 found.append(application)
         if len(found) > 1:
             raise CollectionCampaignError(
@@ -820,12 +874,114 @@ def _reduced_rate(contractual: Decimal, reduction: Decimal) -> Decimal:
         ) from exc
 
 
+def _durations(
+    rate_reduction: Decimal,
+    rate_scope: str | None,
+    fee_reductions: dict[str, int],
+    fee_scope: str | None,
+    payment_holiday: bool,
+) -> tuple[str | None, str | None]:
+    """Section 28: each reduction says whether it lasts for the campaign or the term.
+
+    A missing duration is not defaulted. A duration with no reduction is refused.
+    A campaign with no rate reduction, fee reduction, or payment holiday is refused.
+    """
+    for name, scope in (("rate_scope", rate_scope), ("fee_scope", fee_scope)):
+        if scope is not None and scope not in _SCOPES:
+            raise CollectionCampaignError(
+                "scope",
+                f"{name} is campaign_period or rest_of_term.",
+            )
+    rate_reduced = rate_reduction > 0
+    fee_reduced = any(cents > 0 for cents in fee_reductions.values())
+    if rate_reduced and rate_scope is None:
+        raise CollectionCampaignError(
+            "scope-unset",
+            "A rate reduction is for the campaign period or the rest of the term. "
+            "The duration was not given.",
+        )
+    if fee_reduced and fee_scope is None:
+        raise CollectionCampaignError(
+            "scope-unset",
+            "A fee reduction is for the campaign period or the rest of the term. "
+            "The duration was not given.",
+        )
+    if not rate_reduced and rate_scope is not None:
+        raise CollectionCampaignError(
+            "scope-unused",
+            "A rate duration is stored only when the rate is reduced.",
+        )
+    if not fee_reduced and fee_scope is not None:
+        raise CollectionCampaignError(
+            "scope-unused",
+            "A fee duration is stored only when a fee is reduced.",
+        )
+    if not rate_reduced and not fee_reduced and not payment_holiday:
+        raise CollectionCampaignError(
+            "change-unset",
+            "A collection campaign needs one or more of a rate reduction, a fee reduction, "
+            "or a payment holiday.",
+        )
+    return rate_scope, fee_scope
+
+
 def _covers(campaign: Campaign, day: date) -> bool:
     if day < campaign.start_date:
         return False
     if campaign.end_date is not None and day > campaign.end_date:
         return False
     return True
+
+
+def _rate_applies(campaign: Campaign, day: date, contractual_end: date) -> bool:
+    if campaign.rate_reduction <= 0 or campaign.rate_scope is None:
+        return False
+    return _scoped(campaign, day, campaign.rate_scope, contractual_end)
+
+
+def _fee_applies(campaign: Campaign, day: date, contractual_end: date) -> bool:
+    if campaign.fee_scope is None or not any(cents > 0 for cents in campaign.fee_reductions.values()):
+        return False
+    return _scoped(campaign, day, campaign.fee_scope, contractual_end)
+
+
+def _scoped(campaign: Campaign, day: date, scope: str, contractual_end: date) -> bool:
+    if day < campaign.start_date:
+        return False
+    if scope == "rest_of_term":
+        return day <= contractual_end
+    return _covers(campaign, day)
+
+
+def _occupied_end(campaign: Campaign, contractual_end: date) -> date | None:
+    """Last recognition date the campaign occupies on this loan.
+
+    None means a campaign-period effect is open-ended. A rest-of-term
+    reduction occupies dates through the contractual end, including after
+    ``end_date``. A payment holiday occupies only the campaign window.
+    """
+    ends: list[date] = []
+
+    def occupy(active: bool, scope: str | None) -> bool:
+        if not active:
+            return False
+        if scope == "rest_of_term":
+            ends.append(contractual_end)
+            return False
+        if campaign.end_date is None:
+            return True
+        ends.append(campaign.end_date)
+        return False
+
+    if occupy(campaign.rate_reduction > 0, campaign.rate_scope):
+        return None
+    if occupy(any(cents > 0 for cents in campaign.fee_reductions.values()), campaign.fee_scope):
+        return None
+    if occupy(campaign.payment_holiday, "campaign_period"):
+        return None
+    if not ends:
+        return campaign.end_date
+    return max(ends)
 
 
 def _overlaps(
@@ -884,7 +1040,9 @@ def _campaign_json(campaign: Campaign) -> dict:
         "start_date": campaign.start_date.isoformat(),
         "end_date": None if campaign.end_date is None else campaign.end_date.isoformat(),
         "rate_reduction": _money(campaign.rate_reduction),
+        "rate_scope": campaign.rate_scope,
         "fee_reductions_cents": dict(campaign.fee_reductions),
+        "fee_scope": campaign.fee_scope,
         "payment_holiday": campaign.payment_holiday,
         "notice_date": campaign.notice_date.isoformat(),
         "notice_business_days": campaign.notice_business_days,
@@ -924,5 +1082,7 @@ def _after_loan(campaign: Campaign, application: Application) -> dict:
         "instalments": _instalment_json(application.contractual_instalments),
         "contractual_end": application.contractual_end.isoformat(),
         "payment_holiday": campaign.payment_holiday,
+        "rate_scope": campaign.rate_scope,
+        "fee_scope": campaign.fee_scope,
         "skipped_due_dates": [due.isoformat() for due in application.skipped_due_dates],
     }
