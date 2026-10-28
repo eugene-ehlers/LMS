@@ -39,13 +39,22 @@ Last updated: 2026-10-28
 | C5 | campaign_rate still rejects a discount above the base. | Code change | Update campaign_rate to floor the net at 0 % instead of rejecting the pair. |
 | C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Code change | Update the function to fail closed or to fill R100, depending on the resolution of C4. |
 
+## Payment rails (Agent C)
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| P1 | Section 19 does not name debit_orders_enabled as the section 4 automation switch. | Rule change | Add debit_orders_enabled to the elections in Decision 19. |
+| P2 | Loan-number character pattern and stored contractual instalment are unset. The loan line reads the amount still outstanding on that due date. | Decide later | Lock the loan-number pattern when the real numbering scheme is finalised. The outstanding-amount approach is acceptable for testing. |
+| P3 | Bankserv has no DebiCheck record type and no stated hash algorithm. Consumer homing account and 10-character abbreviated name are not LMS fields. A credit-life receipt has no insurer hand-off. | Decide later | Lock the Bankserv layout details and the insurer hand-off when the real rail and insurer contracts are in place. |
+| P4 | Whether interest accruing on the due date is itself due that day is unsettled. The rail bills the whole unbilled memo through bill_interest. | Rule change | Lock whether interest accruing on the due date is due that day in Decision 1 or Decision 8. |
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
-| Decide later | 5 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 4 | Update docs/LOCKED_DECISIONS.md. |
+| Decide later | 8 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 6 | Update docs/LOCKED_DECISIONS.md. |
 | Code change | 3 | Update the existing functions. |
 | Database change | 1 | Add a classification column. |
 
-No issue blocks continued development of Agents C and E. All issues are recorded so they can be closed in a single pass before production.
+No issue blocks continued development of Agent E. All issues are recorded so they can be closed in a single pass before production.
