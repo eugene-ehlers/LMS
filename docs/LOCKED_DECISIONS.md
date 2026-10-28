@@ -151,11 +151,20 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 ## 15. Enigma boundary
 
-- Enigma owns person identity, organisations, memberships, product enrolment, roles and mandates.
+- Enigma is limited to identity and access management:
+  - Individual registration, login, logout and password administration.
+  - Linking individuals to companies and roles.
+  - Granting access to applications based on the company and role after the individual has been verified and signed in.
+  - Uses ID number and company registration for this purpose.
 - LMS stores only opaque person_id and organisation_id.
 - LMS does not re-implement person or organisation identity.
 - Fail closed on Enigma timeout, ambiguous status, or a clear suspended enrolment.
-- Enigma does not hold or return the NCR registration number. The NCR number is an LMS compliance attribute, not an identity attribute.
+- Everything else is an LMS responsibility, including:
+  - Stores and brands linked to a company.
+  - NCR registration numbers.
+  - All data required for statements so that the correct details appear.
+  - All data required for regulatory and compliance reporting.
+- Enigma does not hold or return the NCR registration number, trading names, addresses, telephone numbers, payment-account details, or brand assets.
 
 ## 16. Identity freeze on agreement
 
@@ -193,10 +202,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Different clients may use different formulas based on arrears, recency, months on book, promise-to-pay adherence, contactability, and other factors.
 - No platform default is imposed.
 
-## 21. NCR registration number
+## 21. NCR registration number and compliance data
 
 - The NCR registration number is stored as an LMS tenant attribute (organisation level).
 - Enigma does not hold or return it.
 - It is required on NCA communications and regulatory extracts for micro and unsecured personal loans.
 - It is not required for pure hosting or for Laybye/BNPL.
 - A blank NCR number blocks those communications and extracts. It does not block booking.
+- Trading name, addresses, telephone numbers, payment-account details and brand assets are also LMS-owned and are not supplied by Enigma.
