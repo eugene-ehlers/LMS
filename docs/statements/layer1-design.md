@@ -1,10 +1,37 @@
 # Statements and documents (Layer 1 draft)
 
-Status: **Layer 1 draft. Design only.** This note does not add production code, does not change `docs/LOCKED_DECISIONS.md`, and does not change the Calculation Engine, the ledger, configuration, or servicing.
+Status: **Layer 1, implemented.** The code is `src/lms/statements` and `lms_config.compliance`. It does not change `docs/LOCKED_DECISIONS.md`, and it does not change the Calculation Engine, the ledger, or servicing. PDF bytes are a stub of the stored figures.
+
+The behaviours below cite `docs/LOCKED_DECISIONS.md` by section. A row with no locked section is a gap in [section 9](#9-gaps-that-need-a-locked-decision).
+
+| Behaviour | Locked section |
+| --- | --- |
+| Value date is the Johannesburg recognition date. Same-day receipts keep recognition order. | §1 |
+| On the statement date, accrue, then capitalise amounts due at 00:00, then allocate receipts recognised that day. | §1, §8 |
+| Capitalised initiation is inside principal. A fee that was not capitalised stays in its fee bucket. | §2 |
+| Base rate and campaign discount are both stored and shown. The discount is not deleted after it falls away. | §3 |
+| Lay-by hold is its own balance. It is not subtracted from principal. | §4 |
+| Daily accrual uses the snapshot day-count. The statement does not pick a second day-count. | §5 |
+| Morning check only on the contractual due date plus leniency days. Unbilled interest is not part of the instalment. | §6 |
+| Post-default interest and fees stay in their own buckets. The in-duplum clip is not called. | §7 |
+| Allocation is `Ledger.post_payment`, which calls `allocate_payment`. Only that function applies section 126. | §8 |
+| Service fee is pro-rata in the opening month and the full fee at later month-ends, including a settlement quote's month. VAT rate is caller-supplied. A missing rate posts nothing. | §9 |
+| Interest on a deferred initiation fee is the snapshot election. This layer does not choose. | §10 |
+| Repo-fall is the snapshot election. This layer does not issue a section 104 notice. | §11 |
+| One statement per client per organisation. Each loan, including a lay-by child, has its own opening and closing bucket balances. The next opening is the previous stored closing. | §12 |
+| Instalment shown is the original principal slice plus levied charges that share that due date. Frequency is the snapshot token. | §6, §13, §14 |
+| Provider legal name, NCR number, trading name, addresses, telephone, and payment-account details are read from LMS configuration (`ComplianceStore` / `lms.cfg_provider_compliance`), not from Enigma. | Conflict with §15. See C1. Mandate check still calls the servicing Enigma port and fails closed. |
+| Consumer name, identity number, and service address are the values frozen on the loan. | §16 |
+| Nominal annual rate is `nominal_annual_rate(periodic, periods_per_year)`. Base and effective are both labelled. The single Form 26 annual-rate cell is empty. | §17. Which periodic rate fills that one cell is G16. |
+| Default-administration and collection charges are whatever the ledger already posted. This layer does not levy them without a tariff row. | §18 |
+| Rates and elections on the statement are the booking snapshot, not a fresh `resolve_customer_settings`. | §19 |
+| Section 110 enquiry reads balances and does not call `Ledger.issue_statement`. | §12 for the chain it must not move. The 10- and 20-day deadlines are section 110(2), counted with `add_business_days`. |
+| Section 113 quote is `quote_settlement`. Early-termination cents are 0. `valid_until` is `binding_until`. | §1 for the value date. The five business days are section 113, not a locked paragraph. |
+| First statement opening, the single section 109 total, the arrears cents, and "interest accrued" as one cell. | Not locked. G1, G2, G4, G5. |
 
 `docs/LOCKED_DECISIONS.md` (last updated 2026-10-28) is the source of truth. Where this note and that file differ, the locked file wins. A point the locked file does not settle is listed in [Gaps that need a locked decision](#9-gaps-that-need-a-locked-decision) and is not given a value here.
 
-Layer 0 is the code this note calls. It is not on `main`. The interfaces below were read from `origin/cursor/layer0-smoke-4153` at `2ead726` (28 October 2026, 10:30 Africa/Johannesburg), which contains the calculation engine, LMS-owned configuration, the ledger, and servicing orchestration. Enigma's port was read from `origin/cursor/enigma-interface-d0c7` at `0cabd41`. This layer calls those functions. It does not re-implement interest, fees, allocation, in-duplum, settlement arithmetic, or business-day counting.
+This layer calls the Layer 0 functions. It does not re-implement interest, fees, allocation, in-duplum, settlement arithmetic, or business-day counting. The interfaces were read from `origin/cursor/layer0-smoke-4153` at `2ead726` (28 October 2026, 10:30 Africa/Johannesburg) and merged onto this branch. Enigma's port was read from `origin/cursor/enigma-interface-d0c7` at `0cabd41`. Locked decisions on this branch stay the copy from `main`, including capitalise-then-allocate at 00:00.
 
 Dates in this note are Africa/Johannesburg civil dates. `lms_config.calendar.value_date` assigns that date. `value_instant` is 00:00 on that date. The engine does not convert time zones itself.
 
@@ -460,8 +487,8 @@ These are disagreements between the locked file, the Act or regulations, and des
 
 | # | What conflicts | What this draft does |
 | --- | --- | --- |
-| C1 | The task says provider legal name and NCR number come from configuration. `docs/lms-owned-configuration.md` says the LMS does not own either, copies the NCR number from Enigma onto the agreement pin, and has nowhere to type a competing number. `OrganisationContext` on the Enigma port returns `legal_name` and `trading_name`. The Enigma design says Enigma does not hold the NCR number and that an LMS tenant attribute would, and it marks that store as outside locked decision 15. The pin type has `ncr_registration_number` and does not have a legal name. `cfg_organisation_settings` stores neither. | Fail closed until gap G11 names the store. No new column is specified. |
-| C2 | `cfg_brand` carries a display name, support contacts, and a footer. The task says branding is the logo only. Regulation 35(a) still requires a trading name, addresses, a telephone, and, where relevant, a payment account. | Paint the logo only. Do not fill regulation 35(a)(ii), (iv), (v), or (vi) from `cfg_brand`. |
+| C1 | Locked decision 15: the LMS stores only opaque organisation ids and does not re-implement organisation identity. The statements task says legal name, NCR number, trading name, addresses, telephone, and payment-account details are read from LMS configuration, not from Enigma. `docs/lms-owned-configuration.md` says the LMS does not own legal name or the NCR number. The Enigma port returns `legal_name` and says Enigma does not hold the NCR number. | The statements layer reads `lms_config.compliance.ComplianceStore` (table `lms.cfg_provider_compliance`). It does not call Enigma for those fields. It does not change decision 15. A missing or blank required field fails closed. Consumer identity stays the frozen loan fields (decision 16). |
+| C2 | `cfg_brand` carries a display name, support contacts, and a footer. Regulation 35(a) requires a trading name, addresses, a telephone, and payment-account details. | Those regulation 35 fields are copied from `ProviderCompliance`, not from `cfg_brand`. The logo is not painted in this implementation (G18). |
 | C3 | Two transcriptions of regulation 35 disagree on "Form 26 or" versus "Form 26 and", and on whether item (g)(i) is the previous closing balance or the previous opening balance. | Use section 109(1): this opening equals the previous closing, per loan. Do not pick the gazette sentence. |
 | C4 | An earlier servicing note printed the consumer address "as at the statement date". Locked decision 16 freezes the service address at booking. | Print the frozen service address. Gap G15 records the regulation's word "address". |
 | C5 | An earlier servicing note put a lay-by pair in one statement section. The ledger keeps a child account with its own balances. Locked decision 4 says the pair is one loan and not security. Locked decision 12 says each loan keeps its own opening and closing balance. | One client document. Parent and child each keep the balances the ledger stores. They are not added together and the hold is not netted off principal. |
@@ -472,7 +499,7 @@ These are disagreements between the locked file, the Act or regulations, and des
 
 ## 9. Gaps that need a locked decision
 
-Each item fails closed, or is stored as inputs without a total, until the locked file names the rule. None of these is given a default in this draft.
+None of these is given a locked default. Where the code stores a labelled figure or returns an enquiry anyway, the item says so. It does not invent the missing rule.
 
 ### G1. Section 109 total
 
@@ -512,11 +539,11 @@ Intake that calls `post_payment` before that value date's `bill_interest` and `l
 
 ### G10. Section 110 repeat and retention
 
-Section 110(4)(a) excuses a further written statement within three months. Section 110(4)(b) excuses information more than three years after closure. The locked file does not say what "such a statement" covers, or which event closes the account for the three-year count. A request that meets either description fails closed.
+Section 110(4)(a) excuses a further written statement within three months. Section 110(4)(b) excuses information more than three years after closure. The locked file does not say what "such a statement" covers, or which event closes the account for the three-year count. The enquiry still returns the figures. It does not refuse, and it does not write a periodic statement.
 
 ### G11. Legal name and NCR number
 
-See conflict C1. No statement is issued while the legal name has no store, while an NCR number required below is blank, or while loans on the same statement carry different NCR copies. A short-term or unsecured loan requires the NCR number. Whether a statement that contains only zero-cost or lay-by instruments requires one is not in the locked file, so that statement is also refused when the number is blank. A later lock can exempt it. This draft does not.
+Conflict C1. The statements task names LMS configuration as the source. `ComplianceStore.require` fails closed when the row is missing or a required field is blank. Decision 15 is unchanged, so this store is not a locked rule. Whether a zero-cost or lay-by-only statement may omit the NCR number is still not in the locked file. The code requires the number for every statement.
 
 ### G12. Non-NCA instruments on the same document
 
@@ -524,11 +551,11 @@ Decision 12 puts every loan of the client at that organisation on the one statem
 
 ### G13. Regulation 35 provider contact fields
 
-Trading name, physical address, postal address, telephone, and the consumer's payment-account details are prescribed for a small-agreement statement. They are not branding, and they are not in the locked election list. No source is named. The cells stay empty and the small-agreement statement is not treated as complete.
+Trading name, physical address, postal address, telephone, and the payment-account details are read from the same LMS compliance row as the legal name (C1). They are not in the locked election list (decision 19). Trading name may be blank because regulation 35(a)(ii) says "if any". The other fields fail closed when blank. Decision 15 does not name this row.
 
 ### G14. Frozen identity differs across loans
 
-Decision 16 freezes name, identity number, and service address at each booking. A later booking can freeze a different name. Regulation 35(b)(i) is one consumer name on the document. No rule picks among the frozen names. The statement is refused.
+Decision 16 freezes name, identity number, and service address at each booking. A later booking can freeze a different name. Regulation 35(b)(i) is one consumer name on the document. No rule picks among the frozen names. Each loan section keeps the name frozen on that loan. The code does not refuse when those names differ, and it does not pick one name for the document. This remains open.
 
 ### G15. Address on the statement
 
