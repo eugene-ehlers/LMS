@@ -79,6 +79,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A 360-day year is not required for Day-1.
 - Interest and fee accrual must use the same day-count and base method that was used to calculate the contractual instalment. Do not use a different method for accrual than was used for the instalment quote.
 - Converting a rate between weekly, monthly, annual or daily must follow NCA prescriptions and well-supported mathematical benchmarks so the conversion is defensible.
+- Weekly periods = actual days in the year / 7. This caters for leap years. A fixed 52 or a fixed 365 is not used.
 
 ## 6. Default definition — contractual breach vs collections default
 
@@ -162,6 +163,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Initially the platform’s own engine can be forced; long-term the LMS must accept loans from external decision engines.
 - Quote date and disbursement date may differ. The contractual instalment accepted by the client is binding.
 - The contractual instalment must be stored on the agreement.
+- Any change to the contractual instalment made by the LMS requires client consent.
 - A restructure changes the contract and therefore changes the instalment.
 - Arrears are added to the amount due. The contractual instalment itself remains the same; the amount due is larger because it includes arrears.
 - If an instalment is missed, the loan remains open even after the contractual term has passed.
@@ -210,6 +212,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Proviso: rounding must not create a compliance issue (example: an instalment rounded up above the affordability figure previously aligned with the client).
 - Annual-equivalent rate for disclosure = periodic rate × number of periods per year (simple nominal, not effective). Disclose both the periodic rate and the nominal annual rate.
 - A discount affects the rate value used in the calculation. It does not change the annualisation method.
+- Weekly periods for annualisation = actual days in the year / 7.
 
 ## 18. Default administration and collection-cost tariffs
 
