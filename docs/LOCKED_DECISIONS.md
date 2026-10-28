@@ -317,3 +317,16 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Staff with the appropriate role can access account information and provide it to a consumer who phones a call centre.
 - The NCR registration number must be displayed on all NCA communications.
 - The LMS sends a regular push when the monthly statement for the month is ready. The push tells the consumer the statement is available. It does not contain collection content.
+
+## Gaps raised, not decided — statement-ready push
+
+Found while implementing the statement-ready push. These are not rules. No default was chosen.
+
+- Layer 1 `Documents.issue_statement` (`origin/cursor/layer1-gap-closures-ccde` at `a99b1b5`) stores an issued statement and has no read-only readiness method. Calling it for a missing period generates the statement. The push reads `Documents.statements` and does not call `issue_statement`.
+- The Enigma port (`origin/cursor/enigma-interface-d0c7` at `0cabd41`) has no consumer-registration operation. `read_live_identity` returns email and mobile. The push does not call it. A dummy answers registration until Enigma exposes a check that does not return contact details.
+- "One month" between successive Day-1 statements (section 12) is not defined as a day count or a calendar-month boundary. The push does not choose a length. Layer 1 does not enforce it either.
+- A stored statement does not carry the section 21 classification or a pure-hosting flag. A blank NCR number on this push fails closed. That does not decide the Laybye/BNPL or pure-hosting exemption.
+- The NCR character format is not specified. A non-blank value is accepted, including an all-zero test number. No pattern was added.
+- Section 27 does not name the call-centre role. Staff access fails closed unless Enigma allows `lms.account.statement.read`, the name already on the Enigma port catalogue. No new role was locked.
+- Enigma registration and sign-on URLs are not specified. An unset URL fails closed. No URL was invented.
+- Section 23 requires an Enigma identity on the audit record. No machine action is named for this push. A missing, timed-out, suspended, or ambiguous actor session fails closed. No system user was invented.

@@ -1,0 +1,9 @@
+[project]
+name = "lms"
+version = "0.1.0"
+description = "Statement-ready push. Calls the Layer 1 statement store and an Enigma registration check."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
