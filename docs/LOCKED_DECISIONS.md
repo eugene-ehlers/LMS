@@ -155,6 +155,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - LMS stores only opaque person_id and organisation_id.
 - LMS does not re-implement person or organisation identity.
 - Fail closed on Enigma timeout, ambiguous status, or a clear suspended enrolment.
+- Enigma does not hold or return the NCR registration number. The NCR number is an LMS compliance attribute, not an identity attribute.
 
 ## 16. Identity freeze on agreement
 
@@ -191,3 +192,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It can be manual or formula-based.
 - Different clients may use different formulas based on arrears, recency, months on book, promise-to-pay adherence, contactability, and other factors.
 - No platform default is imposed.
+
+## 21. NCR registration number
+
+- The NCR registration number is stored as an LMS tenant attribute (organisation level).
+- Enigma does not hold or return it.
+- It is required on NCA communications and regulatory extracts for micro and unsecured personal loans.
+- It is not required for pure hosting or for Laybye/BNPL.
+- A blank NCR number blocks those communications and extracts. It does not block booking.
