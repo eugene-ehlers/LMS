@@ -374,6 +374,55 @@ def test_provision_and_prescription_have_no_platform_formula():
     assert missing_formula.value.code == "prescription-formula-unset"
 
 
+def test_formulas_are_not_given_promise_to_pay_or_contactability():
+    collections, _servicing, record, _stub = opened(
+        "collections_default",
+        provision_mode="formula",
+        prescription_mode="formula",
+    )
+    seen: list[set[str]] = []
+
+    def provision_formula(facts):
+        seen.append(set(facts.__dataclass_fields__))
+        return facts.arrears_cents
+
+    stored = collections.record_provision(
+        record.agreement_id,
+        recognised_at=at(date(2026, 6, 16)),
+        formula=provision_formula,
+    )
+    assert stored.provision_cents == 60_000
+    assert seen == [{"arrears_cents", "recency_days", "months_on_book", "as_of"}]
+
+    def prescription_formula(facts):
+        seen.append(set(facts.__dataclass_fields__))
+        return facts.months_on_book >= 0
+
+    review = collections.open_prescription_review(
+        record.agreement_id,
+        recognised_at=at(date(2026, 6, 16)),
+        formula=prescription_formula,
+    )
+    assert review.prescription_review is True
+    assert seen[1] == seen[0]
+    with pytest.raises(TypeError):
+        collections.record_provision(
+            record.agreement_id,
+            recognised_at=at(date(2026, 6, 16)),
+            formula=provision_formula,
+            promise_to_pay="2026-06-20",
+            contactability="2",
+        )
+    with pytest.raises(TypeError):
+        collections.open_prescription_review(
+            record.agreement_id,
+            recognised_at=at(date(2026, 6, 16)),
+            formula=prescription_formula,
+            promise_to_pay="kept",
+            contactability="score",
+        )
+
+
 def test_collections_elections_are_in_the_configuration_read():
     migration = (Path(__file__).resolve().parents[1] / "db" / "migrations" / "0007_collections_elections.sql").read_text()
     assert "in_duplum_trigger" in migration
