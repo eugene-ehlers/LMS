@@ -13,6 +13,7 @@ from lms.calc.models import (
     Agreement,
     DayCount,
     Product,
+    RepoFallChoice,
     RepoRate,
     micro_cap,
 )
@@ -38,32 +39,105 @@ def repo_on(day: date, repos: tuple[RepoRate, ...]) -> Decimal:
     return selected
 
 
-def personal_annual_rate(day: date, margin: Decimal, repos: tuple[RepoRate, ...]) -> Decimal:
-    """RR + margin, and never above RR + 21% (reg 42 Table A, item 3)."""
+def personal_annual_rate(
+    day: date,
+    margin: Decimal,
+    repos: tuple[RepoRate, ...],
+    *,
+    advance_date: date,
+    repo_fall: RepoFallChoice | None,
+) -> Decimal:
+    """Contract rate struck at advance, then the provider's §11 choice.
+
+    The contract rate is the repo on the advance date plus the agreed margin.
+    The statutory cap on a later day is that day's repo plus 21 points.
+    Option A keeps the contract rate. Option B uses the lower of the contract
+    rate and that cap. A repo rise is not given its own rule; neither option
+    produces a rate above the contract rate.
+    """
     if margin < 0 or margin > UNSECURED_MAX_MARGIN:
         raise RuleError("unsecured-margin", "Margin must be between 0 and 21 percentage points.")
-    return repo_on(day, repos) + margin
+    if repo_fall is None:
+        raise RuleError(
+            "repo-choice-unset",
+            "Repo-rate fall choice is unset. LOCKED_DECISIONS §11 fails closed.",
+        )
+    contract = repo_on(advance_date, repos) + margin
+    cap = repo_on(day, repos) + UNSECURED_MAX_MARGIN
+    if repo_fall == RepoFallChoice.CONTRACT_RATE_CONTINUES:
+        return contract
+    if repo_fall == RepoFallChoice.LOWER_OF_CONTRACT_AND_CAP:
+        return min(contract, cap)
+    raise RuleError("repo-choice-unset", f"Unknown repo-fall choice {repo_fall}.")
 
 
 def divisor_days(day: date, product: Product, day_count: DayCount) -> int:
     if product == Product.MICRO:
-        if day_count == DayCount.FIXED:
+        if day_count in (DayCount.FIXED, DayCount.THIRTY_360):
             return 30
         return calendar.monthrange(day.year, day.month)[1]
     if product == Product.PERSONAL:
+        if day_count == DayCount.THIRTY_360:
+            return 360
         if day_count == DayCount.FIXED:
             return 365
         return 366 if calendar.isleap(day.year) else 365
     raise RuleError("product", f"{product} does not accrue NCA interest.")
 
 
-def periodic_rate(agreement: Agreement, day: date, repos: tuple[RepoRate, ...]) -> Decimal:
+def accrual_weight(day: date, day_count: DayCount) -> int:
+    """How many 30/360 day-counts this calendar day carries. Actual and fixed are 1.
+
+    Standard 30/360 gives every month 30 day-counts and the year 360. The 31st
+    carries none. The last day of February carries the days needed to reach 30.
+    """
+    if day_count != DayCount.THIRTY_360:
+        return 1
+    if day.day == 31:
+        return 0
+    if day.month == 2:
+        last = calendar.monthrange(day.year, day.month)[1]
+        if day.day == last:
+            return 30 - (last - 1)
+    return 1
+
+
+def periodic_rate(
+    agreement: Agreement,
+    day: date,
+    repos: tuple[RepoRate, ...],
+    *,
+    repo_fall: RepoFallChoice | None = None,
+) -> Decimal:
     """Contractual base rate, before any campaign discount."""
     if agreement.product == Product.MICRO:
         return agreement.monthly_rate
     if agreement.product == Product.PERSONAL:
-        return personal_annual_rate(day, agreement.margin_annual, repos)
+        return personal_annual_rate(
+            day,
+            agreement.margin_annual,
+            repos,
+            advance_date=agreement.advance_date,
+            repo_fall=repo_fall,
+        )
     raise RuleError("product", f"{agreement.product} does not accrue NCA interest.")
+
+
+def nominal_annual_rate(periodic_rate_value: Decimal, periods_per_year: int) -> Decimal:
+    """LOCKED_DECISIONS §17: periodic rate × periods per year, simple nominal."""
+    if periods_per_year <= 0:
+        raise RuleError("disclosure", "Periods per year must be positive.")
+    if periodic_rate_value < 0:
+        raise RuleError("disclosure", "Periodic rate cannot be negative.")
+    return periodic_rate_value * Decimal(periods_per_year)
+
+
+def periods_per_year(product: Product) -> int:
+    if product == Product.MICRO:
+        return 12
+    if product == Product.PERSONAL:
+        return 1
+    raise RuleError("product", f"{product} has no NCA periodic rate to annualise.")
 
 
 def campaign_terms(
@@ -72,6 +146,7 @@ def campaign_terms(
     repos: tuple[RepoRate, ...] = (),
     *,
     discount_active: bool,
+    repo_fall: RepoFallChoice | None = None,
 ) -> tuple[Decimal, Decimal, Decimal]:
     """Return ``(base_rate, stored_discount, effective_rate)``.
 
@@ -80,7 +155,7 @@ def campaign_terms(
     and the base rate once it has fallen away. It is never negative and never above
     the contractual base. A discount larger than the base produces an effective 0%.
     """
-    base = periodic_rate(agreement, day, repos)
+    base = periodic_rate(agreement, day, repos, repo_fall=repo_fall)
     stored = agreement.campaign_interest_discount
     if stored < 0:
         raise RuleError("campaign", "Campaign interest discount cannot be negative.")
@@ -100,6 +175,8 @@ def daily_interest_rands(
     base_cents: int,
     periodic_rate_value: Decimal,
     divisor: int,
+    *,
+    weight: int = 1,
 ) -> Decimal:
     """Reg 40(2): deferred amount × rate / number of days in the month or year.
 
@@ -113,9 +190,11 @@ def daily_interest_rands(
         raise RuleError("interest", "Day-count divisor must be positive.")
     if periodic_rate_value < 0:
         raise RuleError("interest", "Interest rate cannot be negative.")
-    if base_cents == 0 or periodic_rate_value == 0:
+    if weight < 0:
+        raise RuleError("interest", "Accrual weight cannot be negative.")
+    if base_cents == 0 or periodic_rate_value == 0 or weight == 0:
         return Decimal("0")
-    raw = (Decimal(base_cents) / Decimal(100)) * periodic_rate_value / Decimal(divisor)
+    raw = (Decimal(base_cents) / Decimal(100)) * periodic_rate_value / Decimal(divisor) * Decimal(weight)
     return quantize_interest(raw)
 
 
@@ -127,6 +206,7 @@ def interest_for_dates(
     end: date,
     repos: tuple[RepoRate, ...] = (),
     day_count: DayCount = DayCount.ACTUAL,
+    repo_fall: RepoFallChoice | None = None,
 ) -> Decimal:
     """Exact (10 dp) interest from ``start`` through ``end`` inclusive on a constant base."""
     if end < start:
@@ -136,8 +216,9 @@ def interest_for_dates(
     while day <= end:
         total += daily_interest_rands(
             base_cents,
-            periodic_rate(agreement, day, repos),
+            periodic_rate(agreement, day, repos, repo_fall=repo_fall),
             divisor_days(day, agreement.product, day_count),
+            weight=accrual_weight(day, day_count),
         )
         day = date.fromordinal(day.toordinal() + 1)
     return total

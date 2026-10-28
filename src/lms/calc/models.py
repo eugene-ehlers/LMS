@@ -40,10 +40,25 @@ class DuplumReset(StrEnum):
 
 
 class DayCount(StrEnum):
-    """Reg 40(2)(c)(iii) and (iv) leave the divisor to the agreement."""
+    """Provider day-count. Actual/actual is the recommendation for new products."""
 
-    ACTUAL = "actual"  # days in that month, and 365 or 366 in that year
-    FIXED = "fixed"  # 30-day month and 365-day year
+    ACTUAL = "actual"  # actual days in the month, and 365 or 366 in the year
+    FIXED = "fixed"  # regulation 40's 30-day month and 365-day year; not 30/360
+    THIRTY_360 = "thirty_360"  # standard 30/360: 30-day months, 360-day year
+
+
+class RepoFallChoice(StrEnum):
+    """LOCKED_DECISIONS §11. There is no platform default."""
+
+    CONTRACT_RATE_CONTINUES = "contract_rate_continues"
+    LOWER_OF_CONTRACT_AND_CAP = "lower_of_contract_and_cap"
+
+
+class PrepaymentChoice(StrEnum):
+    """LOCKED_DECISIONS §13. There is no platform default."""
+
+    SHORTEN_TERM = "shorten_term"  # reduce the latest unpaid slices
+    DROP_INSTALMENT = "drop_instalment"  # reduce the earliest unpaid slices
 
 
 # Prescribed maxima. Sources are cited in docs/day1-calculation-rules.md.
@@ -85,7 +100,7 @@ def agreement_size(principal_cents: int, *, mortgage: bool = False) -> str:
 
 @dataclass(frozen=True)
 class Policy:
-    """Day-1 product policy. Defaults are the locked choices; tests flip them to show alternatives."""
+    """Day-1 product policy. Unset leniency, threshold, and repo-fall fail closed."""
 
     fee_cap_basis: FeeCapBasis = FeeCapBasis.EXCLUSIVE
     terminal_service_fee: TerminalServiceFee = TerminalServiceFee.FULL
@@ -95,12 +110,14 @@ class Policy:
     service_fee_monthly_cents: int = SERVICE_FEE_MONTHLY_CAP_CENTS
     vat_registered: bool = True
     count_vat_in_duplum: bool = True
-    # Preserved calculator behaviour. LOCKED_DECISIONS §6 makes both configurable
-    # and gives 4 or 5 days, and 95%, as examples. It does not set the unset values.
-    # leniency_days=1 flags on the calendar day after the due date, which is the
-    # accepted calculator's rule. See the raised points in the rules document.
-    leniency_days: int = 1
-    full_payment_threshold_percent: Decimal = Decimal("100")
+    # §6: no numeric default. None fails closed when a day is folded.
+    leniency_days: int | None = None
+    full_payment_threshold_percent: Decimal | None = None
+    # §11: no platform default.
+    repo_fall: RepoFallChoice | None = None
+    # §13 and §19: no platform default. Required only when a payment would
+    # reduce principal that is not yet due.
+    prepayment_choice: PrepaymentChoice | None = None
 
     def __post_init__(self) -> None:
         if self.service_fee_monthly_cents < 0:
@@ -110,15 +127,18 @@ class Policy:
                 "service-fee-cap",
                 "Monthly service fee exceeds the prescribed R60 cap.",
             )
-        if type(self.leniency_days) is not int or self.leniency_days < 0:
+        if self.leniency_days is not None and (
+            type(self.leniency_days) is not int or self.leniency_days < 0
+        ):
             raise RuleError("leniency", "Leniency days must be a non-negative integer.")
-        threshold = Decimal(self.full_payment_threshold_percent)
-        if threshold < 0 or threshold > 100:
-            raise RuleError(
-                "threshold",
-                "Full-payment threshold must be between 0 and 100 percent.",
-            )
-        object.__setattr__(self, "full_payment_threshold_percent", threshold)
+        if self.full_payment_threshold_percent is not None:
+            threshold = Decimal(self.full_payment_threshold_percent)
+            if threshold < 0 or threshold > 100:
+                raise RuleError(
+                    "threshold",
+                    "Full-payment threshold must be between 0 and 100 percent.",
+                )
+            object.__setattr__(self, "full_payment_threshold_percent", threshold)
 
 
 @dataclass(frozen=True)
@@ -177,6 +197,10 @@ class Agreement:
     campaign_initiation_discount_cents: int = 0
     campaign_service_discount_cents: int = 0
     campaign_falls_away_on_default: bool = False
+    # §2: short-term and unsecured default to non-capitalised. True is the
+    # caller's statement that this product may capitalise. The engine does not
+    # keep a section 102 product list.
+    initiation_capitalised: bool = False
 
     def __post_init__(self) -> None:
         if not self.credit_provider_org_id or not self.consumer_party_id:
@@ -296,6 +320,8 @@ class Payment:
     # ``initiation_upfront`` is applied to the initiation fee ahead of same-day interest.
     purpose: str = "ordinary"
     source: str = "consumer"  # consumer | laybye_security
+    # Recognition order when several receipts share a calendar day (§1).
+    sequence: int = 0
 
     def __post_init__(self) -> None:
         if self.cents <= 0:

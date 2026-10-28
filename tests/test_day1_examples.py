@@ -25,10 +25,15 @@ from lms.calc.models import (
     FeeCapBasis,
     Payment,
     Policy,
+    PrepaymentChoice,
     Product,
+    RepoFallChoice,
     RepoRate,
     agreement_size,
 )
+
+# The engine fails closed. These tests state the customer's choice.
+STATED = dict(leniency_days=1, full_payment_threshold_percent=Decimal("100"))
 from lms.calc.money import RuleError, to_cents
 from lms.calc.examples import _micro, _personal
 
@@ -69,9 +74,10 @@ def test_first_versus_subsequent_rate():
 
 def test_repo_step():
     assert example_repo_step() == {
-        "before_hike": 3_836,
-        "after_hike": 4_644,
-        "total": 8_479,
+        "rise_continues": 8_438,
+        "rise_lower": 8_438,
+        "fall_continues": 8_514,
+        "fall_lower": 8_473,
         "leap_day_actual": 772,
         "leap_day_fixed_365": 774,
     }
@@ -79,18 +85,18 @@ def test_repo_step():
 
 def test_service_fee_prorata_and_hypothetical_vat():
     assert example_service_fee_and_vat() == {
-        "march_service_ex_vat": 3_290,
-        "march_service_vat": 494,
-        "march_service_total": 3_784,
+        "march_service_ex_vat": 6_000,
+        "march_service_vat": 900,
+        "march_service_total": 6_900,
         "april_full_ex_vat": 6_000,
         "april_full_vat": 960,
         "april_full_total": 6_960,
         "april_prorata_total": 2_320,
         "quote_full_interest": 17_635,
-        "quote_full_fees": 64_219,
+        "quote_full_fees": 67_335,
         "quote_full_principal": 400_000,
-        "quote_full_total": 481_854,
-        "quote_prorata_total": 477_214,
+        "quote_full_total": 484_970,
+        "quote_prorata_total": 480_330,
         "early_termination": 0,
         "valid_until_day": 17,
     }
@@ -133,9 +139,9 @@ def test_duplum_freeze_release_and_reset_choice():
 
 def test_settlement_quote_window_and_short_payment():
     assert example_settlement() == {
-        "quote_total": 481_794,
+        "quote_total": 484_910,
         "quote_interest": 17_635,
-        "quote_fees": 64_159,
+        "quote_fees": 67_275,
         "quote_principal": 400_000,
         "early_termination": 0,
         "valid_until_day": 17,
@@ -170,7 +176,7 @@ def test_laybye_penalty_and_security_application():
 
 def test_full_periods_land_on_the_stated_rate():
     micro = _micro(200_000, date(2026, 1, 1), date(2026, 7, 1))
-    state = run(micro, until=date(2026, 6, 30), vat_rates=VAT_15).state
+    state = run(micro, until=date(2026, 6, 30), policy=Policy(**STATED), vat_rates=VAT_15).state
     assert charge_remaining(state, "interest") == 60_000  # 6 × 5% × R2,000
 
     personal = _personal(1_000_000, date(2026, 1, 1), date(2027, 1, 1))
@@ -180,21 +186,22 @@ def test_full_periods_land_on_the_stated_rate():
         start=date(2026, 1, 1),
         end=date(2026, 12, 31),
         repos=(RepoRate(date(2026, 1, 1), Decimal("0.0725")),),
+        repo_fall=RepoFallChoice.CONTRACT_RATE_CONTINUES,
     )
     assert to_cents(exact) == to_cents(Decimal(10_000) * Decimal("0.2825"))
 
 
 def test_deferred_initiation_does_not_start_default_and_does_not_bear_interest():
     agreement = _micro(100_000, date(2026, 3, 1), date(2026, 9, 1))
-    state = run(agreement, until=date(2026, 3, 2), vat_rates=VAT_15).state
+    state = run(agreement, until=date(2026, 3, 2), policy=Policy(**STATED), vat_rates=VAT_15).state
     assert state.in_default is False
     assert charge_remaining(state, "interest") == 0  # not billed until month-end
 
-    month = run(agreement, until=date(2026, 3, 31), vat_rates=VAT_15).state
+    month = run(agreement, until=date(2026, 3, 31), policy=Policy(**STATED), vat_rates=VAT_15).state
     with_fee = run(
         agreement,
         until=date(2026, 3, 31),
-        policy=Policy(interest_on_deferred_initiation=True),
+        policy=Policy(interest_on_deferred_initiation=True, **STATED),
         vat_rates=VAT_15,
     ).state
     assert charge_remaining(month, "interest") == 5_000
@@ -219,12 +226,15 @@ def test_upfront_initiation_payment_clears_the_fee():
     total = initiation_fee(
         100_000, on=advance, vat_rates=VAT_15, basis=FeeCapBasis.EXCLUSIVE
     )[2]
-    unpaid = run(agreement, until=advance + timedelta(days=1), vat_rates=VAT_15).state
+    unpaid = run(
+        agreement, until=advance + timedelta(days=1), policy=Policy(**STATED), vat_rates=VAT_15
+    ).state
     assert unpaid.in_default is True
     paid = run(
         agreement,
         (Payment(advance, total, purpose="initiation_upfront"),),
         until=advance + timedelta(days=1),
+        policy=Policy(**STATED),
         vat_rates=VAT_15,
     ).state
     assert charge_remaining(paid, "initiation") == 0
@@ -278,6 +288,7 @@ def test_principal_prepayment_reduces_the_earliest_slice():
         agreement,
         (Payment(advance, fee, purpose="initiation_upfront"),),
         until=date(2026, 3, 31),
+        policy=Policy(**STATED),
         vat_rates=VAT_15,
     ).state
     due_cost = sum(charge.remaining_cents for charge in preview.charges)
@@ -288,6 +299,7 @@ def test_principal_prepayment_reduces_the_earliest_slice():
             Payment(date(2026, 3, 31), due_cost + 1_000),
         ),
         until=date(2026, 3, 31),
+        policy=Policy(prepayment_choice=PrepaymentChoice.DROP_INSTALMENT, **STATED),
         vat_rates=VAT_15,
     ).state
     assert [(slice_.due_on, slice_.remaining_cents) for slice_ in state.principal_slices] == [

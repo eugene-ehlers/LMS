@@ -4,7 +4,7 @@ Single source of truth for all decisions that have been researched and locked.
 All future agents, chats and developers must follow these rules.
 Do not re-open a locked decision without an explicit change request.
 
-Last updated: 2026-10-27
+Last updated: 2026-10-28
 
 ## Standing instruction for all agents
 
@@ -20,6 +20,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A loan, settlement or deposit concluded at any time on a calendar day is treated as having occurred at 00:00 on that day.
 - Reversals use the same value date the system originally recognised.
 - A payment received on a flag date is treated as 00:00 on that day and is visible to the morning default check.
+- When two events are both recognised at 00:00 on the same calendar day, process them in the order they were recognised by the system (stable sort by receipt sequence).
 
 ## 2. Initiation fee treatment
 
@@ -27,6 +28,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - If not capitalised → treated as a due fee/charge under section 126.
 - Same logic applies to related fee points.
 - A capitalised initiation fee that was capitalised before the default date sits inside the in-duplum ceiling.
+- Day-1: only products where section 102 explicitly allows capitalisation may capitalise the initiation fee. Short-term and unsecured default to non-capitalised.
 
 ## 3. Zero rates, zero fees and campaigns
 
@@ -43,7 +45,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - Parent/child relationship required. Contracts must treat the pair as one loan (not as security that would make the loan secured).
 - Payments can be allocated across both the loan and the linked Laybye.
-- Interest is calculated on the net balance (loan principal minus Laybye hold). This is evidence that the hold is treated as a payment against the loan rather than a separate savings product.
+- Interest is calculated on the net balance (loan principal minus Laybye hold). The hold reduces only the interest base; principal remains gross for in-duplum and settlement.
 - Only one monthly service fee (levied on the parent).
 - Client can consolidate or settle when Laybye ≥ settlement balance.
 - Credit life pays the loan first; Laybye covers any shortfall; surplus goes to the estate if treated as a cash deposit. If structured as insurance, treatment follows whether a beneficiary was named.
@@ -78,18 +80,20 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A payment during the default reduces what is owed but does not reset the counter for that episode.
 - A cure (account brought out of default) closes the episode.
 - A new default starts a fresh episode with a new ceiling based on the unpaid principal at the start of the new default.
-- Three section 103(5) edges not decided by Nedbank remain unsigned; the clip stays off until counsel confirms.
+- Three section 103(5) edges not decided by Nedbank remain unnamed and unsigned; the clip stays off until counsel lists and confirms them. No implementation assumption is made.
 - This is not an absolute single-lifetime ceiling; the law provides for the rule to halt and start anew on a subsequent default.
 - Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the fresh-episode rule above.
 
 ## 8. Payment allocation
 
 - Section 126 order: due or unpaid interest, then due or unpaid fees or charges, then principal.
+- Only due or unpaid amounts are allocated. Memo accruals that are not yet allowed to be debited are not allocatable.
+- When multiple fee buckets are all already due, order is: collection costs, default administration, credit insurance, service fee, initiation fee (earliest due date first within each bucket).
 
 ## 9. Service-fee pro-rata and VAT
 
 - Pro-rata only in the opening month (disbursement to first payment due).
-- Opening-month fraction = inclusive days in the month / actual days in that month.
+- Opening-month fraction = inclusive calendar days from the disbursement date to the day before the first due date, divided by the actual days in the disbursement month.
 - Full monthly fee thereafter, including the settlement month, subject to the R60 cap.
 - Rand maxima (R60, R165, R1 050) are excluding VAT by default (NCR January 2019 note). Provider may elect inclusive if required.
 - Consistent with regulation 44(4) and the Micro Finance South Africa judgment.
@@ -110,7 +114,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 ## 12. Statements
 
-- One statement per client showing all loans (not a separate statement per loan).
+- One statement per client per credit-provider organisation, showing all of that client's loans with that organisation.
+- Each loan retains its own opening and closing balance so section 109 still holds.
 
 ## 13. Decision engine, instalments and additional fees
 
@@ -123,7 +128,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Prefer keeping the contractual instalment the same during the loan term.
 - Additional fees outside interest, initiation, monthly service fee and credit life (for example certain collection costs) should be added as a further monthly fee (fixed or variable), not capitalised into the amortisation schedule.
 - A loan restructuring capability exists so that other costs can be added during the term by creating a new instalment, pricing and term when required.
-- “Subsequent” short-term loan is counted per credit-provider organisation.
+- “Subsequent” short-term loan is counted per credit-provider organisation and per calendar year.
 
 ## 14. Payment frequencies
 
@@ -134,21 +139,31 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Enigma owns person identity, organisations, memberships, product enrolment, roles and mandates.
 - LMS stores only opaque person_id and organisation_id.
 - LMS does not re-implement person or organisation identity.
-- Fail closed on Enigma timeout or ambiguous status.
+- Fail closed on Enigma timeout, ambiguous status, or a clear suspended enrolment.
 
 ## 16. Identity freeze on agreement
 
 - Freeze name + ID number + service address at booking.
 - Subsequent changes in Enigma do not rewrite the concluded agreement.
 
-## 17. Rounding
+## 17. Rounding and disclosure
 
 - Round half-up to cents on billing.
-- Disclose the annual equivalent rate.
 - The same rounding rule must be applied everywhere rounding is required.
 - Proviso: rounding must not create a compliance issue (example: an instalment rounded up above the affordability figure previously aligned with the client).
+- Annual-equivalent rate for disclosure = periodic rate × number of periods per year (simple nominal, not effective). Disclose both the periodic rate and the nominal annual rate.
 
 ## 18. Default administration and collection-cost tariffs
 
 - Fail closed until a tariff row exists.
 - Prefer adding allowable extra costs as an additional monthly fee rather than capitalising them into the schedule.
+
+## 19. Storage of elections
+
+- The following elections are stored at organisation level with an optional product override (same pattern as leniency):
+  - VAT-inclusive election for rand maxima
+  - Late-disbursement instalment choice
+  - Partial-prepayment choice (shorten term or drop instalment)
+  - Interest on deferred initiation fee
+  - Repo-rate fall choice
+- Unset values fail closed.

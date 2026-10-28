@@ -113,6 +113,27 @@ def initiation_fee(
     return price_fee(cap, rate, basis, vat_registered=vat_registered)
 
 
+def opening_service_fraction(advance_date: date, first_due: date) -> Decimal:
+    """LOCKED_DECISIONS §9.
+
+    Inclusive calendar days from the disbursement date through the day before
+    the first due date, divided by the actual days in the disbursement month.
+    The monthly cap means the fraction cannot exceed one. A first due date on
+    or before disbursement has no opening window.
+    """
+    if first_due <= advance_date:
+        raise RuleError(
+            "service-fee",
+            "First due date must be after the disbursement date.",
+        )
+    days_in_month = calendar.monthrange(advance_date.year, advance_date.month)[1]
+    inclusive = (first_due - advance_date).days
+    fraction = Decimal(inclusive) / Decimal(days_in_month)
+    if fraction > 1:
+        return Decimal(1)
+    return fraction
+
+
 def service_fee_cents(
     *,
     on: date,
@@ -120,6 +141,7 @@ def service_fee_cents(
     period_end: date,
     monthly_cap_cents: int = SERVICE_FEE_MONTHLY_CAP_CENTS,
     full_month: bool = False,
+    fraction: Decimal | None = None,
     vat_rates: tuple[VatRate, ...],
     basis: FeeCapBasis,
     vat_registered: bool = True,
@@ -127,9 +149,8 @@ def service_fee_cents(
     """Service fee for one calendar month.
 
     ``period_start`` and ``period_end`` are inclusive civil dates and must fall in
-    the same calendar month. Reg 44(4) pro-rates the commencement month by
-    inclusive days over the actual days in that month. ``full_month`` charges the
-    monthly cap (the terminal-month maximum).
+    the same calendar month. ``fraction`` overrides that day count. The opening
+    month passes the §9 fraction. ``full_month`` charges the monthly cap.
     """
     if period_end < period_start:
         raise RuleError("service-fee", "Service-fee period is empty.")
@@ -137,11 +158,12 @@ def service_fee_cents(
         raise RuleError("service-fee", "Service fee is levied per calendar month.")
     if monthly_cap_cents > SERVICE_FEE_MONTHLY_CAP_CENTS:
         raise RuleError("service-fee-cap", "Monthly service fee exceeds R60.")
-    days_in_month = calendar.monthrange(period_start.year, period_start.month)[1]
-    inclusive = (period_end - period_start).days + 1
-    if inclusive > days_in_month:
-        raise RuleError("service-fee", "Service-fee period exceeds the calendar month.")
-    fraction = Decimal(1) if full_month else Decimal(inclusive) / Decimal(days_in_month)
+    if fraction is None:
+        days_in_month = calendar.monthrange(period_start.year, period_start.month)[1]
+        inclusive = (period_end - period_start).days + 1
+        if inclusive > days_in_month:
+            raise RuleError("service-fee", "Service-fee period exceeds the calendar month.")
+        fraction = Decimal(1) if full_month else Decimal(inclusive) / Decimal(days_in_month)
     rate = vat_on(on, vat_rates) if vat_registered else Decimal(0)
     return price_fee(
         monthly_cap_cents,

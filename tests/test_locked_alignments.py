@@ -14,7 +14,7 @@ from lms.calc.examples import (
 )
 from lms.calc.interest import campaign_terms
 from lms.calc.ledger import run
-from lms.calc.models import Agreement, Payment, Policy, Product, RepoRate
+from lms.calc.models import Agreement, Payment, Policy, Product, RepoFallChoice, RepoRate
 from lms.calc.money import RuleError
 
 
@@ -46,10 +46,10 @@ def test_leniency_flag_and_interest_that_keeps_accruing():
         "april4_in_default": 1,
         "april30_interest_leniency_4": 10_000,
         "april30_interest_leniency_1": 10_000,
-        "bundle": 111_900,
-        "pay_95": 106_305,
+        "bundle": 111_677,
+        "pay_95": 106_094,
         "pay_95_in_default": 0,
-        "pay_95_principal_left": 5_595,
+        "pay_95_principal_left": 5_583,
         "pay_short_in_default": 1,
     }
 
@@ -77,14 +77,14 @@ def test_leniency_zero_flags_on_the_due_date():
         agreement,
         opened,
         until=date(2026, 3, 31),
-        policy=Policy(leniency_days=0),
+        policy=Policy(leniency_days=0, full_payment_threshold_percent=Decimal("100")),
         vat_rates=VAT_15,
     ).state
     day_after = run(
         agreement,
         opened,
         until=date(2026, 3, 31),
-        policy=Policy(leniency_days=1),
+        policy=Policy(leniency_days=1, full_payment_threshold_percent=Decimal("100")),
         vat_rates=VAT_15,
     ).state
     assert on_due.in_default is True
@@ -149,13 +149,17 @@ def test_personal_campaign_stays_at_or_below_the_contractual_rate():
         margin_annual=Decimal("0.21"),
         campaign_interest_discount=Decimal("0.05"),
     )
+    choice = RepoFallChoice.CONTRACT_RATE_CONTINUES
     base, stored, effective = campaign_terms(
-        agreement, date(2026, 3, 1), repos, discount_active=True
+        agreement, date(2026, 3, 1), repos, discount_active=True, repo_fall=choice
     )
     assert base == Decimal("0.28")
     assert stored == Decimal("0.05")
     assert effective == Decimal("0.23")
-    assert campaign_terms(agreement, date(2026, 3, 1), repos, discount_active=False)[2] == base
+    assert (
+        campaign_terms(agreement, date(2026, 3, 1), repos, discount_active=False, repo_fall=choice)[2]
+        == base
+    )
     zeroed = Agreement(
         product=Product.PERSONAL,
         credit_provider_org_id="org",
@@ -167,8 +171,21 @@ def test_personal_campaign_stays_at_or_below_the_contractual_rate():
         margin_annual=Decimal("0.21"),
         campaign_interest_discount=Decimal("0.28"),
     )
-    assert campaign_terms(zeroed, date(2026, 3, 1), repos, discount_active=True)[2] == Decimal("0")
-    state = run(zeroed, until=date(2026, 3, 1), repos=repos, vat_rates=VAT_15).state
+    assert (
+        campaign_terms(zeroed, date(2026, 3, 1), repos, discount_active=True, repo_fall=choice)[2]
+        == Decimal("0")
+    )
+    state = run(
+        zeroed,
+        until=date(2026, 3, 1),
+        policy=Policy(
+            leniency_days=1,
+            full_payment_threshold_percent=Decimal("100"),
+            repo_fall=choice,
+        ),
+        repos=repos,
+        vat_rates=VAT_15,
+    ).state
     assert state.unbilled_ordinary == 0
     assert state.unbilled_duplum == 0
 
