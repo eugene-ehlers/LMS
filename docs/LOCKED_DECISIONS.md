@@ -39,6 +39,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Campaign pricing must be stored and displayed as base rate (x %) with a campaign discount (y %) deducted.
 - Discount cannot exceed the base rate. If the discount is higher, the effective rate is capped at 0 %.
 - Fees also cannot be negative. A fee discount that would produce a negative fee is capped at R0.
+- A discount affects the value used as the rate for calculations. It does not change the accrual method, day-count convention, or annualisation method.
+- A discount can apply to any product (annual, weekly, etc.).
 - Whether the discount falls away on default is a client choice, stored per campaign:
   - Option A: discount falls away on the chosen default event (contractual breach or collections default).
   - Option B: discount does not fall away.
@@ -76,6 +78,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Accrual frequency is daily.
 - A 360-day year is not required for Day-1.
 - Interest and fee accrual must use the same day-count and base method that was used to calculate the contractual instalment. Do not use a different method for accrual than was used for the instalment quote.
+- Converting a rate between weekly, monthly, annual or daily must follow NCA prescriptions and well-supported mathematical benchmarks so the conversion is defensible.
 
 ## 6. Default definition — contractual breach vs collections default
 
@@ -131,6 +134,9 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Full monthly fee thereafter, including the settlement month, subject to the R60 cap.
 - Rand maxima (R60, R165, R1 050) are excluding VAT by default (NCR January 2019 note). Provider may elect inclusive if required.
 - Consistent with regulation 44(4) and the Micro Finance South Africa judgment.
+- VAT applies to all vatable pricing components. If the client selects no VAT, it applies to all vatable components.
+- The LMS must always calculate VAT. If the client is exempt or has a lower effective rate because of input/output ratios, that is reflected in the rate (exempt = 0 % on a vatable component).
+- Non-vatable components must show no VAT rate, so that “not legally vatable” is distinguishable from “client does not want to charge VAT”.
 
 ## 10. Interest on deferred initiation fee
 
@@ -155,6 +161,10 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - Initially the platform’s own engine can be forced; long-term the LMS must accept loans from external decision engines.
 - Quote date and disbursement date may differ. The contractual instalment accepted by the client is binding.
+- The contractual instalment must be stored on the agreement.
+- A restructure changes the contract and therefore changes the instalment.
+- Arrears are added to the amount due. The contractual instalment itself remains the same; the amount due is larger because it includes arrears.
+- If an instalment is missed, the loan remains open even after the contractual term has passed.
 - Two options must be supported when disbursement occurs later than the quote date:
   - (a) adjust the instalment based on actual disbursement date and remaining term, or
   - (b) keep the original instalment and either settle early or write off a small residual at contractual end.
@@ -162,7 +172,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Prefer keeping the contractual instalment the same during the loan term.
 - Additional fees outside interest, initiation, monthly service fee and credit life (for example certain collection costs) should be added as a further monthly fee (fixed or variable), not capitalised into the amortisation schedule.
 - A loan restructuring capability exists so that other costs can be added during the term by creating a new instalment, pricing and term when required.
-- “Subsequent” short-term loan is counted per credit-provider organisation and per calendar year.
+- The 5 % / 3 % short-term rate distinction is supplied by the decision engine. The LMS uses the rate it is given and checks that calculations stay within the Act for that rate. The LMS does not contain the rules that decide whether a loan is concurrent, subsequent, settled-and-readvanced, or restructured. Those rules sit in the decision engine.
 - Interest and fee accrual must use the same method that was used to calculate the contractual instalment.
 
 ## 14. Payment frequencies
@@ -199,6 +209,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - The same rounding rule must be applied everywhere rounding is required.
 - Proviso: rounding must not create a compliance issue (example: an instalment rounded up above the affordability figure previously aligned with the client).
 - Annual-equivalent rate for disclosure = periodic rate × number of periods per year (simple nominal, not effective). Disclose both the periodic rate and the nominal annual rate.
+- A discount affects the rate value used in the calculation. It does not change the annualisation method.
 
 ## 18. Default administration and collection-cost tariffs
 
