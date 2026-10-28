@@ -55,13 +55,30 @@ Last updated: 2026-10-28
 | R1 | Decision 21 says "micro" and "Laybye/BNPL". The ledger stores short_term, unsecured, zero_cost, and cpa_layby. pure_hosting is not a column. The map is not locked. A missing pure_hosting value fails closed when a row would require the number. | Rule change | Lock the classification map in Decision 21. Add pure_hosting as a column or as a value that the extract can read. |
 | R2 | The ledger can post a full write-off journal. The Form 39 write-off cell stays empty. | Decide later | Lock whether Form 39 should include write-offs when the real Form 39 layout is confirmed. |
 
+## Daily batch status (Agent J)
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| J1 | `docs/LOCKED_DECISIONS.md` contains only "See /tmp/locked_updated.md - content too large for this call, will upload in parts if needed". That file is not present. The last complete text is commit `71aac64184500fe55390c3c822bf74c796fa6127` (same body as `401b3c1dacf2373c7a7678ec2b676002b4512c02`). Commit `f75d1be` replaced it with `PLACEHOLDER`. Commit `ecffee7` replaced it with the stub. The commit subject mentions a collection-campaigns section. The section body was never written. | Rule change | Restore the locked decisions text. Add the collection-campaigns section only from wording that is actually supplied. Do not invent that section. The daily batch followed the last complete text plus the communication, orchestration, and collections-split documents, and did not edit the stub. |
+| J2 | Decision 1 says the day starts at 00:00 and does not name a time zone. | Rule change | Lock Africa/Johannesburg on Decision 1, or name a different zone. This batch uses Africa/Johannesburg because the batch requirement states it. The stored offset is +02:00. |
+| J3 | Orchestration section 1 calls Servicing.accept_payment before the default outcome. The daily batch calls accrue, capitalise, and default check only. | Rule change | Lock whether the morning default check runs after allocation of a receipt recognised the same day. Until then, this batch does not allocate, and the default check cannot see that receipt unless allocation already happened outside the batch. |
+| J4 | The morning default check has no locked module name. | Decide later | Name the module. This batch calls `default_check`. It does not call Collections.observe, which section 3 uses when a collections default is flagged. |
+| J5 | "If the batch does not complete" does not say whether account failures on a finished batch block the next recognition date. | Rule change | Lock the gate. Until then: a finished batch has completed; account failures are stored, audited as `failed`, and shown as the last failed run; they do not raise the did-not-complete alert and do not block the next date. Only an unfinished run blocks, until a later finish of that same date or an explicit skip. |
+| J6 | A retry after an incomplete or skipped run calls accrue, capitalise, and default check again for every account. | Rule change | Lock idempotency. A crash after some accounts were calculated can calculate them again on retry. |
+| J7 | Decision 23 requires the staff identity from Enigma. Decision 15 fails closed on an Enigma timeout. No role is locked for running or skipping the daily batch. | Rule change | Lock the actor and the role for an attended or unattended run. This batch does not call Enigma. A missing `actor_id` fails closed and is not audited. A supplied person id is stored. |
+| J8 | Nothing requires recognition dates to be consecutive calendar days. | Decide later | Lock whether a calendar day that was never started blocks a later date. This batch allows the gap when no unfinished run is outstanding. |
+| J9 | A recognition date whose batch has finished cannot be started again, including when accounts failed. | Rule change | Lock whether a finished day can be repeated. This batch refuses the second start so the day is not calculated twice. |
+| J10 | No alert channel or crash timeout is locked. | Decide later | Lock how an operator is notified, and how a killed run is distinguished from a run that is still working. The alert is a stored row returned by the status query. A hard stop leaves the run in progress. The alert row is written when a later start is refused or the run is skipped. No timeout is applied. |
+| J11 | Communication section 4 also requires the last status of a batch or UI action by account. | Code change | Add the account query and the UI-action status before production. This batch queries by organisation only. |
+| J12 | The run is given its account identifiers. There is no ledger account registry in this repository. An empty list finishes with zero accounts. | Code change | Take the account list from the ledger when the ledger exists, and fail closed if the ledger cannot supply it. |
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
-| Decide later | 9 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 7 | Update docs/LOCKED_DECISIONS.md. |
-| Code change | 3 | Update the existing functions. |
+| Decide later | 11 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 14 | Update docs/LOCKED_DECISIONS.md. |
+| Code change | 5 | Update the existing functions. |
 | Database change | 1 | Add a classification column. |
 
-All agents have completed. All issues are recorded so they can be closed in a single pass before production.
+Issues from Agents A, B, C, D, E, and J are recorded so they can be closed before production. Counts match the rows above.
