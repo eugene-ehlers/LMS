@@ -233,8 +233,10 @@ def allocate_receipt(
     """Loan first under section 126, then any excess to the Laybye. LOCKED_DECISIONS §4 and §8.
 
     Due amounts are whatever ``Ledger.section_126_cents`` reports from
-    ``allocate_payment``. This does not apply the §13 partial-prepayment
-    election to the remainder. That interaction is not stated.
+    ``allocate_payment``. The receipt is posted by ``Ledger.post_payment``,
+    which credits any remainder to the Laybye when a child exists. This
+    does not apply the §13 partial-prepayment election to that remainder.
+    The lock does not say whether prepayment runs before the Laybye.
     """
     if cents <= 0:
         raise LaybyeError("payment", "A receipt must be positive.")
@@ -263,30 +265,43 @@ def allocate_receipt(
             "LOCKED_DECISIONS §6 compares the amount received for a due date. "
             "A loan portion without an attributed due date is not posted.",
         )
-    loan_transaction_id = None
-    laybye_transaction_id = None
-    if loan_cents:
-        payment = ledger.post_payment(
+    try:
+        transaction = ledger.post_payment(
             organisation_id=organisation_id,
             loan_id=parent_loan_id,
-            cents=loan_cents,
+            cents=cents,
             recognised_at=recognised_at,
             attributed_due_on=attributed_due_on,
         )
-        loan_transaction_id = payment.transaction_id
-        if payment.value_date != value_date(recognised_at):
-            raise LaybyeError(
-                "value-date",
-                "LOCKED_DECISIONS §1: the value date is the recognition date.",
-            )
-    if laybye_cents:
-        deposit = ledger.credit_laybye(
-            organisation_id=organisation_id,
-            parent_loan_id=parent_loan_id,
-            cents=laybye_cents,
-            recognised_at=recognised_at,
+    except LedgerError as exc:
+        raise LaybyeError(exc.code, str(exc)) from exc
+    if transaction.value_date != value_date(recognised_at):
+        raise LaybyeError(
+            "value-date",
+            "LOCKED_DECISIONS §1: the value date is the recognition date.",
         )
-        laybye_transaction_id = deposit.transaction_id
+    if transaction.kind == "payment":
+        loan_transaction_id = transaction.transaction_id
+        laybye_transaction_id = ledger._last_laybye_transaction_id
+        posted_loan = transaction.amount_cents
+        posted_laybye = 0
+        if laybye_transaction_id is not None:
+            posted_laybye = ledger.store.get_transaction(organisation_id, laybye_transaction_id).amount_cents
+    elif transaction.kind == "laybye_deposit":
+        loan_transaction_id = None
+        laybye_transaction_id = transaction.transaction_id
+        posted_loan = 0
+        posted_laybye = transaction.amount_cents
+    else:
+        raise LaybyeError(
+            "payment",
+            f"The receipt posted as {transaction.kind}, which is not a loan payment or a Laybye deposit.",
+        )
+    if posted_loan != loan_cents or posted_laybye != laybye_cents:
+        raise LaybyeError(
+            "unbalanced",
+            "The posted split does not match the section 126 amounts.",
+        )
     return ReceiptAllocation(
         value_date=value_date(recognised_at),
         loan_cents=loan_cents,

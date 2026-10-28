@@ -61,6 +61,9 @@ class OrganisationSettings:
     vat_on_rand_maxima: str | None = None
     late_disbursement: str | None = None
     partial_prepayment: str | None = None
+    # Decision 19. Null is unset. Booking does not fill either one in.
+    in_duplum_trigger: str | None = None
+    residual_write_off_threshold_cents: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +78,11 @@ class ResolvedCreditSettings:
     vat_on_rand_maxima: str
     late_disbursement: str
     partial_prepayment: str
+    # Copied at origination when the organisation or product stored one.
+    # None means the caller has not chosen. Collections fails closed on use.
+    in_duplum_trigger: str | None = None
+    # Decision 8. resolve_customer_settings writes 5 000 cents when both levels are null.
+    residual_write_off_threshold_cents: int = 5_000
 
 
 def resolve_customer_settings(
@@ -105,6 +113,23 @@ def resolve_customer_settings(
     vat = _override(product.vat_on_rand_maxima, organisation.vat_on_rand_maxima)
     late = _override(product.late_disbursement, organisation.late_disbursement)
     prepay = _override(product.partial_prepayment, organisation.partial_prepayment)
+    # Decision 19 lists the in-duplum trigger with the elections that fail
+    # closed when unset. An unset trigger is stored as None so a Layer 0
+    # booking that does not choose one still posts. resolve_in_duplum_trigger
+    # and Collections.bind fail closed when they are asked to use it.
+    # Whether booking itself must reject a missing trigger is not settled.
+    trigger = _override(product.in_duplum_trigger, organisation.in_duplum_trigger)
+    if trigger is not None and trigger not in IN_DUPLUM_TRIGGERS:
+        raise CalculationInputError(
+            "in_duplum_trigger is not set on the product or the organisation"
+        )
+    # Decision 8 names R50 when both levels are null. Decision 19 also says
+    # unset elections fail closed. The R50 sentence is the specific rule
+    # this resolver follows. It is not a third reading.
+    residual = resolve_residual_threshold_cents(
+        organisation.residual_write_off_threshold_cents,
+        product.residual_write_off_threshold_cents,
+    )
     if leniency is None:
         raise CalculationInputError(
             "leniency_days is not set on the product or the organisation"
@@ -156,6 +181,8 @@ def resolve_customer_settings(
         vat,
         late,
         prepay,
+        trigger,
+        residual,
     )
 
 

@@ -375,10 +375,53 @@ def test_provision_and_prescription_have_no_platform_formula():
 
 
 def test_collections_elections_are_in_the_configuration_read():
-    migration = (Path(__file__).resolve().parents[1] / "db" / "migrations" / "0005_collections_elections.sql").read_text()
+    migration = (Path(__file__).resolve().parents[1] / "db" / "migrations" / "0007_collections_elections.sql").read_text()
     assert "in_duplum_trigger" in migration
     assert "residual_write_off_threshold_cents" in migration
     assert "contractual_breach" in migration
     assert "collections_default" in migration
     assert "in_duplum_trigger" in CUSTOMER_SETTINGS_SQL
     assert "residual_write_off_threshold_cents" in CUSTOMER_SETTINGS_SQL
+
+
+def test_bind_before_disbursement_succeeds_and_a_rejected_bind_does_not_freeze():
+    servicing = Servicing(enigma=EnigmaStub())
+    record = servicing.book(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        settings=settings(
+            in_duplum_trigger="collections_default",
+            residual_write_off_threshold_cents=5_000,
+        ),
+        recognised_at=at(date(2026, 3, 1), 8),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((FIRST, 60_000), (SECOND, 40_000)),
+        initiation_fee_cents=0,
+        idempotency_key="book-early",
+    )
+    assert record.ledger_loan_id is None
+    assert record.resolved.in_duplum_trigger == "collections_default"
+    assert record.resolved.residual_write_off_threshold_cents == 5_000
+    collections = Collections(servicing)
+    with pytest.raises(CollectionsError) as rejected:
+        collections.bind(record.agreement_id, in_duplum_trigger="not-a-trigger")
+    assert rejected.value.code == "trigger-unset"
+    assert collections.cases == {}
+    bound = collections.bind(
+        record.agreement_id,
+        in_duplum_trigger="collections_default",
+        residual_threshold_cents=5_000,
+    )
+    assert bound.trigger == "collections_default"
+    assert bound.residual_threshold_cents == 5_000
+    assert bound.collections_default is False
+    assert bound.open_episode_ceiling is None
+    assert bound.episode_count == 0
+    with pytest.raises(CollectionsError) as frozen:
+        collections.bind(record.agreement_id, in_duplum_trigger="contractual_breach")
+    assert frozen.value.code == "elections-frozen"
+    with pytest.raises(CollectionsError) as early:
+        collections.observe(record.agreement_id, recognised_at=at(date(2026, 3, 2), 8))
+    assert early.value.code == "status"

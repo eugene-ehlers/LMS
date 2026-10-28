@@ -136,6 +136,18 @@ class Documents:
             loans=sections,
         )
         self.statements[key] = stored
+        self.servicing.audit.append(
+            organisation_id=organisation_id,
+            occurred_at=value_instant(period_end),
+            event_type="STATEMENT_ISSUED",
+            category="operational",
+            enigma_person_id=person_id,
+            payload={
+                "statement_id": stored.statement_id,
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+            },
+        )
         return stored
 
     def enquire(

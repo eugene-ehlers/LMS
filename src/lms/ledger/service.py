@@ -130,6 +130,8 @@ def nominal_annual(periodic_rate: Decimal, periods_per_year: int) -> Decimal:
 class Ledger:
     def __init__(self, store: LedgerStore | None = None) -> None:
         self.store = store or LedgerStore()
+        self._loan_portion_only = False
+        self._last_laybye_transaction_id: str | None = None
 
     def book(
         self,
@@ -759,9 +761,27 @@ class Ledger:
         recognised_at: datetime,
         attributed_due_on: date | None = None,
     ) -> Transaction:
+        """Allocate a receipt.
+
+        A loan with a Laybye child takes due section 126 amounts first and
+        credits any remainder to the Laybye. LOCKED_DECISIONS §4 and §8.
+        The §13 partial-prepayment election is not applied to that remainder.
+        The lock does not say whether prepayment runs before the Laybye.
+        A loan with no Laybye child keeps the prepayment election, then
+        ``overpayment-unset`` when a remainder has no home.
+        """
         account = self._loan(organisation_id, loan_id)
         if cents < 0:
             raise LedgerError("payment", "A receipt cannot be negative.")
+        if not self._loan_portion_only:
+            self._last_laybye_transaction_id = None
+            if self._children(account):
+                return self._post_loan_then_laybye(
+                    account,
+                    cents=cents,
+                    recognised_at=recognised_at,
+                    attributed_due_on=attributed_due_on,
+                )
         day = value_date(recognised_at)
         due_charges = [charge for charge in account.charges if charge.remaining_cents > 0]
         additional = [charge for charge in due_charges if charge.bucket == "additional_monthly"]
@@ -862,6 +882,64 @@ class Ledger:
         )
         self._assert_consistent(account)
         return transaction
+
+    def _post_loan_then_laybye(
+        self,
+        account: LoanAccount,
+        *,
+        cents: int,
+        recognised_at: datetime,
+        attributed_due_on: date | None,
+    ) -> Transaction:
+        """Due section 126 amounts on the loan, then the remainder on the Laybye."""
+        if cents <= 0:
+            raise LedgerError("payment", "A receipt must be positive.")
+        loan_cents = self.section_126_cents(
+            organisation_id=account.organisation_id,
+            loan_id=account.loan_id,
+            cents=cents,
+            recognised_at=recognised_at,
+        )
+        excess = cents - loan_cents
+        if excess and not self._children(account):
+            raise LedgerError(
+                "laybye-missing",
+                "LOCKED_DECISIONS §4: excess goes to the Laybye account. None exists, "
+                "so the receipt is not posted.",
+            )
+        if loan_cents and attributed_due_on is None:
+            raise LedgerError(
+                "due-date-attribution-unset",
+                "LOCKED_DECISIONS §6 compares the amount received for a due date. "
+                "A loan portion without an attributed due date is not posted.",
+            )
+        loan_tx = None
+        if loan_cents:
+            self._loan_portion_only = True
+            try:
+                loan_tx = self.post_payment(
+                    organisation_id=account.organisation_id,
+                    loan_id=account.loan_id,
+                    cents=loan_cents,
+                    recognised_at=recognised_at,
+                    attributed_due_on=attributed_due_on,
+                )
+            finally:
+                self._loan_portion_only = False
+        laybye_tx = None
+        if excess:
+            laybye_tx = self.credit_laybye(
+                organisation_id=account.organisation_id,
+                parent_loan_id=account.loan_id,
+                cents=excess,
+                recognised_at=recognised_at,
+            )
+            self._last_laybye_transaction_id = laybye_tx.transaction_id
+        if loan_tx is not None:
+            return loan_tx
+        if laybye_tx is not None:
+            return laybye_tx
+        raise LedgerError("payment", "A receipt must be positive.")
 
     def reverse(
         self,

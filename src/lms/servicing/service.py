@@ -21,9 +21,12 @@ from lms.calc.interest import nominal_annual_rate, periods_per_year
 from lms.calc.ledger import run
 from lms.calc.models import Agreement, FeeCapBasis, Policy, Product, RepoRate
 from lms.calc.money import RuleError
+from lms.laybye.errors import LaybyeError
+from lms.laybye.service import grant_loan, prepare_pair, receive_pre_disbursement
 from lms.ledger.errors import LedgerError
 from lms.ledger.models import LoanAccount
 from lms.ledger.service import Ledger, _day_count, _prepayment, _repo_fall
+from lms.regulatory.audit import AuditLog
 from lms.servicing.enigma import EnigmaStub
 from lms.servicing.errors import ServicingError
 from lms_config.calendar import value_date, value_instant
@@ -58,6 +61,7 @@ class AgreementRecord:
     annual_equivalent_rate: Decimal | None
     status: str = "pending_disbursement"
     ledger_loan_id: str | None = None
+    laybye_loan_id: str | None = None
     disbursement_value_date: date | None = None
 
 
@@ -98,6 +102,7 @@ class Servicing:
     agreements: dict[str, AgreementRecord] = field(default_factory=dict)
     payments: dict[str, PaymentRecord] = field(default_factory=dict)
     statements: dict[tuple[str, str, date, date], IssuedStatement] = field(default_factory=dict)
+    audit: AuditLog = field(default_factory=AuditLog)
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
 
     def book(
@@ -171,6 +176,137 @@ class Servicing:
         )
         self.agreements[record.agreement_id] = record
         self._remember("book", organisation_id, idempotency_key, fingerprint, record.agreement_id)
+        self._audit(
+            organisation_id=organisation_id,
+            occurred_at=recognised_at,
+            event_type="AGREEMENT_STATUS_CHANGED",
+            category="operational",
+            agreement_id=record.agreement_id,
+            enigma_person_id=person_id,
+            payload={"status": record.status},
+        )
+        return record
+
+    def book_linked_laybye(
+        self,
+        *,
+        organisation_id: str,
+        person_id: str,
+        product: ProductTerms,
+        settings: OrganisationSettings,
+        recognised_at: datetime,
+        cash_advanced_cents: int,
+        frequency: str,
+        schedule: tuple[tuple[date, int], ...],
+        initiation_fee_cents: int = 0,
+        quoted_disbursement: date | None = None,
+        idempotency_key: str,
+        repos: tuple[RepoRate, ...] = (),
+        pre_disbursement_cents: int | None = None,
+        pre_disbursement_at: datetime | None = None,
+        grant_at: datetime | None = None,
+    ) -> AgreementRecord:
+        """Book a linked Laybye, take a pre-disbursement receipt, then grant.
+
+        The receipt is cash in on the Laybye child. Parent principal stays
+        at zero until ``grant_at`` is set, or until a later ``disburse``.
+        LOCKED_DECISIONS §4. A replay of the same book key does not prepare
+        a second pair or post a second deposit.
+        """
+        record = self.book(
+            organisation_id=organisation_id,
+            person_id=person_id,
+            product=product,
+            settings=settings,
+            recognised_at=recognised_at,
+            cash_advanced_cents=cash_advanced_cents,
+            frequency=frequency,
+            schedule=schedule,
+            initiation_fee_cents=initiation_fee_cents,
+            quoted_disbursement=quoted_disbursement,
+            idempotency_key=idempotency_key,
+            repos=repos,
+        )
+        if record.ledger_loan_id is None:
+            try:
+                parent, child = prepare_pair(
+                    self.ledger,
+                    organisation_id=record.organisation_id,
+                    person_id=record.person_id,
+                    product=record.product,
+                    organisation=record.settings,
+                    recognised_at=record.recognised_at,
+                    cash_advanced_cents=record.cash_advanced_cents,
+                    frequency=record.frequency,
+                    schedule=record.schedule,
+                    identity_name=record.frozen_full_name,
+                    identity_number=record.frozen_id_number,
+                    service_address=record.frozen_service_address,
+                    quoted_disbursement=record.quoted_disbursement,
+                    initiation_fee_cents=record.initiation_fee_cents,
+                    contractual_end=max(due for due, _amount in record.schedule),
+                )
+            except (LedgerError, LaybyeError, CalculationInputError, RuleError) as exc:
+                raise _from_downstream(exc) from exc
+            record.ledger_loan_id = parent.loan_id
+            record.laybye_loan_id = child.loan_id
+        if pre_disbursement_cents is not None:
+            if pre_disbursement_at is None:
+                raise ServicingError(
+                    "pre-disbursement",
+                    "A pre-disbursement receipt needs a recognition time.",
+                )
+            if record.laybye_loan_id is None:
+                raise ServicingError(
+                    "laybye-missing",
+                    "LOCKED_DECISIONS §4: a pre-disbursement receipt sits in the Laybye only "
+                    "when a Laybye account exists.",
+                )
+            existing = [
+                transaction
+                for transaction in self.ledger.store.transactions_for(
+                    record.organisation_id, record.laybye_loan_id
+                )
+                if transaction.kind == "laybye_deposit"
+            ]
+            posted = sum(transaction.amount_cents for transaction in existing)
+            if existing and posted != pre_disbursement_cents:
+                raise ServicingError(
+                    "idempotency",
+                    "A different pre-disbursement receipt is already posted.",
+                )
+            if not existing and record.disbursement_value_date is not None:
+                raise ServicingError(
+                    "already-granted",
+                    "LOCKED_DECISIONS §4: once the loan is granted, payments go to the loan first.",
+                )
+            if not existing:
+                try:
+                    deposit = receive_pre_disbursement(
+                        self.ledger,
+                        organisation_id=record.organisation_id,
+                        parent_loan_id=record.ledger_loan_id,
+                        cents=pre_disbursement_cents,
+                        recognised_at=pre_disbursement_at,
+                    )
+                except (LedgerError, LaybyeError, CalculationInputError, RuleError) as exc:
+                    raise _from_downstream(exc) from exc
+                self._audit(
+                    organisation_id=record.organisation_id,
+                    occurred_at=pre_disbursement_at,
+                    event_type="DEPOSIT_RECEIVED",
+                    category="financial",
+                    amount_cents=pre_disbursement_cents,
+                    balance_code="deposit",
+                    agreement_id=record.agreement_id,
+                    enigma_person_id=record.person_id,
+                    payload={
+                        "loan_id": record.laybye_loan_id,
+                        "transaction_id": deposit.transaction_id,
+                    },
+                )
+        if grant_at is not None:
+            return self.disburse(record.agreement_id, recognised_at=grant_at, repos=repos)
         return record
 
     def disburse(
@@ -182,7 +318,7 @@ class Servicing:
     ) -> AgreementRecord:
         """POST /v1/agreements/{id}/disbursements. Posts through the ledger."""
         record = self._agreement(agreement_id)
-        if record.ledger_loan_id is not None:
+        if record.disbursement_value_date is not None:
             return record
         if record.status != "pending_disbursement":
             raise ServicingError("status", f"Cannot disburse an agreement in {record.status}.")
@@ -202,27 +338,48 @@ class Servicing:
             agreement_id=record.agreement_id,
         )
         try:
-            account = self.ledger.book(
-                organisation_id=record.organisation_id,
-                person_id=record.person_id,
-                product=record.product,
-                organisation=record.settings,
-                recognised_at=recognised_at,
-                cash_advanced_cents=record.cash_advanced_cents,
-                frequency=record.frequency,
-                schedule=record.schedule,
-                identity_name=record.frozen_full_name,
-                identity_number=record.frozen_id_number,
-                service_address=record.frozen_service_address,
-                quoted_disbursement=record.quoted_disbursement,
-                initiation_fee_cents=record.initiation_fee_cents,
-                contractual_end=max(due for due, _ in record.schedule),
-            )
-        except (LedgerError, CalculationInputError, RuleError) as exc:
+            if record.ledger_loan_id is not None:
+                account = grant_loan(
+                    self.ledger,
+                    organisation_id=record.organisation_id,
+                    parent_loan_id=record.ledger_loan_id,
+                    recognised_at=recognised_at,
+                    schedule=record.schedule,
+                    initiation_fee_cents=record.initiation_fee_cents,
+                )
+            else:
+                account = self.ledger.book(
+                    organisation_id=record.organisation_id,
+                    person_id=record.person_id,
+                    product=record.product,
+                    organisation=record.settings,
+                    recognised_at=recognised_at,
+                    cash_advanced_cents=record.cash_advanced_cents,
+                    frequency=record.frequency,
+                    schedule=record.schedule,
+                    identity_name=record.frozen_full_name,
+                    identity_number=record.frozen_id_number,
+                    service_address=record.frozen_service_address,
+                    quoted_disbursement=record.quoted_disbursement,
+                    initiation_fee_cents=record.initiation_fee_cents,
+                    contractual_end=max(due for due, _amount in record.schedule),
+                )
+        except (LedgerError, LaybyeError, CalculationInputError, RuleError) as exc:
             raise _from_downstream(exc) from exc
         record.ledger_loan_id = account.loan_id
         record.disbursement_value_date = account.disbursement_value_date
         record.status = "active"
+        self._audit(
+            organisation_id=record.organisation_id,
+            occurred_at=recognised_at,
+            event_type="PRINCIPAL_ADVANCED",
+            category="financial",
+            amount_cents=record.cash_advanced_cents,
+            balance_code="principal",
+            agreement_id=record.agreement_id,
+            enigma_person_id=record.person_id,
+            payload={"loan_id": account.loan_id},
+        )
         return record
 
     def accept_payment(
@@ -422,6 +579,19 @@ class Servicing:
             pdf_stub=payload,
         )
         self.statements[key] = issued
+        self._audit(
+            organisation_id=organisation_id,
+            occurred_at=value_instant(period_end),
+            event_type="STATEMENT_ISSUED",
+            category="operational",
+            agreement_id=None,
+            enigma_person_id=person_id,
+            payload={
+                "statement_id": issued.statement_id,
+                "period_start": period_start.isoformat(),
+                "period_end": period_end.isoformat(),
+            },
+        )
         return issued
 
     def _resolve(self, settings: OrganisationSettings, product: ProductTerms) -> ResolvedCreditSettings:
@@ -507,6 +677,58 @@ class Servicing:
                 found.append(record.disbursement_value_date)
         return tuple(found)
 
+    def _audit(self, **kwargs) -> None:
+        """Append one row to ``Servicing.audit``.
+
+        This is the in-process hook. A database caller inserts
+        ``lms.audit_event`` instead. ``lms.seal_audit_event`` fills the
+        hash chain on that insert. Direct ledger posts are not sealed
+        unless the caller appends.
+        """
+        self.audit.append(**kwargs)
+
+    def _audit_payment(self, payment: PaymentRecord, transaction, laybye_id: str | None) -> None:
+        if transaction.kind == "laybye_deposit":
+            self._audit(
+                organisation_id=payment.organisation_id,
+                occurred_at=payment.recognised_at,
+                event_type="DEPOSIT_RECEIVED",
+                category="financial",
+                amount_cents=transaction.amount_cents,
+                balance_code="deposit",
+                agreement_id=payment.agreement_id,
+                enigma_person_id=payment.person_id,
+                payload={"transaction_id": transaction.transaction_id},
+            )
+            return
+        self._audit(
+            organisation_id=payment.organisation_id,
+            occurred_at=payment.recognised_at,
+            event_type="PAYMENT_ALLOCATED",
+            category="financial",
+            amount_cents=transaction.amount_cents,
+            agreement_id=payment.agreement_id,
+            enigma_person_id=payment.person_id,
+            payload={
+                "transaction_id": transaction.transaction_id,
+                "allocations": [[bucket, amount] for bucket, amount in payment.allocations],
+            },
+        )
+        if laybye_id is None:
+            return
+        laybye_tx = self.ledger.store.get_transaction(payment.organisation_id, laybye_id)
+        self._audit(
+            organisation_id=payment.organisation_id,
+            occurred_at=payment.recognised_at,
+            event_type="DEPOSIT_RECEIVED",
+            category="financial",
+            amount_cents=laybye_tx.amount_cents,
+            balance_code="deposit",
+            agreement_id=payment.agreement_id,
+            enigma_person_id=payment.person_id,
+            payload={"transaction_id": laybye_tx.transaction_id},
+        )
+
     def _allocate(self, payment: PaymentRecord, agreement: AgreementRecord, attributed_due_on: date | None) -> None:
         if agreement.status not in _ALLOCATABLE or agreement.ledger_loan_id is None:
             raise ServicingError("status", f"Cannot allocate to an agreement in {agreement.status}.")
@@ -539,7 +761,12 @@ class Servicing:
             for entry in transaction.entries
             if entry.bucket is not None and entry.credit_cents
         )
+        laybye_id = self.ledger._last_laybye_transaction_id
+        if laybye_id is not None and transaction.kind == "payment":
+            laybye_tx = self.ledger.store.get_transaction(payment.organisation_id, laybye_id)
+            payment.allocations = payment.allocations + (("laybye_hold", laybye_tx.amount_cents),)
         payment.status = "allocated"
+        self._audit_payment(payment, transaction, laybye_id)
         self._refresh_status(agreement)
 
     def _accrue_and_bill(

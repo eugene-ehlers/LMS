@@ -90,7 +90,7 @@ The R15 million test is not stored. The caller supplies `period_start` and `peri
 - `links_ok`, `hashes_ok`, `verified`
 - `chain_head_last_hash`, `chain_head_last_sequence`, `head_covered`
 
-A financial row requires `amount_cents`. An operational row must not carry one. That is the seal rule in `lms.seal_audit_event`. The Python canonical is SHA-256 over organisation, event id, previous hash, type, ISO timestamp, amount, balance code, sequence, and JSON payload. It is not PostgreSQL `occurred_at::text` (gap RX37). `src/lms` does not insert `lms.audit_event` (gap RX41).
+A financial row requires `amount_cents`. An operational row must not carry one. That is the seal rule in `lms.seal_audit_event`. The Python canonical is SHA-256 over organisation, event id, previous hash, type, ISO timestamp, amount, balance code, sequence, and JSON payload. It is not PostgreSQL `occurred_at::text` (gap RX37). `src/lms` does not insert `lms.audit_event`. The in-process hook is `Servicing.audit`. A database caller inserts `lms.audit_event` and the seal trigger hashes the row (gap RX41).
 
 ## 5. Sequence of calls
 
@@ -121,7 +121,7 @@ A financial row requires `amount_cents`. An operational row must not carry one. 
 | RX34 | "Entered into" is not locked as disbursement date or as cash advanced. Both stored facts are returned under those names. |
 | RX37 | Python hashes are not the SQL `::text` canonical. |
 | RX39 | Ledger organisation ids are text. `cfg_provider_compliance.organisation_id` is uuid. The in-memory store uses the ledger's text id. |
-| RX41 | The Python ledger does not insert `lms.audit_event`. `AuditLog` is the log this layer reads. |
+| RX41 | The Python ledger does not insert `lms.audit_event`. `Servicing.audit` (`AuditLog`) is the in-process hook this layer reads. A database caller inserts `lms.audit_event`. |
 | RX52 | `ComplianceStore.put` and the SQL check reject a blank NCR number for every organisation. Decision 21 allows a blank number for pure hosting and Laybye/BNPL. A missing row is how those extracts proceed. A stored blank number is not representable. |
 | RX53 | A linked lay-by parent is `short_term` (§4) and requires an NCR number. `cpa_layby` and `zero_cost` do not. Decision 21's word "Laybye" is not defined as the linked parent. |
 | RX54 | §19 now stores the in-duplum trigger and the residual threshold. `OrganisationSettings` on this branch does not. This layer does not add the columns. |

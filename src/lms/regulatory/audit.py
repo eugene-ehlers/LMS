@@ -1,15 +1,24 @@
 """Financial and operational audit extract.
 
-The SQL seal is ``lms.seal_audit_event`` (migration 0003). Nothing in
-``src/lms`` inserts ``lms.audit_event`` (gap RX41). This log keeps the same
-columns the seal hashes, assigns ``recognition_sequence`` per organisation
-(decision 1), and verifies the chain on read.
+The in-process hook is ``Servicing.audit``, an ``AuditLog``. Servicing
+appends on book (``AGREEMENT_STATUS_CHANGED``), a pre-disbursement Laybye
+receipt (``DEPOSIT_RECEIVED``, balance code ``deposit``), grant
+(``PRINCIPAL_ADVANCED``, balance code ``principal``), a payment
+(``PAYMENT_ALLOCATED`` for the loan portion, and ``DEPOSIT_RECEIVED`` when
+excess is credited to the Laybye), and statement issue
+(``STATEMENT_ISSUED``). Collections appends ``AGREEMENT_STATUS_CHANGED``
+when an in-duplum episode opens or closes. ``AuditLog.extract`` reads
+those rows. Direct ``Ledger`` calls are not sealed unless the caller appends.
 
-The Python canonical uses a timezone-aware ISO timestamp and JSON with
-sorted keys. PostgreSQL ``occurred_at::text`` and ``payload::text`` depend
-on session settings that the row does not store (gap RX37). This verifier
-checks rows sealed here. It does not claim to reproduce the trigger's text
-cast.
+A database deployment inserts ``lms.audit_event``. The ``BEFORE INSERT``
+trigger ``lms.seal_audit_event`` (migration 0003) assigns
+``previous_hash``, ``row_hash``, and ``recognition_sequence``. This process
+does not open a database connection. The Python canonical uses a
+timezone-aware ISO timestamp and JSON with sorted keys. PostgreSQL
+``occurred_at::text`` and ``payload::text`` depend on session settings that
+the row does not store (gap RX37). This verifier checks rows it sealed. It
+does not claim to reproduce the trigger's text cast. Event types are the
+seeded codes. Financial rows carry ``amount_cents``. Operational rows do not.
 """
 
 from __future__ import annotations

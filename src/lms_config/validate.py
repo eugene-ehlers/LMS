@@ -81,6 +81,9 @@ class ProductTerms:
     vat_on_rand_maxima: str | None = None
     late_disbursement: str | None = None
     partial_prepayment: str | None = None
+    # Decision 19. Null inherits the organisation. It does not choose a trigger.
+    in_duplum_trigger: str | None = None
+    residual_write_off_threshold_cents: int | None = None
     # Decision 2. Day-1 classifications may not capitalise initiation.
     initiation_capitalised: bool = False
 
