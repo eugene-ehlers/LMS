@@ -315,3 +315,4 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Contact details for collection purposes are obtained from the client database via the application number (linked to the loan number and ID number). The LMS does not store them for this purpose.
 - Staff with the appropriate role can access account information and provide it to a consumer who phones a call centre.
 - The NCR registration number must be displayed on all NCA communications.
+- The LMS sends a regular push when the monthly statement for the month is ready. The push tells the consumer the statement is available. It does not contain collection content.
