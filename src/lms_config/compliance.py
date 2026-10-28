@@ -1,14 +1,18 @@
 """Statement compliance fields stored as LMS configuration.
 
-Locked decision 15 says Enigma owns organisation identity and the LMS stores
-only opaque organisation ids. This module does not call Enigma. The statements
-task says the provider legal name, NCR number, trading name, addresses,
-telephone, and payment-account details are read from LMS configuration.
-That conflict is recorded in ``docs/statements/implementation-note.md``.
-This module does not change ``docs/LOCKED_DECISIONS.md``.
+Locked decisions 15 and 21: the NCR registration number, trading name,
+addresses, telephone, payment-account details, and brand assets are LMS
+tenant facts. Enigma does not hold or return them. This module does not
+call Enigma.
 
 Trading name may be blank: regulation 35(a)(ii) says "if any". Every other
-field is required. A blank required field fails closed. No value is invented.
+field on this row is required by the statements store. A blank required
+field fails closed. No value is invented.
+
+Decision 21 also says a blank NCR number does not block a pure-hosting or
+Laybye/BNPL extract. This table still rejects a blank number, because
+statements require one. That gap is RX52 in the regulatory implementation
+note. Regulatory extracts use ``find``, which can see that no row exists.
 """
 
 from __future__ import annotations
@@ -67,8 +71,17 @@ class ComplianceStore:
         _require_complete(record)
         self._rows[record.organisation_id] = record
 
+    def find(self, organisation_id: str) -> ProviderCompliance | None:
+        """The row, or None when this organisation has no compliance row.
+
+        Unlike ``require``, a missing row is not an error. Regulatory
+        extracts need that distinction: decision 21 does not require an
+        NCR number for every product.
+        """
+        return self._rows.get(organisation_id)
+
     def require(self, organisation_id: str) -> ProviderCompliance:
-        record = self._rows.get(organisation_id)
+        record = self.find(organisation_id)
         if record is None:
             raise CalculationInputError(
                 f"compliance-missing: no LMS compliance row for organisation {organisation_id}"
