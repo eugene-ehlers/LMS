@@ -48,13 +48,20 @@ Last updated: 2026-10-28
 | P3 | Bankserv has no DebiCheck record type and no stated hash algorithm. Consumer homing account and 10-character abbreviated name are not LMS fields. A credit-life receipt has no insurer hand-off. | Decide later | Lock the Bankserv layout details and the insurer hand-off when the real rail and insurer contracts are in place. |
 | P4 | Whether interest accruing on the due date is itself due that day is unsettled. The rail bills the whole unbilled memo through bill_interest. | Rule change | Lock whether interest accruing on the due date is due that day in Decision 1 or Decision 8. |
 
+## Regulatory extracts (Agent E)
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| R1 | Decision 21 says "micro" and "Laybye/BNPL". The ledger stores short_term, unsecured, zero_cost, and cpa_layby. pure_hosting is not a column. The map is not locked. A missing pure_hosting value fails closed when a row would require the number. | Rule change | Lock the classification map in Decision 21. Add pure_hosting as a column or as a value that the extract can read. |
+| R2 | The ledger can post a full write-off journal. The Form 39 write-off cell stays empty. | Decide later | Lock whether Form 39 should include write-offs when the real Form 39 layout is confirmed. |
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
-| Decide later | 8 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 6 | Update docs/LOCKED_DECISIONS.md. |
+| Decide later | 9 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 7 | Update docs/LOCKED_DECISIONS.md. |
 | Code change | 3 | Update the existing functions. |
 | Database change | 1 | Add a classification column. |
 
-No issue blocks continued development of Agent E. All issues are recorded so they can be closed in a single pass before production.
+All agents have completed. All issues are recorded so they can be closed in a single pass before production.
