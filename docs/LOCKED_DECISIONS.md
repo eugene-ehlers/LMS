@@ -93,6 +93,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Prefer keeping the contractual instalment the same during the loan term.
 - Interest continues to be calculated daily on the outstanding balance. Leniency does not pause or reduce interest.
 - A payment received on the flag date is treated as 00:00 on that day and is seen by the morning check.
+- A system-error correction of a contractual breach restores the campaign discount and clears the in-duplum ceiling as if the breach never occurred.
 
 ## 7. In-duplum base and episodes
 
@@ -220,11 +221,10 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 ## 20. Prescription (section 126B)
 
-- Prescription handling is per client requirement.
-- It can be manual or formula-based.
-- Different clients may use different formulas based on arrears, recency, months on book, promise-to-pay adherence, contactability, and other factors.
-- No platform default is imposed.
+- Prescription is a collections action (or the decision not to collect). Whether it runs does not sit in the LMS.
+- The result can be a write-off or the loan can continue to run as normal under the existing rules.
 - Formulas that decide prescription are run outside the LMS. The LMS only receives the instruction or the action is performed manually.
+- No platform default is imposed.
 
 ## 21. NCR registration number and compliance data
 
@@ -243,3 +243,9 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - LMS applies the tighter of the two.
 - A missing platform ceiling stops the command.
 - These are authorization limits. Statutory NCA maxima stay in the calculation engine.
+
+## 23. Audit trail
+
+- All actions on the LMS, whether system changes or changes to accounts, must produce an audit record.
+- The audit record includes who did it (staff identity from Enigma), when it was done, and what was done.
+- A system-error correction is an audited action and must record the staff identity.
