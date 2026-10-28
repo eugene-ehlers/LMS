@@ -6,21 +6,46 @@ does not recompute them.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from lms.dummies.decision_engine import DecisionEngineDummy
+from lms.dummies.fixtures import FIXED_INSTALMENT_CENTS
+from lms.dummies.enigma import EnigmaDummy
+from lms.errors import EnigmaFailClosed
+from lms.ledger.errors import LedgerError
 from lms.ledger.service import Ledger
-from lms.regulatory.audit import AuditLog, hash_row
+from lms.ports.decision_engine import Application, Approval, ConsumerIdentity, PaymentFrequency
+from lms.ports.enigma import freeze_booking_identity
+from lms.regulatory.audit import (
+    AUDIT_CHAIN_HEAD_SQL,
+    AUDIT_EVENT_SQL,
+    AUDIT_PREDECESSOR_SQL,
+    AuditLog,
+    hash_row,
+    read_lms_audit_event,
+)
 from lms.regulatory.errors import RegulatoryError
-from lms.regulatory.form39 import NOT_STORED, build_form39_readiness
-from lms.regulatory.sacrra import build_sacrra_extract
+from lms.regulatory.form39 import NOT_STORED, REGULATION_64, build_form39_readiness
+from lms.regulatory.ncr import require_ncr_for_extract
+from lms.regulatory.sacrra import (
+    ACCOUNT_TYPE_FIELD_NUMBER,
+    AMOUNT_FIELD_NUMBERS,
+    L700_MONTHLY_FIELDS,
+    MONTHS_IN_ARREARS_FIELD_NUMBER,
+    STATUS_FIELD_NUMBER,
+    build_sacrra_extract,
+    render_l700_file,
+)
+from lms_config.calendar import value_instant
 from lms_config.compliance import ComplianceStore, ProviderCompliance
-from lms_config.locked import OrganisationSettings
-from lms_config.templates import bnpl_zero, micro_short_term, unsecured_personal
+from lms_config.locked import IN_DUPLUM_CLIP_POSTS, OrganisationSettings
+from lms_config.templates import bnpl_zero, layby_goods, micro_short_term, unsecured_personal
 
 JOHANNESBURG = ZoneInfo("Africa/Johannesburg")
 
@@ -306,14 +331,14 @@ def test_form39_lists_sourced_balances_and_does_not_invent_missing_elements():
         period_end=date(2026, 3, 31),
         pure_hosting=False,
     )
-    assert readiness.gross_owed_cents == 80_000
-    assert readiness.gross_owed_cents_by_classification["short_term"] == 80_000
+    assert readiness.gross_book_cents == 80_000
+    assert readiness.gross_book_cents_by_classification["short_term"] == 80_000
     assert readiness.agreements_disbursed_in_period == 1
     assert readiness.cash_advanced_cents_disbursed_in_period == 80_000
     assert readiness.not_stored == NOT_STORED
     for name in ("applications", "province", "gender", "income", "provisions", "write_offs", "age_analysis"):
         assert name in readiness.not_stored
-        assert not hasattr(readiness, name)
+        assert getattr(readiness, name) is None
 
 
 def test_audit_extract_includes_hash_chain_fields_and_verifies():
@@ -358,6 +383,9 @@ def test_audit_extract_includes_hash_chain_fields_and_verifies():
     assert extract.hashes_ok is True
     assert extract.links_ok is True
     assert extract.head_covered is True
+    assert extract.predecessor_event_id is None
+    assert extract.chain_head_last_event_id == second.event_id
+    assert extract.chain_head_last_occurred_at == second.occurred_at
     assert extract.chain_head_last_hash == second.row_hash
     assert extract.chain_head_last_sequence == 2
 
@@ -368,6 +396,7 @@ def test_audit_extract_includes_hash_chain_fields_and_verifies():
     )
     assert len(outside.rows) == 1
     assert outside.rows[0].event_id == second.event_id
+    assert outside.predecessor_event_id == first.event_id
     assert outside.predecessor_row_hash == first.row_hash
     assert outside.predecessor_recognition_sequence == 1
     assert outside.verified is True
@@ -396,3 +425,405 @@ def test_audit_extract_includes_hash_chain_fields_and_verifies():
     assert broken.verified is False
     assert broken.rows[0].previous_hash is None
     assert broken.rows[1].recognition_sequence == 2
+
+
+def test_l700_layout_is_56_fields_and_no_file_is_emitted():
+    ledger = Ledger()
+    book(ledger)
+    store = ComplianceStore()
+    store.put(compliance_row())
+    extract = build_sacrra_extract(
+        ledger,
+        store,
+        organisation_id="org-a",
+        as_of=date(2026, 3, 1),
+        pure_hosting=False,
+    )
+    assert extract.layout == L700_MONTHLY_FIELDS
+    assert len(extract.layout) == 56
+    assert extract.layout[0].start == 1
+    assert extract.layout[-1].number == 56
+    assert extract.layout[-1].end == 700
+    assert all(field.value is None for field in extract.layout)
+    by_number = {field.number: field for field in extract.layout}
+    for number in AMOUNT_FIELD_NUMBERS:
+        assert by_number[number].format == "N 9"
+        assert by_number[number].value is None
+    assert by_number[STATUS_FIELD_NUMBER].value is None
+    assert by_number[MONTHS_IN_ARREARS_FIELD_NUMBER].value is None
+    assert by_number[ACCOUNT_TYPE_FIELD_NUMBER].value is None
+    assert extract.rows[0].principal_cents == 100_000
+    assert extract.rows[0].amount_scale is None
+    assert extract.file_bytes is None
+    with pytest.raises(RegulatoryError) as refused:
+        render_l700_file(extract)
+    assert refused.value.code == "mandatory-fields-unlocked"
+
+
+def test_frozen_identity_comes_from_the_enigma_booking_read_not_from_a_later_call():
+    enigma = EnigmaDummy()
+    identity = enigma.identity_for_booking("person-active")
+    frozen = freeze_booking_identity(identity)
+    context = enigma.organisation.context("org-active")
+    assert not hasattr(context, "ncr_registration_number")
+    ledger = Ledger()
+    loan = book(
+        ledger,
+        organisation_id="org-active",
+        person_id=identity.person_id,
+        name=frozen.name,
+        identity_number=frozen.id_number,
+        address=frozen.service_address,
+    )
+    store = ComplianceStore()
+    store.put(compliance_row(organisation_id="org-active", ncr="0000000000"))
+    before = len(ledger.store.transactions_for("org-active"))
+    extract = build_sacrra_extract(
+        ledger,
+        store,
+        organisation_id="org-active",
+        as_of=date(2026, 3, 1),
+        pure_hosting=False,
+    )
+    assert len(ledger.store.transactions_for("org-active")) == before
+    row = extract.rows[0]
+    assert row.loan_id == loan.loan_id
+    assert row.frozen_full_name == frozen.name == "Test Consumer"
+    assert row.frozen_id_number == frozen.id_number == "0000000000000"
+    assert row.frozen_service_address == frozen.service_address == "1 Dummy Street, Johannesburg"
+    assert extract.ncr_registration_number == "0000000000"
+    with pytest.raises(EnigmaFailClosed) as failed:
+        enigma.identity_for_booking("person-timeout")
+    assert failed.value.reason.value == "timeout"
+    again = build_sacrra_extract(
+        ledger,
+        store,
+        organisation_id="org-active",
+        as_of=date(2026, 3, 1),
+        pure_hosting=False,
+    )
+    assert again.rows[0].frozen_full_name == frozen.name
+
+
+def test_blank_ncr_number_fails_closed_and_zeros_do_not():
+    ledger = Ledger()
+    book(ledger)
+
+    class BlankCompliance:
+        def find(self, organisation_id: str):
+            del organisation_id
+            return type("Row", (), {"ncr_registration_number": "   "})()
+
+    with pytest.raises(RegulatoryError) as blank:
+        require_ncr_for_extract(
+            BlankCompliance(),
+            organisation_id="org-a",
+            classifications=("short_term",),
+            pure_hosting=False,
+        )
+    assert blank.value.code == "ncr-number-unset"
+
+    with pytest.raises(RegulatoryError) as unset:
+        build_sacrra_extract(
+            ledger,
+            ComplianceStore(),
+            organisation_id="org-a",
+            as_of=date(2026, 3, 1),
+            pure_hosting=None,
+        )
+    assert unset.value.code == "pure-hosting-unset"
+
+
+def test_layby_goods_does_not_require_an_ncr_number():
+    ledger = Ledger()
+    book(ledger, product=layby_goods())
+    extract = build_sacrra_extract(
+        ledger,
+        ComplianceStore(),
+        organisation_id="org-a",
+        as_of=date(2026, 3, 1),
+        pure_hosting=False,
+    )
+    assert extract.ncr_registration_number is None
+    assert extract.rows[0].classification == "cpa_layby"
+
+
+def test_a_prepared_loan_is_not_an_opened_sacrra_account():
+    ledger = Ledger()
+    when = at(2026, 3, 1)
+    ledger.prepare(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        organisation=settings(),
+        recognised_at=when,
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((date(2026, 4, 1), 100_000),),
+        identity_name="Thandi Nkosi",
+        identity_number="8001015009087",
+        service_address="12 Loop Street, Cape Town",
+    )
+    extract = build_sacrra_extract(
+        ledger,
+        ComplianceStore(),
+        organisation_id="org-a",
+        as_of=date(2026, 3, 31),
+        pure_hosting=False,
+    )
+    assert extract.rows == ()
+
+
+def test_posted_interest_is_reported_and_the_in_duplum_clip_stays_off():
+    ledger = Ledger()
+    loan = book(ledger)
+    ledger.open_in_duplum_episode(
+        organisation_id="org-a",
+        loan_id=loan.loan_id,
+        recognised_at=at(2026, 3, 2),
+        fall_away=False,
+    )
+    ledger.accrue_day(
+        organisation_id="org-a",
+        loan_id=loan.loan_id,
+        recognised_at=at(2026, 3, 2),
+        interest_cap_present=True,
+    )
+    ledger.bill_interest(
+        organisation_id="org-a",
+        loan_id=loan.loan_id,
+        recognised_at=at(2026, 3, 3),
+    )
+    posted = ledger.bucket_balance(loan, "interest", as_of=date(2026, 3, 3))
+    assert posted > 0
+    assert IN_DUPLUM_CLIP_POSTS is False
+    with pytest.raises(LedgerError) as clipped:
+        ledger.clip_in_duplum()
+    assert clipped.value.code == "in-duplum-clip-off"
+    store = ComplianceStore()
+    store.put(compliance_row())
+    calls: list[str] = []
+    ledger.clip_in_duplum = lambda: calls.append("clip")  # type: ignore[method-assign]
+    extract = build_sacrra_extract(
+        ledger,
+        store,
+        organisation_id="org-a",
+        as_of=date(2026, 3, 3),
+        pure_hosting=False,
+    )
+    assert calls == []
+    assert extract.rows[0].bucket_cents["interest"] == posted
+    assert "resolve_charge" not in inspect.getsource(build_sacrra_extract)
+    assert "clip_in_duplum" not in inspect.getsource(build_sacrra_extract)
+
+
+def test_form39_gross_book_uses_billed_buckets_and_leaves_unstored_cells_empty():
+    enigma = EnigmaDummy()
+    identity = enigma.identity_for_booking("person-active")
+    engine = DecisionEngineDummy.fixed_success()
+    decision = engine.decide(
+        Application(
+            consumer=ConsumerIdentity(
+                person_id=identity.person_id,
+                name=identity.name,
+                id_number=identity.id_number,
+            ),
+            requested_amount_cents=100_000,
+            product_type="short_term",
+            term_count=1,
+            payment_frequency=PaymentFrequency.MONTHLY,
+        )
+    )
+    assert isinstance(decision, Approval)
+    ledger = Ledger()
+    parent = book(ledger, cash=100_000)
+    ledger.open_laybye(
+        organisation_id="org-a",
+        parent_loan_id=parent.loan_id,
+        recognised_at=at(2026, 3, 2),
+        amount_cents=40_000,
+        identity_name=parent.frozen_full_name,
+        identity_number=parent.frozen_id_number,
+        service_address=parent.frozen_service_address,
+    )
+    ledger.accrue_day(
+        organisation_id="org-a",
+        loan_id=parent.loan_id,
+        recognised_at=at(2026, 3, 2),
+        interest_cap_present=True,
+    )
+    store = ComplianceStore()
+    store.put(compliance_row(ncr="0000000000"))
+    unbilled = build_form39_readiness(
+        ledger,
+        store,
+        organisation_id="org-a",
+        period_start=date(2026, 1, 1),
+        period_end=date(2026, 3, 31),
+        pure_hosting=False,
+    )
+    assert "R15 million" in unbilled.filing_rule
+    assert "15 February" in unbilled.filing_rule
+    assert unbilled.filing_rule == REGULATION_64
+    assert "threshold" not in inspect.signature(build_form39_readiness).parameters
+    assert unbilled.gross_book_cents == 100_000
+    assert unbilled.laybye_hold_cents == 40_000
+    assert unbilled.applications is None
+    assert decision.instalment_cents == FIXED_INSTALMENT_CENTS
+    ledger.bill_interest(
+        organisation_id="org-a",
+        loan_id=parent.loan_id,
+        recognised_at=at(2026, 3, 3),
+    )
+    billed = build_form39_readiness(
+        ledger,
+        store,
+        organisation_id="org-a",
+        period_start=date(2026, 3, 1),
+        period_end=date(2026, 3, 31),
+        pure_hosting=False,
+    )
+    assert billed.gross_book_cents == 100_000 + ledger.bucket_balance(parent, "interest", as_of=date(2026, 3, 31))
+    assert billed.gross_book_cents > unbilled.gross_book_cents
+    ledger.write_off_outstanding(
+        organisation_id="org-a",
+        loan_id=parent.loan_id,
+        recognised_at=at(2026, 3, 20),
+    )
+    after_write_off = build_form39_readiness(
+        ledger,
+        store,
+        organisation_id="org-a",
+        period_start=date(2026, 3, 1),
+        period_end=date(2026, 3, 31),
+        pure_hosting=False,
+    )
+    assert after_write_off.gross_book_cents == 0
+    assert after_write_off.write_offs is None
+    assert after_write_off.laybye_hold_cents == 40_000
+
+
+def test_audit_range_is_inclusive_on_the_johannesburg_day():
+    log = AuditLog()
+    inside = log.append(
+        organisation_id="org-a",
+        occurred_at=at(2026, 3, 2, 23),
+        event_type="STATEMENT_ISSUED",
+        category="operational",
+        payload={},
+    )
+    outside = log.append(
+        organisation_id="org-a",
+        occurred_at=datetime(2026, 3, 2, 22, 30, tzinfo=timezone.utc),
+        event_type="STATEMENT_ISSUED",
+        category="operational",
+        payload={},
+    )
+    window = log.extract(organisation_id="org-a", from_date=date(2026, 3, 2), to_date=date(2026, 3, 2))
+    assert [row.event_id for row in window.rows] == [inside.event_id]
+    next_day = log.extract(organisation_id="org-a", from_date=date(2026, 3, 3), to_date=date(2026, 3, 3))
+    assert [row.event_id for row in next_day.rows] == [outside.event_id]
+    assert next_day.predecessor_event_id == inside.event_id
+    assert next_day.chain_head_last_event_id == outside.event_id
+    assert next_day.head_covered is True
+    assert window.head_covered is False
+    assert window.chain_head_last_sequence == 2
+
+
+def test_sql_audit_reader_uses_the_table_and_does_not_hash():
+    occurred = at(2026, 3, 1, 9)
+    later = at(2026, 3, 2, 9)
+    first = {
+        "event_id": "11111111-1111-1111-1111-111111111111",
+        "organisation_id": "org-a",
+        "occurred_at": occurred,
+        "event_type": "PRINCIPAL_ADVANCED",
+        "category": "financial",
+        "recognition_sequence": 1,
+        "amount_cents": 100_000,
+        "balance_code": "principal",
+        "payload": {"loan_id": "loan-1"},
+        "previous_hash": None,
+        "row_hash": b"\x01" * 32,
+        "agreement_id": None,
+        "enigma_person_id": None,
+        "hash_matches": True,
+    }
+    second = {
+        "event_id": "22222222-2222-2222-2222-222222222222",
+        "organisation_id": "org-a",
+        "occurred_at": later,
+        "event_type": "STATEMENT_ISSUED",
+        "category": "operational",
+        "recognition_sequence": 2,
+        "amount_cents": None,
+        "balance_code": None,
+        "payload": {"statement_id": "stmt-1"},
+        "previous_hash": first["row_hash"],
+        "row_hash": b"\x02" * 32,
+        "agreement_id": None,
+        "enigma_person_id": None,
+        "hash_matches": True,
+    }
+    head = {
+        "last_event_id": second["event_id"],
+        "last_occurred_at": later,
+        "last_hash": second["row_hash"],
+        "last_sequence": 2,
+    }
+    calls: list[tuple[str, dict]] = []
+    events = (first, second)
+
+    def execute(sql: str, params: dict):
+        calls.append((sql, params))
+        if "FROM lms.audit_chain_head" in sql:
+            return [head]
+        if "recognition_sequence <" in sql:
+            return [first]
+        start = params["from_instant"]
+        end = params["to_instant"]
+        return [row for row in events if start <= row["occurred_at"] < end]
+
+    extract = read_lms_audit_event(
+        execute,
+        organisation_id="org-a",
+        from_date=date(2026, 3, 2),
+        to_date=date(2026, 3, 2),
+    )
+    assert "lms.audit_event" in AUDIT_EVENT_SQL
+    assert "ORDER BY event.recognition_sequence" in AUDIT_EVENT_SQL
+    assert "public.digest" in AUDIT_EVENT_SQL
+    assert "lms.audit_chain_head" in AUDIT_CHAIN_HEAD_SQL
+    assert "recognition_sequence <" in AUDIT_PREDECESSOR_SQL
+    assert calls[0][1]["from_instant"] == value_instant(date(2026, 3, 2))
+    assert calls[0][1]["to_instant"] == value_instant(date(2026, 3, 3))
+    assert extract.rows[0].event_id == second["event_id"]
+    assert extract.rows[0].previous_hash == first["row_hash"]
+    assert extract.rows[0].recognition_sequence == 2
+    assert extract.predecessor_event_id == first["event_id"]
+    assert extract.predecessor_row_hash == first["row_hash"]
+    assert extract.chain_head_last_event_id == second["event_id"]
+    assert extract.chain_head_last_hash == second["row_hash"]
+    assert extract.chain_head_last_sequence == 2
+    assert extract.verified is True
+
+    broken = dict(second)
+    broken["hash_matches"] = False
+
+    def execute_broken(sql: str, params: dict):
+        del params
+        if "FROM lms.audit_chain_head" in sql:
+            return [head]
+        if "recognition_sequence <" in sql:
+            return [first]
+        return [broken]
+
+    failed = read_lms_audit_event(
+        execute_broken,
+        organisation_id="org-a",
+        from_date=date(2026, 3, 2),
+        to_date=date(2026, 3, 2),
+    )
+    assert failed.hashes_ok is False
+    assert failed.verified is False
+    assert failed.rows[0].row_hash == second["row_hash"]
