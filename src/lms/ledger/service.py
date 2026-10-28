@@ -88,6 +88,7 @@ _CALC_KIND = {
 _REVERSIBLE = {
     "booking",
     "laybye_deposit",
+    "laybye_application",
     "payment",
     "interest_accrual",
     "interest_bill",
@@ -161,8 +162,7 @@ class Ledger:
             raise LedgerError("principal", "Cash advanced must be positive.")
         if initiation_fee_cents < 0:
             raise LedgerError("initiation", "Initiation fee cannot be negative.")
-        capitalised = product.initiation_capitalised
-        owed = cash_advanced_cents + (initiation_fee_cents if capitalised else 0)
+        owed = cash_advanced_cents + (initiation_fee_cents if product.initiation_capitalised else 0)
         if sum(amount for _, amount in schedule) != owed:
             raise LedgerError(
                 "schedule",
@@ -178,19 +178,86 @@ class Ledger:
                 raise LedgerError("schedule", "Each principal line must be positive.")
             if due < booked or due > end:
                 raise LedgerError("schedule", "A principal due date is outside the agreement.")
-        late_choice: str | None = None
-        reason = "booking"
-        if quoted_disbursement is not None and booked > quoted_disbursement:
-            late_choice = resolved.late_disbursement
-            if late_choice not in {"adjust_instalment", "keep_instalment"}:
-                raise LedgerError(
-                    "election-unset",
-                    "Late disbursement is unset. LOCKED_DECISIONS §13 and §19 fail closed.",
-                )
-            reason = "late_disbursement"
+        self._reject_unset_late_disbursement(resolved, booked, quoted_disbursement)
+        account = self.prepare(
+            organisation_id=organisation_id,
+            person_id=person_id,
+            product=product,
+            organisation=organisation,
+            recognised_at=recognised_at,
+            cash_advanced_cents=cash_advanced_cents,
+            frequency=frequency,
+            schedule=schedule,
+            identity_name=identity_name,
+            identity_number=identity_number,
+            service_address=service_address,
+            quoted_disbursement=quoted_disbursement,
+            initiation_fee_cents=initiation_fee_cents,
+            contractual_end=end,
+        )
+        return self.grant(
+            organisation_id=account.organisation_id,
+            loan_id=account.loan_id,
+            recognised_at=recognised_at,
+            schedule=schedule,
+            initiation_fee_cents=initiation_fee_cents,
+        )
+
+    def prepare(
+        self,
+        *,
+        organisation_id: str,
+        person_id: str,
+        product: ProductTerms,
+        organisation: OrganisationSettings,
+        recognised_at: datetime,
+        cash_advanced_cents: int,
+        frequency: str,
+        schedule: tuple[tuple[date, int], ...],
+        identity_name: str,
+        identity_number: str,
+        service_address: str,
+        quoted_disbursement: date | None = None,
+        initiation_fee_cents: int = 0,
+        contractual_end: date | None = None,
+    ) -> LoanAccount:
+        """Open the parent before the loan-out journal. LOCKED_DECISIONS §4.
+
+        Pre-disbursement receipts need a parent row so the Laybye child can
+        exist. This posts no principal and no cash credit. The disbursement
+        value date stays empty until ``grant``.
+        """
+        if product.classification not in {SHORT_TERM, UNSECURED, ZERO_COST, CPA_LAYBY}:
+            raise LedgerError(
+                "classification-unsupported",
+                f"{product.classification} is not a Day-1 classification in this ledger.",
+            )
+        resolved = resolve_customer_settings_for_booking(organisation, product)
+        self._require_identity(identity_name, identity_number, service_address)
+        if frequency not in FREQUENCIES:
+            raise LedgerError("frequency-unsupported", f"{frequency} is not a locked payment frequency.")
+        if cash_advanced_cents <= 0:
+            raise LedgerError("principal", "Cash advanced must be positive.")
+        if initiation_fee_cents < 0:
+            raise LedgerError("initiation", "Initiation fee cannot be negative.")
+        if not schedule:
+            raise LedgerError("schedule", "A prepared loan needs its contractual schedule.")
+        owed = cash_advanced_cents + (initiation_fee_cents if product.initiation_capitalised else 0)
+        if sum(amount for _, amount in schedule) != owed:
+            raise LedgerError(
+                "schedule",
+                "Schedule lines must sum to the principal. A capitalised initiation "
+                "fee is included in that principal. LOCKED_DECISIONS §2.",
+            )
+        end = contractual_end or max(due for due, _ in schedule)
+        for due, amount in schedule:
+            if amount <= 0:
+                raise LedgerError("schedule", "Each principal line must be positive.")
+            if due > end:
+                raise LedgerError("schedule", "A principal due date is outside the agreement.")
         snapshot = ElectionSnapshot.from_resolved(
             resolved,
-            initiation_capitalised=capitalised,
+            initiation_capitalised=product.initiation_capitalised,
             payment_frequency=frequency,
             classification=product.classification,
         )
@@ -205,17 +272,62 @@ class Ledger:
             frozen_service_address=service_address.strip(),
             snapshot=snapshot,
             payment_frequency=frequency,
-            disbursement_value_date=booked,
+            disbursement_value_date=None,
             quoted_disbursement=quoted_disbursement,
             contractual_end=end,
             cash_advanced_cents=cash_advanced_cents,
         )
+        self.store.add(account)
+        return account
+
+    def grant(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+        schedule: tuple[tuple[date, int], ...],
+        initiation_fee_cents: int = 0,
+    ) -> LoanAccount:
+        """Post the loan-out journal. The linked hold is not moved. LOCKED_DECISIONS §4."""
+        account = self.store.get(organisation_id, loan_id)
+        if account.instrument_kind != "loan":
+            raise LedgerError("laybye-parent", "Only the parent loan is granted.")
+        if account.disbursement_value_date is not None or self._has_kind(account, "booking"):
+            raise LedgerError("already-granted", "This loan has already been granted.")
+        if initiation_fee_cents < 0:
+            raise LedgerError("initiation", "Initiation fee cannot be negative.")
+        capitalised = account.snapshot.initiation_capitalised
+        owed = account.cash_advanced_cents + (initiation_fee_cents if capitalised else 0)
+        if sum(amount for _, amount in schedule) != owed:
+            raise LedgerError(
+                "schedule",
+                "Schedule lines must sum to the principal. A capitalised initiation "
+                "fee is included in that principal. LOCKED_DECISIONS §2.",
+            )
+        booked = value_date(recognised_at)
+        if account.contractual_end < booked:
+            raise LedgerError("term", "Contractual end cannot precede the disbursement value date.")
+        for due, amount in schedule:
+            if amount <= 0:
+                raise LedgerError("schedule", "Each principal line must be positive.")
+            if due < booked or due > account.contractual_end:
+                raise LedgerError("schedule", "A principal due date is outside the agreement.")
+        self._reject_unset_late_disbursement(
+            account.snapshot, booked, account.quoted_disbursement
+        )
+        late_choice: str | None = None
+        reason = "booking"
+        if account.quoted_disbursement is not None and booked > account.quoted_disbursement:
+            late_choice = account.snapshot.late_disbursement
+            reason = "late_disbursement"
+        account.disbursement_value_date = booked
         effects: list[Effect] = []
         for sequence, (due, amount) in enumerate(schedule, start=1):
             effects.append(Effect("create_slice", cents=amount, due_on=due, sequence=sequence))
         entries = [
-            Entry("principal", "principal", cash_advanced_cents, 0),
-            Entry("cash", None, 0, cash_advanced_cents),
+            Entry("principal", "principal", account.cash_advanced_cents, 0),
+            Entry("cash", None, 0, account.cash_advanced_cents),
         ]
         if initiation_fee_cents and capitalised:
             entries.extend(
@@ -248,7 +360,6 @@ class Ledger:
         account.schedule_versions.append(
             ScheduleVersion(1, booked, reason, late_choice, tuple(schedule))
         )
-        self.store.add(account)
         self._post(
             account,
             kind="booking",
@@ -312,6 +423,112 @@ class Ledger:
                 amount_cents=amount_cents,
             )
         return child
+
+    def credit_laybye(
+        self,
+        *,
+        organisation_id: str,
+        parent_loan_id: str,
+        cents: int,
+        recognised_at: datetime,
+    ) -> Transaction:
+        """Cash in on the hold. Not a loan-out. LOCKED_DECISIONS §4."""
+        child = self._laybye_child(organisation_id, parent_loan_id)
+        if cents <= 0:
+            raise LedgerError("laybye", "A Laybye receipt must be positive.")
+        return self._post(
+            child,
+            kind="laybye_deposit",
+            recognised_at=recognised_at,
+            entries=(
+                Entry("cash", None, cents, 0),
+                Entry("laybye_hold", "laybye_hold", 0, cents),
+            ),
+            effects=(),
+            amount_cents=cents,
+        )
+
+    def debit_laybye(
+        self,
+        *,
+        organisation_id: str,
+        parent_loan_id: str,
+        cents: int,
+        recognised_at: datetime,
+    ) -> Transaction:
+        """Reduce the hold. Paired with a loan receipt when the hold is applied."""
+        child = self._laybye_child(organisation_id, parent_loan_id)
+        if cents <= 0:
+            raise LedgerError("laybye", "A Laybye application must be positive.")
+        if self.bucket_balance(child, "laybye_hold") < cents:
+            raise LedgerError("laybye", "The Laybye hold is smaller than the application.")
+        return self._post(
+            child,
+            kind="laybye_application",
+            recognised_at=recognised_at,
+            entries=(
+                Entry("laybye_hold", "laybye_hold", cents, 0),
+                Entry("cash", None, 0, cents),
+            ),
+            effects=(),
+            amount_cents=cents,
+        )
+
+    def section_126_cents(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        cents: int,
+        recognised_at: datetime,
+    ) -> int:
+        """Due amount ``allocate_payment`` will take. Future principal is not included.
+
+        LOCKED_DECISIONS §8. The partial-prepayment election is not applied here.
+        """
+        account = self._loan(organisation_id, loan_id)
+        if cents < 0:
+            raise LedgerError("payment", "A receipt cannot be negative.")
+        if cents == 0:
+            return 0
+        day = value_date(recognised_at)
+        due_charges = [charge for charge in account.charges if charge.remaining_cents > 0]
+        additional = [charge for charge in due_charges if charge.bucket == "additional_monthly"]
+        named = [charge for charge in due_charges if charge.bucket != "additional_monthly"]
+        interest_due = sum(charge.remaining_cents for charge in named if charge.bucket == "interest")
+        named_fees = sum(charge.remaining_cents for charge in named if charge.bucket != "interest")
+        additional_due = sum(charge.remaining_cents for charge in additional)
+        if (
+            additional_due
+            and named_fees
+            and cents > interest_due
+            and cents < interest_due + named_fees + additional_due
+        ):
+            raise LedgerError(
+                "additional-fee-order-unset",
+                "LOCKED_DECISIONS §8 orders the named fee buckets. It does not place "
+                "the further monthly fee among them, so a short payment that would "
+                "have to choose fails closed.",
+            )
+        state = self._state(account, named, day)
+        first_amount = min(cents, interest_due + named_fees) if additional_due else cents
+        first = allocate_payment(
+            state,
+            first_amount,
+            as_of=day,
+            prepayment=None,
+            apply_prepayment=False,
+        )
+        taken = first.interest_cents + first.fee_cents + first.principal_cents
+        leftover = cents - taken
+        additional_taken = 0
+        for charge in sorted(additional, key=lambda item: (item.due_on, item.sequence)):
+            if leftover == 0:
+                break
+            take = min(charge.remaining_cents, leftover)
+            additional_taken += take
+            leftover -= take
+        return taken + additional_taken
 
     def accrue_day(
         self,
@@ -467,6 +684,11 @@ class Ledger:
             raise LedgerError(
                 "service-fee-parent",
                 "LOCKED_DECISIONS §4: one monthly service fee, levied on the parent.",
+            )
+        if account.disbursement_value_date is None:
+            raise LedgerError(
+                "not-disbursed",
+                "The loan has not been granted. LOCKED_DECISIONS §4.",
             )
         if monthly_cents < 0:
             raise LedgerError("service-fee", "Service fee cannot be negative.")
@@ -859,7 +1081,37 @@ class Ledger:
                 "laybye-no-interest",
                 "LOCKED_DECISIONS §4: the lay-by hold is not an interest-bearing account.",
             )
+        if account.disbursement_value_date is None:
+            raise LedgerError(
+                "not-disbursed",
+                "The loan has not been granted. LOCKED_DECISIONS §4.",
+            )
         return account
+
+    def _laybye_child(self, organisation_id: str, parent_loan_id: str) -> LoanAccount:
+        parent = self.store.get(organisation_id, parent_loan_id)
+        if parent.instrument_kind != "loan":
+            raise LedgerError("laybye-parent", "A lay-by hold is a child of a loan, not of another hold.")
+        children = self._children(parent)
+        if not children:
+            raise LedgerError(
+                "laybye-missing",
+                "LOCKED_DECISIONS §4: there is no Laybye account on this loan.",
+            )
+        return children[0]
+
+    def _has_kind(self, account: LoanAccount, kind: str) -> bool:
+        return any(transaction.kind == kind for transaction in self._tx_for(account))
+
+    def _reject_unset_late_disbursement(self, settings: object, booked: date, quoted: date | None) -> None:
+        if quoted is None or booked <= quoted:
+            return
+        choice = getattr(settings, "late_disbursement", None)
+        if choice not in {"adjust_instalment", "keep_instalment"}:
+            raise LedgerError(
+                "election-unset",
+                "Late disbursement is unset. LOCKED_DECISIONS §13 and §19 fail closed.",
+            )
 
     def _children(self, account: LoanAccount) -> tuple[LoanAccount, ...]:
         return tuple(
