@@ -128,6 +128,11 @@ INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('AGREEMENT_STATUS_CHANGED', 'operational'),
   ('STATEMENT_ISSUED', 'operational'),
   ('DEBIT_ORDER_SUBMITTED', 'operational'),
+  ('LOAN_NUMBER_ISSUED', 'operational'),
+  ('RECEIPT_HELD_UNAPPLIED', 'operational'),
+  ('CREDIT_LIFE_PREMIUM_RECEIVED', 'operational'),
+  ('RETURNED_UNPAID_FLAGGED', 'operational'),
+  ('RECOVERY_NOT_POSTED', 'operational'),
   ('REFERENCE_DATA_PUBLISHED', 'operational'),
   ('SETTLEMENT_QUOTED', 'operational');
 
