@@ -1,6 +1,6 @@
 # Servicing implementation checklist
 
-Not production code. Nothing in this file is a new business rule. `docs/LOCKED_DECISIONS.md` (last updated 2026-10-27) wins over [primary-flows.md](primary-flows.md) and [implementation-design.md](implementation-design.md).
+Not production code. Nothing in this file is a new business rule. `docs/LOCKED_DECISIONS.md` (28 October 2026) wins over [primary-flows.md](primary-flows.md) and [implementation-design.md](implementation-design.md). The running orchestration and the gaps that are still open are in [implementation-note.md](implementation-note.md). Rows below that the 28 October lock has since closed are historical. The note wins.
 
 Build only what is in the locked file. Where a field is required and the value is missing, fail closed. Do not substitute an example number.
 
