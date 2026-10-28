@@ -21,6 +21,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Reversals use the same value date the system originally recognised.
 - A payment received on a flag date is treated as 00:00 on that day and is visible to the morning default check.
 - When two events are both recognised at 00:00 on the same calendar day, process them in the order they were recognised by the system (stable sort by receipt sequence).
+- On any calendar day, capitalisation of accrued interest and fees and allocation of payments recognised that day are treated as simultaneous at 00:00. The order is: accrue and capitalise the day's due amounts first, then allocate payments recognised that day.
 
 ## 2. Initiation fee treatment
 
@@ -59,6 +60,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Recommendation for new products: default to actual/actual; keep 30/360 as a selectable option.
 - Accrual frequency is daily.
 - A 360-day year is not required for Day-1.
+- Interest and fee accrual must use the same day-count and base method that was used to calculate the contractual instalment. Do not use a different method for accrual than was used for the instalment quote.
 
 ## 6. Default definition (aligned for in-duplum and collections)
 
@@ -84,11 +86,16 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - This is not an absolute single-lifetime ceiling; the law provides for the rule to halt and start anew on a subsequent default.
 - Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the fresh-episode rule above.
 
-## 8. Payment allocation
+## 8. Payment allocation and capitalisation
 
 - Section 126 order: due or unpaid interest, then due or unpaid fees or charges, then principal.
-- Only due or unpaid amounts are allocated. Memo accruals that are not yet allowed to be debited are not allocatable.
+- Only due or unpaid amounts are allocated.
 - When multiple fee buckets are all already due, order is: collection costs, default administration, credit insurance, service fee, initiation fee (earliest due date first within each bucket).
+- On any calendar day, accrued interest and fees that become due that day are capitalised at 00:00 before payments recognised that day are allocated.
+- Capitalisation and payment allocation need not occur on the same calendar day. Capitalisation may be month-end; payment may be on the client's payday. Each is processed on its own recognition date.
+- Fees and interest charged may never exceed NCA limits.
+- If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment (write-off not required if the account is already in default).
+- If the client does not pay exactly the contractual instalment, the difference becomes part of arrears. Normal arrears, in-duplum and collections rules then apply. The client either continues paying until the loan is fully repaid, or the outstanding amount is written off.
 
 ## 9. Service-fee pro-rata and VAT
 
@@ -120,6 +127,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 ## 13. Decision engine, instalments and additional fees
 
 - Initially the platform’s own engine can be forced; long-term the LMS must accept loans from external decision engines.
+- Quote date and disbursement date may differ. The contractual instalment accepted by the client is binding.
 - Two options must be supported when disbursement occurs later than the quote date:
   - (a) adjust the instalment based on actual disbursement date and remaining term, or
   - (b) keep the original instalment and either settle early or write off a small residual at contractual end
@@ -129,6 +137,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Additional fees outside interest, initiation, monthly service fee and credit life (for example certain collection costs) should be added as a further monthly fee (fixed or variable), not capitalised into the amortisation schedule.
 - A loan restructuring capability exists so that other costs can be added during the term by creating a new instalment, pricing and term when required.
 - “Subsequent” short-term loan is counted per credit-provider organisation and per calendar year.
+- Interest and fee accrual must use the same method that was used to calculate the contractual instalment.
 
 ## 14. Payment frequencies
 
