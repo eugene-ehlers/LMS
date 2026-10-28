@@ -110,7 +110,12 @@ SELECT
   CASE WHEN terms.base_rate IS NULL THEN settings.discount_rate ELSE terms.discount_rate END AS discount_rate,
   COALESCE(terms.vat_on_rand_maxima, settings.vat_on_rand_maxima) AS vat_on_rand_maxima,
   COALESCE(terms.late_disbursement, settings.late_disbursement) AS late_disbursement,
-  COALESCE(terms.partial_prepayment, settings.partial_prepayment) AS partial_prepayment
+  COALESCE(terms.partial_prepayment, settings.partial_prepayment) AS partial_prepayment,
+  COALESCE(terms.in_duplum_trigger, settings.in_duplum_trigger) AS in_duplum_trigger,
+  COALESCE(
+    terms.residual_write_off_threshold_cents,
+    settings.residual_write_off_threshold_cents
+  ) AS residual_write_off_threshold_cents
 FROM lms.cfg_product_terms AS terms
 JOIN lms.cfg_product AS product ON product.id = terms.product_id
 JOIN lms.cfg_organisation_settings AS settings

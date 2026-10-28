@@ -255,6 +255,44 @@ def interest_bearing_cents(
     return max(0, base)
 
 
+# Decision 6. The client chooses which event opens an in-duplum episode.
+# An unset value fails closed. There is no platform default.
+TRIGGER_CONTRACTUAL_BREACH = "contractual_breach"
+TRIGGER_COLLECTIONS_DEFAULT = "collections_default"
+IN_DUPLUM_TRIGGERS = frozenset({TRIGGER_CONTRACTUAL_BREACH, TRIGGER_COLLECTIONS_DEFAULT})
+
+# Decision 8 names R50 as the residual write-off threshold when the client
+# has not stored one. Decision 19 also says unset elections fail closed.
+# The R50 sentence is the specific rule for this election. Other elections
+# in decision 19 still fail closed when unset. R50 is 5 000 cents.
+RESIDUAL_WRITE_OFF_DEFAULT_CENTS = 5_000
+
+
+def resolve_in_duplum_trigger(organisation: str | None, product: str | None = None) -> str:
+    """Decision 6 and decision 19. Product override wins. Unset fails closed."""
+    chosen = product if product is not None else organisation
+    if chosen not in IN_DUPLUM_TRIGGERS:
+        raise CalculationInputError(
+            "in_duplum_trigger is not set on the product or the organisation"
+        )
+    return chosen
+
+
+def resolve_residual_threshold_cents(
+    organisation: int | None,
+    product: int | None = None,
+) -> int:
+    """Decision 8. A stored value wins. A null at both levels is R50.
+
+    The amount is cents. Zero is a stored choice. A negative value is refused.
+    """
+    chosen = product if product is not None else organisation
+    if chosen is None:
+        return RESIDUAL_WRITE_OFF_DEFAULT_CENTS
+    require_non_negative_cents(chosen, "residual write-off threshold")
+    return chosen
+
+
 def duplum_base_cents(*, cash_balance_cents: int, capitalised_initiation_cents: int) -> int:
     """Unpaid principal when default is first flagged.
 
