@@ -153,10 +153,16 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Choice stored per organisation or per product.
 - No platform default; fails closed until the provider chooses.
 
-## 12. Statements
+## 12. Statements and documents
 
 - One statement per client per credit-provider organisation, showing all of that client's loans with that organisation.
 - Each loan retains its own opening and closing balance so section 109 still holds.
+- The LMS produces shortened statements, interim statements, regular statements, proof of balances and proof of payments.
+- Origination and contracting documents are produced in the decision engine before the information is sent to the LMS.
+- Logo and look-and-feel are client-specific. The platform provides basic templates. The client may supply their own look and feel for customisation.
+- Documents must be developed so that look-and-feel and logos are easy to change. Use shared headers and footers and centralised look-and-feel so that one change flows through rather than requiring multiple edits.
+- Unless specific Laybye or BNPL legislation requires otherwise, use the NCA. Be consistent where possible.
+- Show values only where they are charged.
 
 ## 13. Decision engine, instalments and additional fees
 
