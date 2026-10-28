@@ -37,7 +37,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A campaign that sets interest to 0 % or fees to R0 is treated as the real rate less discount = 0 %.
 - Calculations must not fail when rates or fees are zero for the full term or any portion of the term.
 - Campaign pricing must be stored and displayed as base rate (x %) with a campaign discount (y %) deducted.
-- Discount cannot exceed the base rate. If the discount is higher, the effective rate is capped at 0 %.
+- The discount rate may be higher than the base rate, but the net (base rate less discount) is floored at 0 %. It can never be negative.
 - Fees also cannot be negative. A fee discount that would produce a negative fee is capped at R0.
 - A discount affects the value used as the rate for calculations. It does not change the accrual method, day-count convention, or annualisation method.
 - A discount can apply to any product (annual, weekly, etc.).
@@ -47,7 +47,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It must be clear which default event (contractual breach or collections default) triggers fall-away when Option A is selected.
 - The base rate is the rate charged by the client. For unsecured personal this is normally the NCA maximum (repo rate + margin) fixed at the time of contract. The discount is applied against that contractual rate.
 - If the client has opted for the rate to reduce when the repo rate falls, the contractual rate reduces and the discount is applied to the reduced rate. The effective rate is capped at 0 % and can never be negative.
-- Every campaign has a start date and an end date supplied by the decision engine.
+- Every campaign has a start date and an end date. Staff must be able to set and change them (for example to correct errors).
 - Any loan generated during the campaign period qualifies for the linked campaign, even if the loan term extends beyond the campaign end date.
 - Treatment of variable rates, discounts, or opted-for reducing rates depends on the rules of that campaign.
 - The system must be agile enough to support campaigns that match the client’s products and campaign rules.
@@ -123,7 +123,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Small residual write-off threshold is client-configurable. Default value is R100. It is not automatic.
 - If the client does not pay exactly the contractual instalment, the difference becomes part of arrears. Normal arrears, in-duplum and collections rules then apply. The client either continues paying until the loan is fully repaid, or the outstanding amount is written off.
 - Write-off can be manual. If automated, the external formula is the mandate.
-- A write-off can never be more or less than the outstanding balance. Payments received must be accounted for first. If the balance does not reduce to R0 it is not a write-off.
+- A write-off can never be more or less than the outstanding balance. All receipts must be allocated before the write-off. If the balance does not reduce to R0 it is not a write-off.
+- A balance can open again at a later date if a payment taken into consideration is returned unpaid. That must be flagged so approval can be obtained to write it off as well.
 - Any income received after a write-off is a recovery and is dealt with at the accounting level, not in the LMS.
 - Provisioning formulas are run outside the LMS. The LMS only receives an instruction to write off or not, or the action is performed manually.
 - Recency, months on book, promise-to-pay adherence and contactability are risk calculations performed on LMS data in reporting. They are not calculated inside the LMS.
@@ -163,6 +164,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Documents must be developed so that look-and-feel and logos are easy to change. Use shared headers and footers and centralised look-and-feel so that one change flows through rather than requiring multiple edits.
 - Unless specific Laybye or BNPL legislation requires otherwise, use the NCA. Be consistent where possible.
 - Show values only where they are charged.
+- Staff must be able to locate records by ID (or passport / ID equivalent) or by loan number.
 
 ## 13. Decision engine, instalments and additional fees
 
@@ -182,6 +184,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A loan restructuring capability exists so that other costs can be added during the term by creating a new instalment, pricing and term when required.
 - The 5 % / 3 % short-term rate distinction is supplied by the decision engine. The LMS uses the rate it is given and checks that calculations stay within the Act for that rate. The LMS does not contain the rules that decide whether a loan is concurrent, subsequent, settled-and-readvanced, or restructured. Those rules sit in the decision engine.
 - Interest and fee accrual must use the same method that was used to calculate the contractual instalment.
+- To avoid loan splitting, a second quote or loan for the same application must be failed until the first has been declined and is no longer open.
 
 ## 14. Payment frequencies
 
@@ -239,6 +242,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Campaign fall-away trigger (contractual_breach / collections_default)
 - Unset values fail closed.
 - Campaign fall-away choice and trigger are stored per campaign.
+- Role names for edits must be descriptive and follow best practice (for example lms.elections.write, lms.campaign.write).
 
 ## 20. Prescription (section 126B)
 
@@ -251,11 +255,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - The NCR registration number is stored as an LMS tenant attribute (organisation level).
 - Enigma does not hold or return it.
+- It is compulsory. For testing a test number in the same format with all zeros may be used.
 - It is required on NCA communications and regulatory extracts for micro and unsecured personal loans.
 - It is not required for pure hosting or for Laybye/BNPL.
-- A blank NCR number blocks those communications and extracts. It does not block booking.
 - Trading name, addresses, telephone numbers, payment-account details and brand assets are also LMS-owned and are not supplied by Enigma.
-- Compliance details (NCR number, trading name, addresses, telephone, payment-account details) are required for reporting, control and audits.
+- Compliance details (NCR number, trading name, addresses, telephone, payment-account details) are required for reporting, control and audits and must be captured up front.
 
 ## 22. Operational rand ceilings
 
@@ -271,7 +275,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - All actions on the LMS, whether system changes or changes to accounts, must produce an audit record.
 - The audit record includes who did it (staff identity from Enigma), when it was done, and what was done.
 - A system-error correction is an audited action and must record the staff identity.
-- For any change (compliance, elections, brand, ceiling, campaign), a person must sign in with the correct role so the sign-in details can be stored in the audit record.
+- For any change (compliance, elections, brand, ceiling, campaign, promise-to-pay, contact, system-error), a person must sign in with the correct role so the sign-in details can be stored in the audit record.
+- The audit must be sufficient to identify who did things and whether they had the mandate to do so.
 - Role-based access and audit records are required to pass POPIA and other audits.
 
 ## 24. Pricing
@@ -279,3 +284,12 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - There is one price mechanism: R100 per month.
 - R100 per month drives the annual fee and any discount offered to entice annual payments.
 - Any reference to R50 must be replaced with R100.
+
+## 25. Loan numbers
+
+- Loan numbers are generated by the LMS.
+- The decision engine supplies an application number. The LMS links the loan number to the application number for audit purposes.
+- There can be only one loan number for an application, except for a Laybye where the core loan number is the same and the Laybye is distinguished by another indicator.
+- Loan numbers must be sequential and cannot be skipped.
+- Loan numbers must be long enough so the system does not run out of numbers.
+- Identifiers such as the first four letters of the company name and the month and year created may be included.
