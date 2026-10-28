@@ -69,7 +69,7 @@ The full list, with the lock section each one conflicts with, is in `docs/collec
 - Partial write-off order, prescription period, exit from review, and the write-off action id are not locked. Partial write-off is refused. No clock and no refund are posted. The action string is a caller argument.
 - `Servicing.accept_payment` does not hold a prescription receipt. `Collections.receive` does.
 - `Ledger.flag_default` still closes an episode from the old single morning check. Collections does not call it. Servicing still does.
-- Elections are copied at `bind`, not at `Ledger.book`. The snapshot type was left unchanged so booking stays as Layer 0 defined it.
+- The two elections are stored on `OrganisationSettings` (and an optional product override) and copied by `resolve_customer_settings` onto the agreement. `bind` still copies them onto the collections case. `bind` before disbursement returns a view with no episode. A failed bind does not store the case. A second bind after a successful copy is `elections-frozen`. The ledger snapshot type is unchanged. An unset trigger does not fail `Servicing.book`; `bind` and `resolve_in_duplum_trigger` fail closed. Whether booking itself must reject a missing trigger is not settled.
 
 ## Test results
 

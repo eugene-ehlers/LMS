@@ -79,7 +79,7 @@ Ledger.section_126_cents(...) -> int        # allocate_payment, apply_prepayment
 | Section 124 amount | `lms.calc.laybye.guard_s124` | Engine |
 | In-duplum ceiling | `Ledger.flag_default` (unchanged; hold is not an argument) | Ledger |
 
-Servicing is not on this path. `Servicing.accept_payment` posts the whole receipt through `post_payment`, which rejects an amount the loan will not take (`overpayment-unset`) and cannot credit the hold. `Servicing.disburse` still calls `Ledger.book`, which now prepares and grants in the same call, so an ordinary loan without a pre-disbursement Laybye is unchanged.
+`Servicing.book_linked_laybye` books the agreement, prepares the pair, posts a pre-disbursement receipt as cash in, and grants when `grant_at` is set. `Servicing.disburse` grants a parent that was prepared earlier and still calls `Ledger.book` when no parent exists, so an ordinary loan without a Laybye is unchanged. `Ledger.post_payment` on a loan with a Laybye child takes due section 126 amounts and credits the remainder to the hold. `allocate_receipt` calls that method. A loan with no Laybye child still applies the partial-prepayment election and then raises `overpayment-unset`. §13 and §4 do not say whether prepayment runs before the Laybye; this path does not apply the election to the remainder.
 
 Enigma is not called. §15 no longer gives Enigma the section 124 authority. The authority is the `Section124Authority` argument. A missing one fails closed.
 

@@ -150,6 +150,8 @@ def _settings(raw: dict) -> OrganisationSettings:
         vat_on_rand_maxima=raw.get("vat_on_rand_maxima"),
         late_disbursement=raw.get("late_disbursement"),
         partial_prepayment=raw.get("partial_prepayment"),
+        in_duplum_trigger=raw.get("in_duplum_trigger"),
+        residual_write_off_threshold_cents=raw.get("residual_write_off_threshold_cents"),
     )
 
 

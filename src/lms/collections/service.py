@@ -107,7 +107,11 @@ class Collections:
         """Copy the §19 elections onto the agreement. A second bind is refused.
 
         The ledger snapshot does not carry these two elections. Binding here
-        is the copy. It does not post.
+        is the collections copy. It does not post. The agreement may still
+        be pending disbursement: the view then has no episode. A failed
+        check does not store the case, so a later bind is not refused
+        because an earlier attempt ran before disbursement. A second bind
+        after a successful copy is still elections-frozen.
         """
         if agreement_id in self.cases:
             raise CollectionsError(
@@ -159,6 +163,8 @@ class Collections:
         if case.prescription_review or case.written_off:
             return self.view(agreement_id, recognised_at)
         record = self.servicing._agreement(agreement_id)
+        if record.disbursement_value_date is None:
+            raise CollectionsError("status", "The agreement has not been disbursed.")
         account = self._loan(record)
         check_on = value_date(recognised_at)
         self._record_breaches(case, account, check_on)
@@ -444,6 +450,20 @@ class Collections:
     def view(self, agreement_id: str, recognised_at: datetime | None = None) -> CollectionsView:
         case = self._case(agreement_id)
         record = self.servicing._agreement(agreement_id)
+        if record.disbursement_value_date is None:
+            return CollectionsView(
+                agreement_id=agreement_id,
+                trigger=case.trigger,
+                contractual_breaches=tuple(sorted(case.breaches)),
+                collections_default=False,
+                open_episode_ceiling=None,
+                episode_count=0,
+                discount_fallen_away=False,
+                prescription_review=case.prescription_review,
+                provision_cents=case.provision_cents,
+                written_off=case.written_off,
+                residual_threshold_cents=case.residual_threshold_cents,
+            )
         account = self._loan(record)
         check_on = value_date(recognised_at) if recognised_at is not None else None
         defaulted = self._collections_default(account, check_on) if check_on is not None else False
@@ -510,6 +530,7 @@ class Collections:
                     fall_away=fall,
                 )
                 case.episode_due_on = opening
+                self._audit_episode(record, recognised_at, "opened")
             elif case.episode_due_on is not None and check_on >= case.episode_due_on + _leniency(account):
                 ledger.mark_discount_fallen_away(
                     organisation_id=record.organisation_id,
@@ -527,6 +548,7 @@ class Collections:
                 fall_away=True,
             )
             case.episode_due_on = check_on
+            self._audit_episode(record, recognised_at, "opened")
             return
         if not defaulted and _open(account) is not None:
             ledger.close_in_duplum_episode(
@@ -534,6 +556,7 @@ class Collections:
                 loan_id=account.loan_id,
                 recognised_at=recognised_at,
             )
+            self._audit_episode(record, recognised_at, "closed")
 
     def _facts(
         self,
@@ -603,6 +626,18 @@ class Collections:
                 "The collections call fails closed.",
             )
         return case
+
+    def _audit_episode(self, record, recognised_at: datetime, change: str) -> None:
+        """Operational row. The caller that uses SQL inserts ``lms.audit_event``."""
+        self.servicing.audit.append(
+            organisation_id=record.organisation_id,
+            occurred_at=recognised_at,
+            event_type="AGREEMENT_STATUS_CHANGED",
+            category="operational",
+            agreement_id=record.agreement_id,
+            enigma_person_id=record.person_id,
+            payload={"in_duplum": change},
+        )
 
     def _loan(self, record) -> LoanAccount:
         if record.ledger_loan_id is None:

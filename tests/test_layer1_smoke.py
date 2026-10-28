@@ -8,8 +8,8 @@ The path calls the implementations already on these branches:
 - Collections and arrears (PR #17)
 - Regulatory extracts (PR #18)
 
-Locked decisions are not given a new reading. A step the public methods
-cannot perform is reported. It is not patched in production code.
+Locked decisions are not given a new reading. The closed gaps are called
+through servicing. Two rule questions are still reported and fail this test.
 
 Caller elections for this run, not platform defaults:
 
@@ -42,8 +42,7 @@ import pytest
 from lms.calc.interest import daily_interest_rands
 from lms.collections.errors import CollectionsError
 from lms.collections.service import Collections
-from lms.laybye.service import allocate_receipt, grant_loan, prepare_pair, receive_pre_disbursement
-from lms.regulatory.audit import AuditExtract, AuditLog, AuditRecord
+from lms.regulatory.audit import AuditExtract, AuditRecord
 from lms.regulatory.errors import RegulatoryError
 from lms.regulatory.ncr import read_ncr_number
 from lms.regulatory.sacrra import build_sacrra_extract
@@ -123,6 +122,8 @@ def _settings() -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="collections_default",
+        residual_write_off_threshold_cents=RESIDUAL_CENTS,
     )
 
 
@@ -255,140 +256,121 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     servicing = Servicing(enigma=stub)
     product = micro_short_term()
     settings = _settings()
-    record = servicing.book(
-        organisation_id=ORG,
-        person_id=PERSON,
-        product=product,
-        settings=settings,
-        recognised_at=BOOKED_AT,
-        cash_advanced_cents=CASH_CENTS,
-        frequency="monthly",
-        schedule=((DUE, CASH_CENTS),),
-        initiation_fee_cents=0,
-        quoted_disbursement=ADVANCE,
-        idempotency_key="book-layer1",
+    record = _step(
+        problems,
+        "book linked laybye",
+        lambda: servicing.book_linked_laybye(
+            organisation_id=ORG,
+            person_id=PERSON,
+            product=product,
+            settings=settings,
+            recognised_at=BOOKED_AT,
+            cash_advanced_cents=CASH_CENTS,
+            frequency="monthly",
+            schedule=((DUE, CASH_CENTS),),
+            initiation_fee_cents=0,
+            quoted_disbursement=ADVANCE,
+            idempotency_key="book-layer1",
+            pre_disbursement_cents=LAYBYE_CENTS,
+            pre_disbursement_at=LAYBYE_AT,
+        ),
     )
-    _expect(problems, record.status == "pending_disbursement", f"booking status is {record.status}")
-    _expect(problems, record.ledger_loan_id is None, "booking already had a ledger loan")
-    _expect(problems, servicing.ledger.store.accounts_for(ORG) == (), "booking posted a ledger account")
-    _expect(problems, record.frozen_full_name == "Ada Borrower", "identity was not frozen at booking")
+    if record is None:
+        return
+    parent = servicing.ledger.store.get(ORG, record.ledger_loan_id)
+    child = servicing.ledger.store.get(ORG, record.laybye_loan_id)
+    receipt = next(
+        transaction
+        for transaction in servicing.ledger.store.transactions_for(ORG, child.loan_id)
+        if transaction.kind == "laybye_deposit"
+    )
+    hold = servicing.ledger.bucket_balance(child, "laybye_hold")
     numbers.append(
         f"booked {record.agreement_id} status {record.status}, "
-        f"leniency {record.resolved.leniency_days} days, "
-        f"threshold {record.resolved.full_payment_threshold_percent}%"
+        f"in-duplum {record.resolved.in_duplum_trigger}, "
+        f"residual {_rands(record.resolved.residual_write_off_threshold_cents)}"
     )
+    numbers.append(f"pre-disbursement Laybye hold: {_rands(hold)} on {receipt.value_date.isoformat()}")
+    _expect(problems, record.status == "pending_disbursement", f"booking status is {record.status}")
+    _expect(problems, record.disbursement_value_date is None, "booking granted the loan")
+    _expect(problems, record.resolved.in_duplum_trigger == "collections_default", "the trigger was not stored at booking")
+    _expect(
+        problems,
+        record.resolved.residual_write_off_threshold_cents == RESIDUAL_CENTS,
+        "the residual threshold was not stored at booking",
+    )
+    _expect(problems, record.frozen_full_name == "Ada Borrower", "identity was not frozen at booking")
+    _expect(problems, parent.disbursement_value_date is None, "the parent was granted during prepare")
+    _expect(problems, servicing.ledger.bucket_balance(parent, "principal") == 0, "prepare posted principal")
+    _expect(problems, child.instrument_kind == "laybye_hold", f"child kind is {child.instrument_kind}")
+    _expect(problems, hold == LAYBYE_CENTS, f"Laybye hold is {_rands(hold)}, expected {_rands(LAYBYE_CENTS)}")
+    _expect(problems, receipt.kind == "laybye_deposit", f"pre-disbursement kind is {receipt.kind}")
+    _expect(
+        problems,
+        [(entry.account_code, entry.debit_cents, entry.credit_cents) for entry in receipt.entries]
+        == [("cash", LAYBYE_CENTS, 0), ("laybye_hold", 0, LAYBYE_CENTS)],
+        "the pre-disbursement receipt is not cash in on the Laybye",
+    )
+    _expect(
+        problems,
+        servicing.ledger.store.transactions_for(ORG, parent.loan_id) == (),
+        "the pre-disbursement receipt posted on the parent loan",
+    )
+    _expect(problems, receipt.value_date == ADVANCE, f"receipt value date is {receipt.value_date}")
+
     collections = Collections(servicing)
+    early_bind = _step(
+        problems,
+        "bind before disbursement",
+        lambda: collections.bind(
+            record.agreement_id,
+            in_duplum_trigger="collections_default",
+            residual_threshold_cents=RESIDUAL_CENTS,
+        ),
+    )
+    if early_bind is None:
+        return
+    numbers.append(
+        f"elections bound before disbursement: in-duplum {early_bind.trigger}, "
+        f"residual {_rands(early_bind.residual_threshold_cents)}, "
+        f"collections_default={early_bind.collections_default}"
+    )
+    _expect(problems, early_bind.trigger == "collections_default", f"trigger is {early_bind.trigger}")
+    _expect(problems, early_bind.residual_threshold_cents == RESIDUAL_CENTS, "residual was not copied")
+    _expect(problems, early_bind.collections_default is False, "a pending loan was already in collections default")
+    _expect(problems, early_bind.episode_count == 0, "a pending loan opened an in-duplum episode")
     try:
-        early_bind = collections.bind(
+        collections.bind(
             record.agreement_id,
             in_duplum_trigger="collections_default",
             residual_threshold_cents=RESIDUAL_CENTS,
         )
+        problems.append("a second bind was accepted after the elections had been copied")
     except CollectionsError as exc:
-        early_bind = None
-        numbers.append(f"bind before disbursement: {exc.code}: {exc}")
-        gaps.append(
-            "Collections.bind before disbursement raises "
-            f"{exc.code}: {exc} "
-            "The case is still stored: a second bind is refused as elections-frozen, "
-            "and the later view reads collections_default and R50. "
-            "Servicing.book cannot carry in_duplum_trigger or the residual threshold. "
-            "OrganisationSettings has neither field. "
-            "Locked §19 stores both at organisation level, with a product override. "
-            "db/migrations/0005_collections_elections.sql is not read by this path."
-        )
-    else:
-        numbers.append(
-            f"elections bound before disbursement: in-duplum {early_bind.trigger}, "
-            f"residual {_rands(early_bind.residual_threshold_cents)}"
+        numbers.append(f"second bind refused: {exc.code}")
+        _expect(
+            problems,
+            exc.code == "elections-frozen",
+            f"second bind failed with {exc.code}: {exc}",
         )
 
     stub.full_name = "Changed After Booking"
     stub.id_number = "0000000000000"
     stub.service_address = "9 Other Road, Johannesburg"
-    prepared = _step(
-        problems,
-        "prepare laybye pair",
-        lambda: prepare_pair(
-            servicing.ledger,
-            organisation_id=ORG,
-            person_id=PERSON,
-            product=product,
-            organisation=settings,
-            recognised_at=BOOKED_AT,
-            cash_advanced_cents=CASH_CENTS,
-            frequency="monthly",
-            schedule=((DUE, CASH_CENTS),),
-            identity_name=record.frozen_full_name,
-            identity_number=record.frozen_id_number,
-            service_address=record.frozen_service_address,
-            quoted_disbursement=ADVANCE,
-            initiation_fee_cents=0,
-            contractual_end=DUE,
-        ),
-    )
-    if prepared is None:
-        gaps.append(
-            "No servicing method books a linked Laybye before disbursement. "
-            "Servicing.disburse calls Ledger.book, which prepares and grants in one call, "
-            "so a pre-disbursement receipt cannot be inserted. prepare_pair failed as well."
-        )
-        return
-    parent, child = prepared
-    _expect(problems, parent.disbursement_value_date is None, "the parent was granted during prepare")
-    _expect(problems, servicing.ledger.bucket_balance(parent, "principal") == 0, "prepare posted principal")
-    _expect(problems, parent.frozen_full_name == "Ada Borrower", "prepare rewrote the frozen name")
-    _expect(problems, child.instrument_kind == "laybye_hold", f"child kind is {child.instrument_kind}")
-
-    receipt = _step(
-        problems,
-        "pre-disbursement receipt",
-        lambda: receive_pre_disbursement(
-            servicing.ledger,
-            organisation_id=ORG,
-            parent_loan_id=parent.loan_id,
-            cents=LAYBYE_CENTS,
-            recognised_at=LAYBYE_AT,
-        ),
-    )
-    if receipt is not None:
-        hold = servicing.ledger.bucket_balance(child, "laybye_hold")
-        numbers.append(f"pre-disbursement Laybye hold: {_rands(hold)} on {receipt.value_date.isoformat()}")
-        _expect(problems, hold == LAYBYE_CENTS, f"Laybye hold is {_rands(hold)}, expected {_rands(LAYBYE_CENTS)}")
-        _expect(problems, receipt.kind == "laybye_deposit", f"pre-disbursement kind is {receipt.kind}")
-        _expect(
-            problems,
-            servicing.ledger.bucket_balance(parent, "principal") == 0,
-            "the pre-disbursement receipt changed parent principal",
-        )
-        _expect(
-            problems,
-            servicing.ledger.store.transactions_for(ORG, parent.loan_id) == (),
-            "the pre-disbursement receipt posted on the parent loan",
-        )
-        _expect(problems, receipt.value_date == ADVANCE, f"receipt value date is {receipt.value_date}")
-    else:
-        return
-
-    granted = _step(
+    granted_record = _step(
         problems,
         "confirm disbursement",
-        lambda: grant_loan(
-            servicing.ledger,
-            organisation_id=ORG,
-            parent_loan_id=parent.loan_id,
-            recognised_at=DISBURSED_AT,
-            schedule=((DUE, CASH_CENTS),),
-            initiation_fee_cents=0,
-        ),
+        lambda: servicing.disburse(record.agreement_id, recognised_at=DISBURSED_AT),
     )
-    if granted is None:
+    if granted_record is None:
         return
+    granted = servicing.ledger.store.get(ORG, parent.loan_id)
     numbers.append(
         f"disbursement {granted.disbursement_value_date}: "
         f"principal {_rands(servicing.ledger.bucket_balance(parent, 'principal'))}, "
         f"Laybye hold {_rands(servicing.ledger.bucket_balance(child, 'laybye_hold'))}"
     )
+    _expect(problems, granted_record.status == "active", f"status after disburse is {granted_record.status}")
     _expect(
         problems,
         servicing.ledger.bucket_balance(parent, "principal") == CASH_CENTS,
@@ -402,42 +384,8 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     _expect(problems, granted.frozen_full_name == "Ada Borrower", "grant rewrote the frozen name")
     _expect(problems, granted.frozen_id_number == "8001015800085", "grant rewrote the frozen identity number")
     mandates = [call[2] for call in stub.calls]
-    _expect(problems, "disbursement.confirm" not in mandates, f"grant_loan called Enigma: {mandates}")
-    gaps.append(
-        "Confirming disbursement went through laybye.grant_loan, not Servicing.disburse. "
-        "Servicing.disburse calls Ledger.book, which grants immediately and does not link a Laybye. "
-        "The pending agreement was then pointed at the granted parent so statements and collections "
-        "could see it. grant_loan does not call the Enigma stub (no disbursement.confirm). "
-        "No production method performs book, pre-disbursement receipt, and grant as one agreement."
-    )
-    record.ledger_loan_id = parent.loan_id
-    record.disbursement_value_date = granted.disbursement_value_date
-    record.status = "active"
-    try:
-        collections.bind(
-            record.agreement_id,
-            in_duplum_trigger="collections_default",
-            residual_threshold_cents=RESIDUAL_CENTS,
-        )
-        numbers.append("second bind was accepted")
-    except CollectionsError as exc:
-        numbers.append(f"second bind refused: {exc.code}")
-        _expect(
-            problems,
-            exc.code == "elections-frozen",
-            f"second bind failed with {exc.code}: {exc}",
-        )
-    bound = _step(problems, "read collections elections", lambda: collections.view(record.agreement_id))
-    if bound is not None:
-        numbers.append(
-            f"elections on the case: in-duplum {bound.trigger}, residual {_rands(bound.residual_threshold_cents)}"
-        )
-        _expect(problems, bound.trigger == "collections_default", f"trigger is {bound.trigger}")
-        _expect(
-            problems,
-            bound.residual_threshold_cents == RESIDUAL_CENTS,
-            f"residual threshold is {_rands(bound.residual_threshold_cents)}",
-        )
+    _expect(problems, "disbursement.confirm" in mandates, f"disburse did not check Enigma: {mandates}")
+    _expect(problems, "agreement.book" in mandates, f"book did not check Enigma: {mandates}")
 
     compliance = ComplianceStore()
     compliance.put(_compliance())
@@ -505,22 +453,25 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     payment = _step(
         problems,
         "1 May receipt",
-        lambda: allocate_receipt(
-            servicing.ledger,
+        lambda: servicing.accept_payment(
             organisation_id=ORG,
-            parent_loan_id=parent.loan_id,
+            person_id=PERSON,
             cents=RECEIPT_CENTS,
             recognised_at=PAID_AT,
+            idempotency_key="pay-may",
+            agreement_id=record.agreement_id,
             attributed_due_on=DUE,
         ),
     )
     if payment is None:
         return
-    loan_tx = servicing.ledger.store.get_transaction(ORG, payment.loan_transaction_id)
+    loan_tx = servicing.ledger.store.get_transaction(ORG, payment.ledger_transaction_id)
     credited = _credit_buckets(loan_tx)
+    laybye_taken = sum(amount for bucket, amount in payment.allocations if bucket == "laybye_hold")
+    loan_taken = payment.cents - laybye_taken
     numbers.append(
-        f"1 May receipt {_rands(RECEIPT_CENTS)}: loan {_rands(payment.loan_cents)}, "
-        f"Laybye {_rands(payment.laybye_cents)}, credits {credited}"
+        f"1 May receipt {_rands(RECEIPT_CENTS)}: loan {_rands(loan_taken)}, "
+        f"Laybye {_rands(laybye_taken)}, credits {credited}"
     )
     _expect(
         problems,
@@ -534,13 +485,13 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     )
     _expect(
         problems,
-        payment.laybye_cents == 0 and servicing.ledger.bucket_balance(child, "laybye_hold") == LAYBYE_CENTS,
-        f"Laybye moved on a receipt that was still inside the loan's due amounts: laybye_cents={payment.laybye_cents}",
+        laybye_taken == 0 and servicing.ledger.bucket_balance(child, "laybye_hold") == LAYBYE_CENTS,
+        f"Laybye moved on a receipt that was still inside the loan's due amounts: laybye_cents={laybye_taken}",
     )
     _expect(
         problems,
-        payment.loan_cents == RECEIPT_CENTS,
-        f"loan took {_rands(payment.loan_cents)} of {_rands(RECEIPT_CENTS)}",
+        loan_taken == RECEIPT_CENTS,
+        f"loan took {_rands(loan_taken)} of {_rands(RECEIPT_CENTS)}",
     )
     numbers.append(
         "after the receipt: "
@@ -549,14 +500,7 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
         f"service {_rands(servicing.ledger.bucket_balance(parent, 'service'))}, "
         f"Laybye {_rands(servicing.ledger.bucket_balance(child, 'laybye_hold'))}"
     )
-    gaps.append(
-        "The R219 receipt was posted with laybye.allocate_receipt. "
-        "Servicing.accept_payment and Documents.issue_statement post the whole receipt through "
-        "Ledger.post_payment. That method raises overpayment-unset once due amounts and the "
-        "prepayment election are exhausted. It does not credit the Laybye. "
-        "This receipt had no excess, so that leg was not exercised: "
-        f"loan {_rands(payment.loan_cents)}, Laybye {_rands(payment.laybye_cents)}."
-    )
+    _expect(problems, "payment.accept" in [call[2] for call in stub.calls], "the receipt did not check payment.accept")
 
     may = _step(
         problems,
@@ -683,20 +627,22 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     cure_payment = _step(
         problems,
         "cure payment",
-        lambda: allocate_receipt(
-            servicing.ledger,
+        lambda: servicing.accept_payment(
             organisation_id=ORG,
-            parent_loan_id=parent.loan_id,
+            person_id=PERSON,
             cents=shortfall,
             recognised_at=CURE_AT,
+            idempotency_key="pay-cure",
+            agreement_id=record.agreement_id,
             attributed_due_on=DUE,
         ),
     )
     if cure_payment is None:
         return
+    cure_laybye = sum(amount for bucket, amount in cure_payment.allocations if bucket == "laybye_hold")
     numbers.append(
-        f"cure receipt {_rands(shortfall)}: loan {_rands(cure_payment.loan_cents)}, "
-        f"Laybye {_rands(cure_payment.laybye_cents)}"
+        f"cure receipt {_rands(shortfall)}: loan {_rands(cure_payment.cents - cure_laybye)}, "
+        f"Laybye {_rands(cure_laybye)}"
     )
     cured = _step(
         problems,
@@ -814,13 +760,15 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     _expect(problems, read_ncr_number(ComplianceStore(), ORG) is None, "a missing compliance row still returned an NCR number")
     _expect(problems, not hasattr(stub, "ncr_registration_number"), "the Enigma stub carries an NCR number")
 
-    audit = AuditLog().extract(organisation_id=ORG, from_date=ADVANCE, to_date=FLAG_ON)
+    audit = servicing.audit.extract(organisation_id=ORG, from_date=ADVANCE, to_date=FLAG_ON)
     field_names = tuple(AuditExtract.__dataclass_fields__)
     row_fields = tuple(AuditRecord.__dataclass_fields__)
+    event_types = {row.event_type for row in audit.rows}
     numbers.append(
         f"audit extract rows={len(audit.rows)}, verified={audit.verified}, "
         f"hashes_ok={audit.hashes_ok}, links_ok={audit.links_ok}, "
-        f"chain_head_last_sequence={audit.chain_head_last_sequence}"
+        f"chain_head_last_sequence={audit.chain_head_last_sequence}, "
+        f"events={sorted(event_types)}"
     )
     _expect(
         problems,
@@ -833,25 +781,30 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
         {"previous_hash", "row_hash", "recognition_sequence"} <= set(row_fields),
         f"audit row fields are {row_fields}",
     )
-    if not audit.rows:
-        gaps.append(
-            "The audit extract for this organisation has no rows. "
-            "Booking, the Laybye receipt, disbursement, the statements, the two receipts, "
-            "and the in-duplum episode were not appended to AuditLog. "
-            "The extract object has the hash-chain fields "
-            "(previous_hash and row_hash on a row, predecessor_row_hash, links_ok, hashes_ok, "
-            "verified, chain_head_last_hash) but none were filled from this path. "
-            "The regulatory note already records that nothing in src/lms inserts lms.audit_event."
-        )
+    _expect(problems, bool(audit.rows), "the audit extract has no rows")
+    _expect(problems, audit.verified and audit.hashes_ok and audit.links_ok, "the audit chain did not verify")
+    if audit.rows:
+        _expect(problems, audit.rows[0].previous_hash is None, "the first audit row has a predecessor")
+    _expect(
+        problems,
+        {"AGREEMENT_STATUS_CHANGED", "DEPOSIT_RECEIVED", "PRINCIPAL_ADVANCED", "PAYMENT_ALLOCATED", "STATEMENT_ISSUED"}
+        <= event_types,
+        f"audit events are {sorted(event_types)}",
+    )
+    for row in audit.rows:
+        if row.category == "financial":
+            _expect(problems, isinstance(row.amount_cents, int), f"{row.event_type} amount is {row.amount_cents}")
+        else:
+            _expect(problems, row.amount_cents is None, f"{row.event_type} carries an amount")
 
     migration_dir = Path(__file__).resolve().parents[1] / "db" / "migrations"
-    prefixed = sorted(path.name for path in migration_dir.glob("0005_*.sql"))
-    if len(prefixed) > 1:
-        gaps.append(
-            "Three migrations share the 0005 prefix after the branches are combined: "
-            + ", ".join(prefixed)
-            + ". They were left numbered as each branch wrote them."
-        )
+    names = sorted(path.name for path in migration_dir.glob("*.sql"))
+    prefixes = [name.split("_", 1)[0] for name in names]
+    numbers.append("migrations: " + ", ".join(names))
+    _expect(problems, len(prefixes) == len(set(prefixes)), f"migration prefixes collide: {names}")
+    _expect(problems, names.count("0005_statement_compliance.sql") == 1, "statement compliance is not 0005")
+    _expect(problems, "0006_laybye_pre_disbursement.sql" in names, "laybye migration is not 0006")
+    _expect(problems, "0007_collections_elections.sql" in names, "collections migration is not 0007")
 
     _integer_cents(problems, servicing.ledger, parent, child, april, may)
     _expect(problems, "lms.enigma.client" not in sys.modules and "lms.enigma" not in sys.modules, "an Enigma HTTP client was imported")
@@ -860,9 +813,16 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     numbers.append(
         "no HTTP call was attempted; socket.create_connection and http.client request were blocked"
     )
-    if "payment.accept" not in mandates:
-        gaps.append(
-            "laybye.allocate_receipt did not call the Enigma stub. "
-            "Servicing.accept_payment would have checked payment.accept. "
-            f"Mandates seen: {mandates}."
-        )
+    _expect(problems, "payment.accept" in mandates, f"payment.accept was not checked: {mandates}")
+    gaps.append(
+        "Remaining uncertainty: Decision 19 says an unset election fails closed, and "
+        "leniency already fails at resolve time. An unset in-duplum trigger is stored "
+        "as None and does not fail Servicing.book, so Layer 0 booking stays unchanged. "
+        "Collections.bind and resolve_in_duplum_trigger still fail closed. Whether "
+        "booking itself must reject a missing trigger is not settled."
+    )
+    gaps.append(
+        "Remaining uncertainty: once a Laybye exists, a receipt pays due section 126 "
+        "amounts and the remainder goes to the Laybye. The partial-prepayment election "
+        "is not applied to that remainder. Locked §4 and §13 do not say which one runs first."
+    )

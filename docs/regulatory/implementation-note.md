@@ -97,10 +97,10 @@ Raised, not given a default.
 | RX26, RX27, RX34 | Form 39 artwork, the R15 million test, and the meaning of "entered into" are not locked. Sourced ledger facts are named as ledger facts. |
 | RX37 | The Python hash uses ISO timestamps and sorted JSON. `lms.seal_audit_event` uses PostgreSQL `::text`. This verifier checks rows it sealed. |
 | RX39 | Ledger organisation ids are text. The SQL compliance primary key is uuid. |
-| RX41 | No Python path inserts `lms.audit_event`. The extract reads `AuditLog`. |
+| RX41 | No Python path inserts `lms.audit_event`. The in-process hook is `Servicing.audit` (`AuditLog.append` on book, the pre-disbursement deposit, grant, payment, statement issue, and an in-duplum open or close). `AuditLog.extract` reads those rows. A database caller inserts `lms.audit_event`; `lms.seal_audit_event` hashes the row. Direct `Ledger` posts are not sealed unless the caller appends. |
 | RX52 | The compliance row and its SQL check reject a blank NCR number for every organisation. §21 allows a blank number for pure hosting and Laybye/BNPL. Those extracts proceed when the row is absent. |
 | RX53 | A linked lay-by parent is `short_term` (§4) and requires an NCR number. `zero_cost` and `cpa_layby` do not. §21 does not say the linked parent is the exempt "Laybye". |
-| RX54 | §19 now stores the in-duplum trigger and the residual write-off threshold. `OrganisationSettings` on this branch has neither field, so it cannot fail closed when they are unset. This layer does not add them. |
+| RX54 | `OrganisationSettings` and `ProductTerms` store `in_duplum_trigger` and `residual_write_off_threshold_cents`. `resolve_customer_settings` copies them. An unset trigger stays `None` at booking so a Layer 0 book that does not choose one still posts. `resolve_in_duplum_trigger` and `Collections.bind` fail closed when they are asked to use it. A null residual resolves to 5 000 cents (Decision 8). Whether booking itself must reject a missing trigger is not settled: Decision 19 says unset elections fail closed, and failing the book would change Layer 0. |
 | RX55 | §6 now separates contractual breach from collections default. The ledger on this branch still has one morning check. The extract does not call it and does not report a status. |
 
 ## Tests
