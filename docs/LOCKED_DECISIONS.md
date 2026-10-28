@@ -106,7 +106,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - This is not an absolute single-lifetime ceiling when the collections-default trigger is selected.
 - Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the client-selected trigger above.
 
-## 8. Payment allocation and capitalisation
+## 8. Payment allocation, capitalisation and write-off
 
 - Section 126 order: due or unpaid interest, then due or unpaid fees or charges, then principal.
 - Only due or unpaid amounts are allocated.
@@ -117,7 +117,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment.
 - Small residual write-off threshold is client-configurable. Default value is R50. It is not automatic.
 - If the client does not pay exactly the contractual instalment, the difference becomes part of arrears. Normal arrears, in-duplum and collections rules then apply. The client either continues paying until the loan is fully repaid, or the outstanding amount is written off.
-- Provision and write-off are per client requirement and can be manual or formula-based (arrears, recency, months on book, promise-to-pay adherence, contactability, etc.).
+- Write-off can be manual. If automated, the external formula is the mandate.
+- A write-off can never be more or less than the outstanding balance. Payments received must be accounted for first. If the balance does not reduce to R0 it is not a write-off.
+- Any income received after a write-off is a recovery and is dealt with at the accounting level, not in the LMS.
+- Provisioning formulas are run outside the LMS. The LMS only receives an instruction to write off or not, or the action is performed manually.
+- Recency, months on book, promise-to-pay adherence and contactability are risk calculations performed on LMS data in reporting. They are not calculated inside the LMS.
 
 ## 9. Service-fee pro-rata and VAT
 
@@ -220,6 +224,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It can be manual or formula-based.
 - Different clients may use different formulas based on arrears, recency, months on book, promise-to-pay adherence, contactability, and other factors.
 - No platform default is imposed.
+- Formulas that decide prescription are run outside the LMS. The LMS only receives the instruction or the action is performed manually.
 
 ## 21. NCR registration number and compliance data
 
