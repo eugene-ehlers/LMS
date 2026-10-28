@@ -37,9 +37,19 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A campaign that sets interest to 0 % or fees to R0 is treated as the real rate less discount = 0 %.
 - Calculations must not fail when rates or fees are zero for the full term or any portion of the term.
 - Campaign pricing must be stored and displayed as base rate (x %) with a campaign discount (y %) deducted.
-- Discount stays in place through the leniency window.
-- Discount falls away on the default flag date; the rate becomes the base rate.
-- Discount does not return on a later cure.
+- Discount cannot exceed the base rate. If the discount is higher, the effective rate is capped at 0 %.
+- Fees also cannot be negative. A fee discount that would produce a negative fee is capped at R0.
+- Whether the discount falls away on default is a client choice, stored per campaign:
+  - Option A: discount falls away on the chosen default event (contractual breach or collections default).
+  - Option B: discount does not fall away.
+- It must be clear which default event (contractual breach or collections default) triggers fall-away when Option A is selected.
+- The base rate is the rate charged by the client. For unsecured personal this is normally the NCA maximum (repo rate + margin) fixed at the time of contract. The discount is applied against that contractual rate.
+- If the client has opted for the rate to reduce when the repo rate falls, the contractual rate reduces and the discount is applied to the reduced rate. The effective rate is capped at 0 % and can never be negative.
+- Every campaign has a start date and an end date supplied by the decision engine.
+- Any loan generated during the campaign period qualifies for the linked campaign, even if the loan term extends beyond the campaign end date.
+- Treatment of variable rates, discounts, or opted-for reducing rates depends on the rules of that campaign.
+- The system must be agile enough to support campaigns that match the client’s products and campaign rules.
+- A campaign edit or end does not reprice agreements already booked.
 - Penalty interest may not exceed the contractual interest rate.
 
 ## 4. Laybye linked to a loan (parent/child)
@@ -167,9 +177,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Everything else is an LMS responsibility, including:
   - Stores and brands linked to a company.
   - NCR registration numbers.
+  - Operational rand ceilings.
+  - Campaign configuration.
   - All data required for statements so that the correct details appear.
   - All data required for regulatory and compliance reporting.
-- Enigma does not hold or return the NCR registration number, trading names, addresses, telephone numbers, payment-account details, or brand assets.
+- Enigma does not hold or return the NCR registration number, trading names, addresses, telephone numbers, payment-account details, brand assets, operational ceilings, or campaign data.
 
 ## 16. Identity freeze on agreement
 
@@ -198,6 +210,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Repo-rate fall choice
   - In-duplum trigger (contractual_breach / collections_default)
   - Residual write-off threshold (default R50)
+  - Campaign discount fall-away choice (falls_away_on_default / does_not_fall_away)
+  - Campaign fall-away trigger (contractual_breach / collections_default)
 - Unset values fail closed.
 
 ## 20. Prescription (section 126B)
@@ -215,3 +229,12 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It is not required for pure hosting or for Laybye/BNPL.
 - A blank NCR number blocks those communications and extracts. It does not block booking.
 - Trading name, addresses, telephone numbers, payment-account details and brand assets are also LMS-owned and are not supplied by Enigma.
+
+## 22. Operational rand ceilings
+
+- Operational rand ceilings are LMS data.
+- Solution-wide ceilings are adjustable by TSDG (platform owner) via an interface.
+- Company-specific ceilings are adjustable by a company admin via an interface restricted to certain roles.
+- LMS applies the tighter of the two.
+- A missing platform ceiling stops the command.
+- These are authorization limits. Statutory NCA maxima stay in the calculation engine.
