@@ -1,5 +1,13 @@
 # LMS
 
-Post-origination loan management for South African credit providers. Read [docs/LOCKED_DECISIONS.md](docs/LOCKED_DECISIONS.md) before changing calculation, ledger, servicing, or configuration behaviour. Identity, organisations, and mandates stay in Enigma. This service books agreements, takes payments, and issues statements.
+Post-origination loan management for South African credit providers. Read [docs/LOCKED_DECISIONS.md](docs/LOCKED_DECISIONS.md) (28 October 2026) before changing calculation, ledger, servicing, or configuration behaviour. Identity, organisations, and mandates stay in Enigma.
 
-The servicing rules are in [docs/servicing/primary-flows.md](docs/servicing/primary-flows.md). The API contracts are in [docs/servicing/implementation-design.md](docs/servicing/implementation-design.md). The build checklist, the draft Layer 1 signatures, and the unsigned gaps are in [docs/servicing/implementation-checklist.md](docs/servicing/implementation-checklist.md).
+Servicing orchestration is `src/lms/servicing/`. It calls the calculation engine in `src/lms/calc/`, the configuration layer in `src/lms_config/`, and the ledger in `src/lms/ledger/`.
+
+- [docs/servicing/primary-flows.md](docs/servicing/primary-flows.md)
+- [docs/servicing/implementation-design.md](docs/servicing/implementation-design.md)
+- [docs/servicing/implementation-note.md](docs/servicing/implementation-note.md)
+- [docs/account-balance-transaction-model.md](docs/account-balance-transaction-model.md)
+- [docs/ledger-implementation-note.md](docs/ledger-implementation-note.md)
+- [docs/day1-calc-engine-note.md](docs/day1-calc-engine-note.md)
+- [docs/lms-owned-configuration.md](docs/lms-owned-configuration.md)
