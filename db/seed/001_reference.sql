@@ -131,6 +131,10 @@ INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('REFERENCE_DATA_PUBLISHED', 'operational'),
   ('SETTLEMENT_QUOTED', 'operational');
 
+INSERT INTO lms.ref_audit_event_type (code, category) VALUES
+  ('COLLECTION_CAMPAIGN_CHANGED', 'operational')
+ON CONFLICT (code) DO NOTHING;
+
 -- Table A as substituted by GN 1080, effective 6 May 2016.
 -- Margins are fractions: 0.21 means 21 percentage points over RR.
 INSERT INTO lms.ref_interest_cap (

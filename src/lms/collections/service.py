@@ -92,6 +92,10 @@ class Collections:
     def __init__(self, servicing: Servicing) -> None:
         self.servicing = servicing
         self.cases: dict[str, Case] = {}
+        # Set by CollectionCampaigns.bind_collections. A skipped due date is
+        # not a new breach. An open in-duplum episode is not closed merely
+        # because the holiday is the only remaining miss.
+        self.skipped_instalment: Callable[[str, str, date], bool] | None = None
 
     def bind(
         self,
@@ -169,7 +173,16 @@ class Collections:
         check_on = value_date(recognised_at)
         self._record_breaches(case, account, check_on)
         defaulted = self._collections_default(account, check_on)
-        self._apply_trigger(case, record, account, check_on, recognised_at, defaulted)
+        raw_defaulted = self._collections_default(account, check_on, honour_skip=False)
+        self._apply_trigger(
+            case,
+            record,
+            account,
+            check_on,
+            recognised_at,
+            defaulted,
+            holiday_blocks_close=not defaulted and raw_defaulted,
+        )
         return self.view(agreement_id, recognised_at)
 
     def correct_system_error(
@@ -485,6 +498,8 @@ class Collections:
     def _record_breaches(self, case: Case, account: LoanAccount, check_on: date) -> None:
         threshold = account.snapshot.full_payment_threshold_percent
         for due_on, _schedule_cents in _schedule(account):
+            if self._skipped(account, due_on):
+                continue
             if check_on <= due_on or due_on in case.breaches:
                 continue
             received = _received_on(self._payments(account), due_on, due_on)
@@ -492,10 +507,24 @@ class Collections:
             if not is_full_payment(received, instalment, threshold):
                 case.breaches.add(due_on)
 
-    def _collections_default(self, account: LoanAccount, check_on: date) -> bool:
+    def _skipped(self, account: LoanAccount, due_on: date) -> bool:
+        predicate = self.skipped_instalment
+        if predicate is None:
+            return False
+        return bool(predicate(account.organisation_id, account.loan_id, due_on))
+
+    def _collections_default(
+        self,
+        account: LoanAccount,
+        check_on: date,
+        *,
+        honour_skip: bool = True,
+    ) -> bool:
         threshold = account.snapshot.full_payment_threshold_percent
         leniency = account.snapshot.leniency_days
         for due_on, _schedule_cents in _schedule(account):
+            if honour_skip and self._skipped(account, due_on):
+                continue
             received = _received_until(self._payments(account), due_on, check_on)
             instalment = _threshold_instalment(account, due_on)
             if is_in_default(
@@ -517,6 +546,7 @@ class Collections:
         check_on: date,
         recognised_at: datetime,
         defaulted: bool,
+        holiday_blocks_close: bool = False,
     ) -> None:
         ledger = self.servicing.ledger
         if case.trigger == TRIGGER_CONTRACTUAL_BREACH:
@@ -550,7 +580,7 @@ class Collections:
             case.episode_due_on = check_on
             self._audit_episode(record, recognised_at, "opened")
             return
-        if not defaulted and _open(account) is not None:
+        if not defaulted and _open(account) is not None and not holiday_blocks_close:
             ledger.close_in_duplum_episode(
                 organisation_id=record.organisation_id,
                 loan_id=account.loan_id,

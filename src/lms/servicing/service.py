@@ -23,6 +23,7 @@ from lms.calc.models import Agreement, FeeCapBasis, Policy, Product, RepoRate
 from lms.calc.money import RuleError
 from lms.laybye.errors import LaybyeError
 from lms.laybye.service import grant_loan, prepare_pair, receive_pre_disbursement
+from lms.collection_campaigns.service import CollectionCampaigns
 from lms.ledger.errors import LedgerError
 from lms.ledger.models import LoanAccount
 from lms.ledger.service import Ledger, _day_count, _prepayment, _repo_fall
@@ -103,6 +104,7 @@ class Servicing:
     payments: dict[str, PaymentRecord] = field(default_factory=dict)
     statements: dict[tuple[str, str, date, date], IssuedStatement] = field(default_factory=dict)
     audit: AuditLog = field(default_factory=AuditLog)
+    collection_campaigns: CollectionCampaigns | None = None
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
 
     def book(
@@ -784,12 +786,20 @@ class Servicing:
             return
         day = start
         while day <= end:
+            override = None
+            if self.collection_campaigns is not None:
+                override = self.collection_campaigns.periodic_rate_override(
+                    record.organisation_id,
+                    account.loan_id,
+                    value_instant(day),
+                )
             try:
                 self.ledger.accrue_day(
                     organisation_id=record.organisation_id,
                     loan_id=account.loan_id,
                     recognised_at=value_instant(day),
                     interest_cap_present=interest_cap_present,
+                    periodic_rate_override=override,
                 )
             except LedgerError as exc:
                 if exc.code not in {"already-accrued", "outside-term"}:
@@ -824,12 +834,21 @@ class Servicing:
                 and levy_day.month == account.disbursement_value_date.month
                 and first_due > account.disbursement_value_date
             )
+            amount = monthly
+            if self.collection_campaigns is not None:
+                amount = self.collection_campaigns.service_fee_for_levy(
+                    organisation_id=record.organisation_id,
+                    loan_id=account.loan_id,
+                    recognised_at=value_instant(levy_day),
+                    monthly_cents=monthly,
+                    vat_rate=vat_rate,
+                )
             try:
                 self.ledger.levy_service_fee(
                     organisation_id=record.organisation_id,
                     loan_id=account.loan_id,
                     recognised_at=value_instant(levy_day),
-                    monthly_cents=monthly,
+                    monthly_cents=amount,
                     due_on=first_due if opening else levy_day,
                     interest_cap_present=interest_cap_present,
                     vat_rate=vat_rate,
