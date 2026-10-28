@@ -200,6 +200,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Linking individuals to companies and roles.
   - Granting access to applications based on the company and role after the individual has been verified and signed in.
   - Uses ID number and company registration for this purpose.
+  - Holds contact number and email for registered users (for password reset and similar).
 - LMS stores only opaque person_id and organisation_id.
 - LMS does not re-implement person or organisation identity.
 - Fail closed on Enigma timeout, ambiguous status, or a clear suspended enrolment.
@@ -210,7 +211,9 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Campaign configuration.
   - All data required for statements so that the correct details appear.
   - All data required for regulatory and compliance reporting.
-- Enigma does not hold or return the NCR registration number, trading names, addresses, telephone numbers, payment-account details, brand assets, operational ceilings, or campaign data.
+- Enigma does not hold or return the NCR registration number, trading names, addresses, telephone numbers for unregistered consumers, payment-account details, brand assets, operational ceilings, or campaign data.
+- A consumer who wants to see their statements or settlement quotes must register via Enigma and sign in. The LMS does not store the consumer’s contact number or email for this purpose.
+- LMS registration and sign-on pages direct the consumer to Enigma. The LMS does not implement registration or sign-on functionality.
 
 ## 16. Identity freeze on agreement
 
@@ -304,3 +307,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - The decision engine supplies the credit-life premium amount each time.
 - Debit-order file layout uses a standard South African format and must also cater for DebiCheck.
 - An unmatched receipt may be matched on loan number or ID number.
+
+## 27. Consumer access and notifications
+
+- A consumer who wants information on their accounts must register via Enigma and sign in. Without registration they cannot access statements, settlement quotes or other account information.
+- The LMS does not send collection notices. Collection notices are the responsibility of the collections software.
+- Contact details for collection purposes are obtained from the client database via the application number (linked to the loan number and ID number). The LMS does not store them for this purpose.
+- Staff with the appropriate role can access account information and provide it to a consumer who phones a call centre.
+- The NCR registration number must be displayed on all NCA communications.
