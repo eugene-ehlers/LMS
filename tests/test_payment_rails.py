@@ -17,7 +17,9 @@ import pytest
 
 from lms.calc.interest import daily_interest_rands
 from lms.calc.money import to_cents
+from lms.laybye.service import raise_collections
 from lms.payments.api import dispatch as rail_dispatch
+from lms.payments.bankserv import user_reference
 from lms.payments.dummies import DebitOrderRailDummy, DecisionEngineDummy
 from lms.payments.errors import PaymentRailError
 from lms.payments.flags import DEBIT_ORDERS_ENABLED, FeatureFlags
@@ -716,3 +718,16 @@ def test_instalment_read_does_not_invent_unbilled_interest():
     assert produced.instructions[0].amount_cents == CASH_CENTS
     assert not any(item.kind == "interest_bill" for item in servicing.ledger.store.transactions_for(ORG, loan.loan_id))
     assert len(dummy.submitted) == 1
+
+
+def test_collection_file_has_no_ad_hoc_or_promise_to_pay_amount():
+    raised = raise_collections(
+        automated=True,
+        loan_instalment_cents=10_000,
+        credit_life_premium_cents=1_500,
+    )
+    assert [item.purpose for item in raised] == ["loan_instalment", "credit_life_premium"]
+    assert [item.cents for item in raised] == [10_000, 1_500]
+    for purpose in ("promise_to_pay", "ad_hoc"):
+        with pytest.raises(PaymentRailError):
+            user_reference(scheme="eft", purpose=purpose, reference="000000000001")
