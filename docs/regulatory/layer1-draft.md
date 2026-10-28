@@ -2,9 +2,11 @@
 
 **Status: Layer 1 draft, with an implementation in `src/lms/regulatory`. This file is not a locked decision.**
 
-`docs/LOCKED_DECISIONS.md` on `main` (last updated 2026-10-28, including decisions 20 and 21) is the source of truth. The implementation calls the ledger and `lms_config.compliance`. It does not re-implement interest, allocation, caps, statements, lay-by claims, or collections.
+The field catalogue and the open mandatory-field rules are in `docs/regulatory/extract-layouts.md`.
 
-The code was branched from `cursor/statements-documents-design-a789`, which contains the Layer 0 ledger and the LMS compliance store. `main` itself has no Python interfaces.
+`docs/LOCKED_DECISIONS.md` on `main` (last updated 2026-10-28, including decisions 20 and 21) is the source of truth. The implementation calls the ledger, `lms_config.compliance`, and `lms.audit_event` through `read_lms_audit_event`. It does not re-implement interest, allocation, caps, the audit seal, statements, lay-by claims, or collections.
+
+The code sits on the Layer 0 ledger and the LMS compliance store. `main` itself has no Python interfaces.
 
 ## 1. Behaviour and the lock it follows
 
@@ -22,7 +24,7 @@ The code was branched from `cursor/statements-documents-design-a789`, which cont
 | Contractual breach and collections default are two concepts. Neither is converted into a SACRRA status or a month count. | §6. Codes stay unset. |
 | The in-duplum clip stays off. Reported interest and fees are the posted cents. | §7 |
 | Posted fees and interest are not passed through a second NCA cap. | §8 |
-| Provision and write-off are per client and are not a ledger balance on this branch. Form 39 leaves them unset. | §8 |
+| A full write-off journal can be posted. The Form 39 write-off cell stays empty. No count or rand total is invented from that journal. | §8. Gap recorded with the locked file. |
 | The service-fee cap was applied when `levy_service_fee` ran. The extract reads the posted cents. | §9 |
 | SACRRA grain is the agreement. The statement grain stays one document per client. | §12 |
 | The contractual instalment is not one stored column. It is not guessed. | §13 |
@@ -46,17 +48,17 @@ Regulation 19(13) and the SACRRA overview of the L700v2 monthly layout are the f
 
 `build_sacrra_extract(ledger, compliance, *, organisation_id, as_of, pure_hosting)` returns one `SacrraRow` per parent loan with `disbursement_value_date <= as_of`.
 
-| L700 field | Source | What the row carries |
+The 56 layout columns are `L700_MONTHLY_FIELDS`. Every `value` is `None`. Sourced facts sit beside the layout and are not copied into a column whose split, code, or scale is unlocked.
+
+| Fact beside the layout | Source | What the row carries |
 | --- | --- | --- |
-| SA ID, non-SA ID, gender, date of birth | `frozen_id_number` (§16) | The frozen string only. It is not classified and not decoded. |
-| Surname and forenames | `frozen_full_name` (§16) | The frozen string only. It is not split. |
-| Residential address lines and postal code | `frozen_service_address` (§16) | The frozen string only. It is not split. |
-| Account number | `loan_id` | The loan id. |
-| Date account opened | `disbursement_value_date` (§1) | The date. Digit order for N 8 is gap RX20. |
-| Current balance | Sum of debit-normal buckets at `as_of` (§1, §4) | `bucket_cents` for `principal`, `interest`, `initiation`, `service`, `credit_insurance`, `default_administration`, `collection_costs`, `additional_monthly`. |
-| Lay-by hold | Child `laybye_hold` at `as_of` (§4) | `laybye_hold_cents`. Not subtracted from principal. |
-| Status code, months in arrears, account type | No locked code list (§6) | `None`. |
-| NCR number in the file header | `ComplianceStore` (§21) | `ncr_registration_number` when the gate requires it, or when a row happens to be stored. |
+| Name, ID number, service address | Frozen at booking (§16) | The three strings. L700 surname, forename, ID, gender, date of birth, and address columns stay empty. |
+| Loan id | `LoanAccount.loan_id` | The id. The A 25 account-number column stays empty. Truncation is not locked. |
+| Date account opened | `disbursement_value_date` (§1) | The date on the row. The N 8 column stays empty (gap RX20). |
+| Posted buckets | `Ledger.bucket_balance` at `as_of` (§1, §4, §6) | `bucket_cents`. The N 9 amount columns stay empty (gap RX50). `amount_scale` is `None`. |
+| Lay-by hold | Child `laybye_hold` at `as_of` (§4) | `laybye_hold_cents`. Not subtracted from principal. Not its own row. |
+| Status code, months in arrears, account type | No locked code list (§6) | `None` on the row and in fields 37, 38, and 28. |
+| NCR number | `ComplianceStore` (§21) | On the extract when the gate requires it, or when a row happens to be stored. Not an L700 body column. |
 
 Phones, employer, income, occupation, branch code, supplier reference, and third-party sale fields are not stored. They are not filled.
 
@@ -79,18 +81,15 @@ The R15 million test is not stored. The caller supplies `period_start` and `peri
 | Lay-by hold | Child bucket at `period_end` (§4). Not subtracted. |
 | Agreements disbursed in the period, and their `cash_advanced_cents` | Parents whose `disbursement_value_date` falls in the period. This is the stored advance, not a ruling on which Form 39 cell it fills (gap RX34). |
 
-`not_stored` is exactly: applications, province, gender, income, provisions, write-offs, age analysis. Those attributes are absent. No zero is written for them.
+`not_stored` is exactly: applications, province, gender, income, provisions, write-offs, age analysis. Each of those attributes is present and `None`. No zero is written for them. `filing_rule` quotes regulation 64 and is not used to choose the period.
 
 ## 4. Audit extract
 
-`AuditLog.append` seals a row. `AuditLog.extract(organisation_id, from_date, to_date)` returns the rows whose Johannesburg day is inside the inclusive range, plus:
+`read_lms_audit_event(execute, organisation_id, from_date, to_date)` reads `lms.audit_event` for one organisation. The range is inclusive on the Johannesburg day of `occurred_at`: `occurred_at >= value_instant(from_date)` and `occurred_at < value_instant(to_date + one day)`. Order is `recognition_sequence`. The query joins `lms.ref_audit_event_type` for the category and compares `row_hash` with `public.digest` of the migration 0003 canonical. The Python code does not hash those rows.
 
-- `previous_hash`, `row_hash`, `recognition_sequence` on each row
-- `predecessor_row_hash` and `predecessor_recognition_sequence` when the window does not start at sequence 1
-- `links_ok`, `hashes_ok`, `verified`
-- `chain_head_last_hash`, `chain_head_last_sequence`, `head_covered`
+The trailer carries the predecessor (`predecessor_event_id`, `predecessor_row_hash`, `predecessor_recognition_sequence`) and `lms.audit_chain_head` (`chain_head_last_event_id`, `chain_head_last_occurred_at`, `chain_head_last_hash`, `chain_head_last_sequence`), plus `links_ok`, `hashes_ok`, `verified`, and `head_covered`.
 
-A financial row requires `amount_cents`. An operational row must not carry one. That is the seal rule in `lms.seal_audit_event`. The Python canonical is SHA-256 over organisation, event id, previous hash, type, ISO timestamp, amount, balance code, sequence, and JSON payload. It is not PostgreSQL `occurred_at::text` (gap RX37). `src/lms` does not insert `lms.audit_event`. The in-process hook is `Servicing.audit`. A database caller inserts `lms.audit_event` and the seal trigger hashes the row (gap RX41).
+`AuditLog` is the in-process hook `Servicing.audit` writes, because no Python path inserts `lms.audit_event` (gap RX41). `AuditLog.extract` has the same trailer. Its hash is SHA-256 over an ISO timestamp and sorted JSON. That is not PostgreSQL `occurred_at::text` (gap RX37). `AuditLog` checks only rows it sealed.
 
 ## 5. Sequence of calls
 
@@ -99,7 +98,7 @@ A financial row requires `amount_cents`. An operational row must not carry one. 
 3. `LedgerStore.accounts_for(organisation_id)`. Keep `instrument_kind == "loan"` (§4).
 4. `Ledger.bucket_balance(account, bucket, as_of=...)` for each owed bucket, and for each child's `laybye_hold` (§1, §4).
 5. Read `frozen_full_name`, `frozen_id_number`, `frozen_service_address`, and `snapshot.classification` from the account (§16). `resolve_customer_settings` is not called again (§19: the snapshot is the booking copy).
-6. The audit extract does not call the ledger. It reads `AuditLog` and `value_date` from `lms_config.calendar` (§1).
+6. The audit extract does not call the ledger. `read_lms_audit_event` runs the `lms.audit_event` and `lms.audit_chain_head` queries. `AuditLog.extract` reads the in-process hook. Both use `lms_config.calendar` for the Johannesburg day (§1).
 
 `Ledger.statement`, `clip_in_duplum`, `service_fee_cents`, and `resolve_charge` are not in this sequence (§7, §8, §9).
 
@@ -113,16 +112,17 @@ A financial row requires `amount_cents`. An operational row must not carry one. 
 | RX9 | No marker that accrual for the as-of date has been posted. The extract reads what is already posted and does not post. |
 | RX10 | A later reversal rewrites an earlier value-date balance (§1). No submitted-file store exists. |
 | RX11, RX12, RX13 | The frozen name, ID number, and service address are single strings. They are not split or decoded (§16). |
-| RX20 | N 8 date digit order is not in the overview pages read. |
+| RX20 | N 8 date digit order is not in the overview pages read. Date columns stay empty. |
+| RX50 | L700 amounts are N 9. The overview does not say whether the cents are implied. Amount columns and `amount_scale` stay empty. Ledger cents stay on the row. |
 | RX23 | `pure_hosting` is not a column on `cfg_provider_compliance` or `cfg_organisation_settings`. The caller passes it. `None` fails closed when a requiring loan is present. |
 | RX24 | Decision 21 says "micro" and "unsecured personal". The ledger says `short_term` and `unsecured`. The templates are named `micro_short_term` and `unsecured_personal`. That is the reading this layer uses. |
 | RX26 | Current Form 39 artwork is not transcribed. |
 | RX27 | The R15 million test is not stored. |
 | RX34 | "Entered into" is not locked as disbursement date or as cash advanced. Both stored facts are returned under those names. |
-| RX37 | Python hashes are not the SQL `::text` canonical. |
+| RX37 | `AuditLog` hashes are not the SQL `::text` canonical. `read_lms_audit_event` asks the database to run the migration 0003 expression and does not hash in Python. |
 | RX39 | Ledger organisation ids are text. `cfg_provider_compliance.organisation_id` is uuid. The in-memory store uses the ledger's text id. |
 | RX41 | The Python ledger does not insert `lms.audit_event`. `Servicing.audit` (`AuditLog`) is the in-process hook this layer reads. A database caller inserts `lms.audit_event`. |
 | RX52 | `ComplianceStore.put` and the SQL check reject a blank NCR number for every organisation. Decision 21 allows a blank number for pure hosting and Laybye/BNPL. A missing row is how those extracts proceed. A stored blank number is not representable. |
 | RX53 | A linked lay-by parent is `short_term` (§4) and requires an NCR number. `cpa_layby` and `zero_cost` do not. Decision 21's word "Laybye" is not defined as the linked parent. |
-| RX54 | §19 now stores the in-duplum trigger and the residual threshold. `OrganisationSettings` on this branch does not. This layer does not add the columns. |
+| RX54 | Decisions 8 and 19 set the residual write-off default at R100. `resolve_residual_threshold_cents` on this branch still writes 5 000 cents when both levels are null, and its comment still cites R50. The extracts do not write off and do not apply the threshold. |
 | RX55 | §6 now has two default concepts. The ledger morning check on this branch is still one test. Status codes stay unset. |

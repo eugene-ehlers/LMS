@@ -1,9 +1,15 @@
 """NCR Form 39 readiness. Sourced facts only.
 
-Regulation 64 sets who files and when. The current Schedule 1 artwork is
-not transcribed (gap RX26). This module lists ledger and configuration
-facts that can be read, and names the elements that are not stored.
-It does not invent a zero for a missing element.
+Regulation 64 sets the calendar: quarterly when annual disbursements exceed
+R15 million, otherwise annually by 15 February. The R15 million test is not
+stored, so the caller supplies the Johannesburg period. This module does not
+choose quarterly or annual filing.
+
+Gross book is the billed ledger buckets at the period end. Unbilled interest
+stays out until it is billed. The lay-by hold is not subtracted from principal.
+Applications, province, gender, income, provisions, write-offs, and age
+analysis are not stored as Form 39 cells. Those cells stay empty. A write-off
+journal on the ledger is not mapped onto the write-off cell.
 """
 
 from __future__ import annotations
@@ -14,10 +20,10 @@ from datetime import date
 from lms.ledger.service import Ledger
 from lms.regulatory.errors import RegulatoryError
 from lms.regulatory.ncr import require_ncr_for_extract
-from lms.regulatory.sacrra import OWED_BUCKETS
+from lms.regulatory.sacrra import laybye_hold_cents, owed_cents, parent_loans
 from lms_config.compliance import ComplianceStore
 
-# Named by the task. Each one has no ledger or configuration column.
+# Named by the task. Each one has no Form 39 column on the LMS.
 NOT_STORED = (
     "applications",
     "province",
@@ -28,6 +34,12 @@ NOT_STORED = (
     "age_analysis",
 )
 
+REGULATION_64 = (
+    "Regulation 64: quarterly when annual disbursements exceed R15 million, "
+    "otherwise annually by 15 February. The R15 million test is not stored. "
+    "The caller supplies the period."
+)
+
 
 @dataclass(frozen=True)
 class Form39Readiness:
@@ -36,11 +48,19 @@ class Form39Readiness:
     period_end: date
     ncr_registration_number: str | None
     legal_name: str | None
-    gross_owed_cents: int
-    gross_owed_cents_by_classification: dict[str, int]
+    gross_book_cents: int
+    gross_book_cents_by_classification: dict[str, int]
     laybye_hold_cents: int
     agreements_disbursed_in_period: int
     cash_advanced_cents_disbursed_in_period: int
+    filing_rule: str = REGULATION_64
+    applications: None = None
+    province: None = None
+    gender: None = None
+    income: None = None
+    provisions: None = None
+    write_offs: None = None
+    age_analysis: None = None
     not_stored: tuple[str, ...] = NOT_STORED
 
 
@@ -53,21 +73,19 @@ def build_form39_readiness(
     period_end: date,
     pure_hosting: bool | None,
 ) -> Form39Readiness:
-    """Read the book at ``period_end`` and the advances disbursed inside the period.
+    """Read the billed book at ``period_end``. Do not choose the filing calendar.
 
-    Both dates are Johannesburg value dates (decision 1). The R15 million
-    test in regulation 64 is not stored, so this function does not choose
-    quarterly or annual filing (gap RX27).
+    Both dates are Johannesburg value dates (decision 1). Cash advanced in the
+    period is the stored advance. It is not a ruling on which Form 39 cell
+    that figure fills.
     """
-    if not organisation_id:
+    if not organisation_id or not str(organisation_id).strip():
         raise RegulatoryError("organisation-unset", "The Form 39 extract needs an organisation id.")
+    if type(period_start) is not date or type(period_end) is not date:
+        raise RegulatoryError("date-range", "The Form 39 period must be Johannesburg calendar dates.")
     if period_end < period_start:
         raise RegulatoryError("date-range", "The Form 39 period ends before it starts.")
-    parents = tuple(
-        account
-        for account in ledger.store.accounts_for(organisation_id)
-        if account.instrument_kind == "loan" and account.disbursement_value_date <= period_end
-    )
+    parents = parent_loans(ledger, organisation_id, period_end)
     number = require_ncr_for_extract(
         compliance,
         organisation_id=organisation_id,
@@ -81,13 +99,12 @@ def build_form39_readiness(
     gross = 0
     hold = 0
     for account in parents:
-        owed = sum(ledger.bucket_balance(account, bucket, as_of=period_end) for bucket in OWED_BUCKETS)
+        buckets = owed_cents(ledger, account, period_end)
+        owed = sum(buckets.values())
         classification = account.snapshot.classification
         by_classification[classification] = by_classification.get(classification, 0) + owed
         gross += owed
-        for child in ledger.store.accounts_for(organisation_id):
-            if child.parent_loan_id == account.loan_id and child.instrument_kind == "laybye_hold":
-                hold += ledger.bucket_balance(child, "laybye_hold", as_of=period_end)
+        hold += laybye_hold_cents(ledger, account, period_end)
 
     disbursed = tuple(
         account
@@ -100,10 +117,9 @@ def build_form39_readiness(
         period_end=period_end,
         ncr_registration_number=number,
         legal_name=legal_name,
-        gross_owed_cents=gross,
-        gross_owed_cents_by_classification=by_classification,
+        gross_book_cents=gross,
+        gross_book_cents_by_classification=by_classification,
         laybye_hold_cents=hold,
         agreements_disbursed_in_period=len(disbursed),
         cash_advanced_cents_disbursed_in_period=sum(account.cash_advanced_cents for account in disbursed),
-        not_stored=NOT_STORED,
     )
