@@ -22,6 +22,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A payment received on a flag date is treated as 00:00 on that day and is visible to the morning default check.
 - When two events are both recognised at 00:00 on the same calendar day, process them in the order they were recognised by the system (stable sort by receipt sequence).
 - On any calendar day, capitalisation of accrued interest and fees and allocation of payments recognised that day are treated as simultaneous at 00:00. The order is: accrue and capitalise the day's due amounts first, then allocate payments recognised that day.
+- The payment rail must capitalise due amounts before allocating.
 
 ## 2. Initiation fee treatment
 
@@ -70,6 +71,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Structured as a deposit-insurance style arrangement (client pays for a period, then loan is disbursed). Not deposit-taking under the Banks Act for Day-1 purposes.
 - Credit life statements and accounts sit in the insurer’s domain. The LMS does not keep them.
 - If collections are automated from the LMS, the LMS must know the credit-life premium amount so it can raise one collection for the loan instalment and a separate collection for the credit-life premium.
+- The decision engine supplies the credit-life premium amount each time.
 
 ## 5. Day count and accrual
 
@@ -125,6 +127,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Write-off can be manual. If automated, the external formula is the mandate.
 - A write-off can never be more or less than the outstanding balance. All receipts must be allocated before the write-off. If the balance does not reduce to R0 it is not a write-off.
 - A balance can open again at a later date if a payment taken into consideration is returned unpaid. That must be flagged so approval can be obtained to write it off as well.
+- A returned unpaid item after a write-off is flagged only. The balance is not reopened and no recovery is posted in the LMS.
 - Any income received after a write-off is a recovery and is dealt with at the accounting level, not in the LMS.
 - Provisioning formulas are run outside the LMS. The LMS only receives an instruction to write off or not, or the action is performed manually.
 - Recency, months on book, promise-to-pay adherence and contactability are risk calculations performed on LMS data in reporting. They are not calculated inside the LMS.
@@ -293,3 +296,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Loan numbers must be sequential and cannot be skipped.
 - Loan numbers must be long enough so the system does not run out of numbers.
 - Identifiers such as the first four letters of the company name and the month and year created may be included.
+
+## 26. Payment rails and debit orders
+
+- The payment rail must capitalise due amounts before allocating.
+- A returned unpaid item after a write-off is flagged only. The balance is not reopened and no recovery is posted in the LMS.
+- The decision engine supplies the credit-life premium amount each time.
+- Debit-order file layout uses a standard South African format and must also cater for DebiCheck.
+- An unmatched receipt may be matched on loan number or ID number.
