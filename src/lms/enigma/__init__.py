@@ -12,7 +12,9 @@ from lms.enigma.errors import (
     OrganisationUnavailable,
     PortError,
     Reauthenticate,
+    UnboundEnigmaPort,
 )
+from lms.enigma.machine import handle_machine_request
 from lms.enigma.middleware import IncomingRequest, establish_session, handle_request
 
 __all__ = [
@@ -28,6 +30,8 @@ __all__ = [
     "OrganisationUnavailable",
     "PortError",
     "Reauthenticate",
+    "UnboundEnigmaPort",
     "establish_session",
+    "handle_machine_request",
     "handle_request",
 ]

@@ -4,9 +4,35 @@ Updated 27 October 2026 (Africa/Johannesburg), after `docs/LOCKED_DECISIONS.md` 
 
 This is the interface the post-origination LMS needs from Enigma, plus the LMS-side session handling that sits on it. Calculation, ledger, and servicing rules are not restated here. They live in `docs/LOCKED_DECISIONS.md`, which is the single source of truth. This document does not change those rules.
 
-`src/lms/enigma/` is a **draft Layer 1 sketch**, not production code. HTTP paths are unbound. `UnboundEnigmaPort` raises if something tries to call a sketched URL. Do not extend that sketch until the conflicts in this document are closed in `docs/LOCKED_DECISIONS.md`.
+`src/lms/enigma/` implements this port. HTTP paths stay unbound: `UnboundHttpEnigmaPort` and `UnboundMachineIdentity` raise `UnboundEnigmaPort` and do not invent a URL. Conflicts C1–C10 stay open. This code does not close them and does not store provider choices, tariffs, or leniency.
 
-The implementation checklist is `docs/enigma/LAYER1_IMPLEMENTATION_CHECKLIST.md`. It is a draft.
+The implementation note is `docs/enigma/IMPLEMENTATION_NOTE.md`. The checklist is `docs/enigma/LAYER1_IMPLEMENTATION_CHECKLIST.md`.
+
+## Behaviour citations
+
+Each implemented behaviour names the locked section that governs it. "No section" means the locked file does not say it. Those rows are the conflicts, not new rules.
+
+| Behaviour | Locked section |
+| --- | --- |
+| Enigma owns identity, organisations, memberships, enrolment, roles, and mandates | 15 |
+| LMS keeps opaque `person_id` and `organisation_id` | 15 |
+| Fail closed on timeout or an ambiguous status | 15 |
+| Freeze name, ID number, and service address at booking | 16 |
+| A later Enigma change does not rewrite that agreement | 16 |
+| Clear `suspended` enrolment stops the request, including a read | No section. Port decision 3. Conflict C3. Section 15 covers timeout and ambiguous status only |
+| Organisation switch and cookie generation `409` | No section. Port mechanic in this design |
+| Allocation member may run only `lms.allocation.run`. Write-off is `mandate_denied` | No section. Port decision 2. Conflict C9. Section 15 still owns mandates |
+| IAM task-role exchange | No section. Port decision 2. The HTTP exchange raises `UnboundEnigmaPort` |
+| Live email, mobile, and preferred channel | No section. Port decision 6. Conflict C10. Section 16 names three fields |
+| NCR number and operational rand ceilings | No section. Port decisions 4 and 5. Conflict C2 |
+| Value date at 00:00 | 1. Not applied to the Enigma session clock. Conflict C7 |
+| Unset leniency or full-payment threshold fails closed | 6. This port does not store those fields. Conflict C6 |
+| In-duplum clip stays off | 7. This port does not turn it on |
+| Section 126 order | 8. Not an Enigma response |
+| One statement per client | 12. Conflict C5 with the per-account action name |
+| Missing repo-rate choice fails closed | 11. This port does not choose option A or B |
+| Missing tariff row fails closed | 18. This port does not invent a tariff |
+| Billing round half-up to cents | 17. Not applied to the operational ceiling |
 
 ## What the locked file changes in this port
 
@@ -163,21 +189,21 @@ Every call takes a `request_id`. Decisions carry `enigma_request_id`.
 
 ### `introspect(session_ref, *, request_id) -> SessionView`
 
-`session.introspect`. LMS proceeds only when `audience == "lms"`, `status == "active"`, `sign_in_clear` is true, and `person_id` is present. Expired or revoked, or a foreign audience, is `reauthenticate` (401). Any other shape is `authority_ambiguous` (503).
+Locked section 15: an ambiguous status fails closed. `session.introspect`. LMS proceeds only when `audience == "lms"`, `status == "active"`, `sign_in_clear` is true, and `person_id` is present. Expired or revoked, or a foreign audience, is `reauthenticate` (401). Any other shape is `authority_ambiguous` (503). The audience string `lms` is not in the locked file.
 
 `bound_organisation_id`, when set, must match the organisation LMS is about to use. A mismatch is ambiguous. LMS calls `session.bind_organisation` only if Enigma's real introspect includes that field. The method is not in the five.
 
 ### `organisation_context(session_ref, organisation_id, *, request_id) -> OrganisationContext`
 
-Proceeds only for `status == "active"` on that organisation id. `suspended` and `closed` are `organisation_unavailable` (403). Anything else is ambiguous.
+Locked section 15: the organisation stays in Enigma. Proceeds only for `status == "active"` on that organisation id. `suspended` and `closed` are `organisation_unavailable` (403). Anything else is `authority_ambiguous` (503), which is the locked fail-closed for an ambiguous status.
 
 ### `validate_membership(session_ref, person_id, organisation_id, *, request_id) -> Membership`
 
-Proceeds only for `status == "active"` and a non-empty `roles` tuple. `suspended` and `absent` are `not_a_member` (403). An active membership with no role is ambiguous. LMS authorises from this answer and from `lookup_mandate`. It does not map a local role table.
+Locked section 15: membership, roles, and mandates stay in Enigma. Proceeds only for `status == "active"` and a non-empty `roles` tuple. `suspended` and `absent` are `not_a_member` (403). An active membership with no role is `authority_ambiguous` (503). LMS does not map a local role table.
 
 ### `lookup_mandate(query, *, request_id) -> MandateDecision`
 
-`query` carries session, person, organisation, action, and product code. `allow` with a mandate id and version is the only yes, and only for that action. `deny` is `mandate_denied` (403). Any other payload is ambiguous.
+Locked section 15: the mandate decision comes from Enigma. `query` carries session, person, organisation, action, and product code. `allow` with a mandate id and version is the only yes, and only for that action. `deny` is `mandate_denied` (403). Any other payload is `authority_ambiguous` (503).
 
 Rand ceilings are not decided here. After a clear allow, LMS calls `enforce_amount` when the command has an amount.
 
@@ -201,7 +227,7 @@ Day-1 actions:
 
 ### `check_enrolment(session_ref, organisation_id, product_code, *, request_id) -> Enrolment`
 
-Proceeds only for `status == "active"` on the requested product code, with an enrolment id. `suspended` and `absent` are `enrolment_denied` (403), including on reads. A different product code in the answer is ambiguous.
+Locked section 15: product enrolment stays in Enigma. Proceeds only for `status == "active"` on the requested product code, with an enrolment id. A clear `suspended` or `absent` is `enrolment_denied` (403), including on a read. That stop is port decision 3. Section 15 does not name a clear `suspended` status (conflict C3). A different product code, or any other status, is `authority_ambiguous` (503) under section 15.
 
 Proposed codes, still to be confirmed against Enigma's catalogue:
 
@@ -216,7 +242,7 @@ Enrolment and role are both required. A director role does not enrol the organis
 
 ## Identity freeze
 
-`freeze_at_booking` in `src/lms/enigma/identity_freeze.py` reads `PersonDirectory.read_live_identity` and returns an `AgreementIdentity` with `person_id`, `name`, `id_number`, `service_address`, `frozen_at`, and `source_request_id`.
+Locked section 16. `freeze_at_booking` in `src/lms/enigma/identity_freeze.py` reads the live Enigma person and returns an `AgreementIdentity` with `person_id`, `name`, `id_number`, and `service_address`. There is no function that writes those three fields again. `frozen_at` and `source_request_id` are technical columns and are not named in section 16.
 
 `communication_preferences` reads the same live person and returns email, mobile, and preferred channel. Callers must not write those fields onto the agreement.
 
@@ -224,7 +250,7 @@ Timeout and HTTP 5xx on the read are `authority_unavailable`. Booking waits.
 
 ## Session middleware
 
-`src/lms/enigma/middleware.py`.
+`src/lms/enigma/middleware.py`. Locked section 15: every request introspects Enigma, and a timeout or an ambiguous status fails closed (`authority_unavailable` or `authority_ambiguous`). The cookie generation and the 409 are port mechanics. The locked file does not name them.
 
 `establish_session` runs after the Cognito/Enigma callback. It introspects, checks organisation and membership, and stores generation `1`.
 
@@ -258,9 +284,9 @@ The machine list lives in Enigma and is amended by the same admin role that amen
 3. The job runs as that task role. It presigns `GetCallerIdentity` and passes the proof to LMS.
 4. LMS calls `MachineIdentityPort.exchange`. Enigma checks the signature, the role ARN, and the machine member, and returns a session reference.
 5. LMS runs `introspect`, `organisation_context`, `validate_membership`, `check_enrolment`, and `lookup_mandate` for `lms.allocation.run`. Unclear answers fail closed and the batch posts nothing.
-6. Removing the machine member, or deleting the IAM role, stops the next run. A bug that asks for `lms.account.write_off` is denied at mandate lookup.
+6. Removing the machine member, or deleting the IAM role, stops the next run. `handle_machine_request` returns `mandate_denied` for any action other than `lms.allocation.run`, including `lms.account.write_off`, even when `lookup_mandate` would have returned allow. That limit is port decision 2. Locked section 15 does not describe the job (conflict C9).
 
-`UnboundMachineIdentity` raises `wire_unbound` until Enigma exposes the exchange. The presigned URL is the proof. LMS does not mint keys and does not verify AWS itself.
+`UnboundMachineIdentity.exchange` raises `UnboundEnigmaPort`. The presigned URL is the proof. LMS does not mint keys and does not verify AWS itself. Locked section 15 does not name this exchange.
 
 Worked example. At 02:00 Africa/Johannesburg the Cape Credit allocation job exchanges its task role. Enigma returns a machine session whose only action is `lms.allocation.run`. The job allocates. A remainder that the job tries to write off is `mandate_denied`. If the exchange times out, the run is `authority_unavailable` and posts nothing.
 

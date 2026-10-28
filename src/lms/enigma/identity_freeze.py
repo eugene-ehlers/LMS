@@ -1,8 +1,11 @@
 """Freeze name, ID number, and service address onto an agreement at booking.
 
-The returned value is the concluded agreement's identity. Communication preferences stay
-on the live Enigma person and are read again when a message is sent. A later change to the
-live record is not copied back onto the agreement.
+Locked decision 16: those three fields are copied at booking, and a later Enigma change
+does not rewrite the concluded agreement. This module returns a new ``AgreementIdentity``
+and has no function that writes an existing one.
+
+Communication preferences are read from the live person when sending. Locked decision 16
+does not name them (conflict C10). They are not fields of ``AgreementIdentity``.
 """
 
 from __future__ import annotations

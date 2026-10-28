@@ -9,9 +9,12 @@ from lms.enigma.errors import (
     MandateDenied,
     TransportHTTPError,
     TransportTimeout,
+    UnboundEnigmaPort,
 )
 from lms.enigma.identity_freeze import communication_preferences, freeze_at_booking
+from lms.enigma.machine import UnboundMachineIdentity, handle_machine_request
 from lms.enigma.middleware import IncomingRequest, MemorySessionStore, establish_session, handle_request
+from lms.enigma.port import UnboundHttpEnigmaPort
 from lms.enigma.models import (
     COMPANY_CEILING_ROLE,
     PLATFORM_CEILING_ROLE,
@@ -24,6 +27,7 @@ from lms.enigma.models import (
     OrganisationContext,
     OrganisationMembershipSummary,
     RandCeiling,
+    IamCallerProof,
     SessionView,
 )
 from lms.enigma.regulatory import ncr_number_required
@@ -368,3 +372,87 @@ def test_ncr_number_is_required_only_for_nca_products():
     assert ncr_number_required(product_code=PRODUCT_MICRO, pure_hosting=False)
     assert not ncr_number_required(product_code=PRODUCT_BNPL_LAYBYE, pure_hosting=False)
     assert not ncr_number_required(product_code=PRODUCT_MICRO, pure_hosting=True)
+
+
+def test_suspended_enrolment_fails_closed_on_a_read():
+    port, store, client, ceilings = _ready()
+    port.enrolment_status = "suspended"
+    result = handle_request(
+        IncomingRequest("lms_1", 1, "lms.account.read", PRODUCT_MICRO),
+        sessions=store,
+        client=client,
+        ceilings=ceilings,
+        request_id="req_suspended",
+    )
+    assert result.status == 403
+    assert result.error == "enrolment_denied"
+
+
+def test_ambiguous_session_status_fails_closed():
+    port, store, client, ceilings = _ready()
+    port.session_status = "pending"
+    result = handle_request(
+        IncomingRequest("lms_1", 1, "lms.account.read", PRODUCT_MICRO),
+        sessions=store,
+        client=client,
+        ceilings=ceilings,
+        request_id="req_pending",
+    )
+    assert result.status == 503
+    assert result.error == "authority_ambiguous"
+
+
+class _AllowingMachines:
+    def exchange(self, proof: IamCallerProof, *, request_id: str) -> str:
+        return "sess_machine"
+
+
+def test_machine_allocation_runs_and_write_off_is_denied():
+    port = FakePort()
+    port.decision = "allow"
+    client = EnigmaClient(port)
+    proof = IamCallerProof(presigned_url="presigned-get-caller-identity", organisation_id="org_a")
+    allocated = handle_machine_request(
+        proof,
+        action="lms.allocation.run",
+        product_code=PRODUCT_MICRO,
+        machines=_AllowingMachines(),
+        client=client,
+        request_id="req_alloc",
+    )
+    assert allocated.status == 200
+    assert allocated.mandate_id == "man_88"
+
+    port.decision = "allow"
+    denied = handle_machine_request(
+        proof,
+        action="lms.account.write_off",
+        product_code=PRODUCT_MICRO,
+        machines=_AllowingMachines(),
+        client=client,
+        request_id="req_write_off",
+    )
+    assert denied.status == 403
+    assert denied.error == "mandate_denied"
+
+
+def test_unbound_path_raises_unbound_enigma_port():
+    port = UnboundHttpEnigmaPort()
+    client = EnigmaClient(port)
+    with pytest.raises(UnboundEnigmaPort):
+        port.introspect("sess", request_id="req")
+    with pytest.raises(UnboundEnigmaPort):
+        port.organisation_context("sess", "org_a", request_id="req")
+    with pytest.raises(UnboundEnigmaPort):
+        port.validate_membership("sess", "per_12", "org_a", request_id="req")
+    with pytest.raises(UnboundEnigmaPort):
+        port.lookup_mandate(None, request_id="req")  # type: ignore[arg-type]
+    with pytest.raises(UnboundEnigmaPort):
+        client.check_enrolment("sess", "org_a", PRODUCT_MICRO, request_id="req")
+    with pytest.raises(UnboundEnigmaPort):
+        UnboundMachineIdentity().exchange(
+            IamCallerProof("presigned", "org_a"),
+            request_id="req",
+        )
+    with pytest.raises(UnboundEnigmaPort):
+        freeze_at_booking(port, "per_12", frozen_at=NOW, request_id="req")

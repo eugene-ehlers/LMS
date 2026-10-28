@@ -77,10 +77,10 @@ class AttributesUnavailable(PortError):
     http_status = 409
 
 
-class WireUnbound(PortError):
-    """Raised by the placeholder HTTP adapter. Paths are not known until Enigma is readable."""
+class UnboundEnigmaPort(PortError):
+    """Raised when a call has no HTTP path. The URL is not invented."""
 
-    code = "wire_unbound"
+    code = "unbound_enigma_port"
     http_status = 503
 
 

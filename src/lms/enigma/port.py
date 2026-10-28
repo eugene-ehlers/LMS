@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from lms.enigma.errors import WireUnbound
+from lms.enigma.errors import UnboundEnigmaPort
 from lms.enigma.models import (
     Enrolment,
     IamCallerProof,
@@ -50,26 +50,29 @@ class MachineIdentityPort(Protocol):
         """Verify the IAM caller with AWS and return an Enigma session reference for that machine member."""
 
 
-class UnboundEnigmaPort:
-    """Placeholder so a caller cannot accidentally treat sketched paths as a live API."""
+class UnboundHttpEnigmaPort:
+    """HTTP adapter with no paths. Every operation raises ``UnboundEnigmaPort``."""
 
     def introspect(self, session_ref: str, *, request_id: str) -> SessionView:
-        raise WireUnbound("session.introspect wire is unbound")
+        raise UnboundEnigmaPort("session.introspect has no HTTP path")
 
     def organisation_context(
         self, session_ref: str, organisation_id: str, *, request_id: str
     ) -> OrganisationContext:
-        raise WireUnbound("organisation.context wire is unbound")
+        raise UnboundEnigmaPort("organisation.context has no HTTP path")
 
     def validate_membership(
         self, session_ref: str, person_id: str, organisation_id: str, *, request_id: str
     ) -> Membership:
-        raise WireUnbound("membership.validate wire is unbound")
+        raise UnboundEnigmaPort("membership.validate has no HTTP path")
 
     def lookup_mandate(self, query: MandateQuery, *, request_id: str) -> MandateDecision:
-        raise WireUnbound("mandate.lookup wire is unbound")
+        raise UnboundEnigmaPort("mandate.lookup has no HTTP path")
 
     def check_enrolment(
         self, session_ref: str, organisation_id: str, product_code: str, *, request_id: str
     ) -> Enrolment:
-        raise WireUnbound("enrolment.check wire is unbound")
+        raise UnboundEnigmaPort("enrolment.check has no HTTP path")
+
+    def read_live_identity(self, person_id: str, *, request_id: str) -> LiveIdentity:
+        raise UnboundEnigmaPort("person read has no HTTP path")
