@@ -23,8 +23,10 @@ not defaults and are not used here.
 The VAT rate 15% and ``interest_cap_present=True`` are statement inputs.
 Neither is a stored election. Omitting either fails closed.
 
-Gaps are reported by failing assertions. This file does not change a locked
-rule to make the path pass.
+The smoke order follows the 28 October allocation update on main
+(1435869): capitalise April first, then take the 1 May receipt, then
+issue the 1 May statement. Capitalisation and payment are different
+days, which that update allows. This file does not change a locked rule.
 """
 
 from __future__ import annotations
@@ -308,13 +310,12 @@ def _book_disburse(svc: Servicing, stub: CountingStub) -> tuple[dict, dict]:
     return booked, active
 
 
-def test_layer0_requested_path_book_disburse_pay_statement(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Book, disburse, pay, then state. This is the order in the smoke brief.
+def test_layer0_smoke_april_statement_then_payment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Book, disburse, capitalise April, take R219 on 1 May, then state 1 May.
 
     April interest on a constant R2 000 is R100.00. The opening service fee
     is a full R60 plus R9 VAT because the §9 fraction for 1 April to 1 May
-    is 30/30. The receipt is those two amounts plus R50 of principal
-    (21 900 cents).
+    is 30/30. The receipt is those two amounts plus R50 of principal.
     """
     _block_http(monkeypatch)
     interest = _engine_april_interest()
@@ -337,120 +338,102 @@ def test_layer0_requested_path_book_disburse_pay_statement(monkeypatch: pytest.M
     assert later["leniency_days"] == 9
     loan = _loan(svc, active["ledger_loan_id"])
     assert loan.snapshot.leniency_days == 3
+    assert loan.snapshot.base_rate == Decimal("0.05")
     assert svc.agreements[booked["agreement_id"]].resolved.leniency_days == 3
 
-    payment = _pay(svc, booked["agreement_id"], receipt, key="pay-smoke")
     april = _statement(svc, ADVANCE, APRIL_END)
-    may = _statement(svc, DUE, DUE)
-    _assert_integer_cents(svc, active["ledger_loan_id"], payment, april, may)
-
     april_line = april["loans"][0]
-    may_line = may["loans"][0]
     assert april_line["opening"] == {"principal": 0, "interest": 0, "laybye_hold": 0}
-    assert may_line["opening"] == april_line["closing"]
-    principal_taken = sum(row["cents"] for row in payment["allocations"] if row["bucket"] == "principal")
-    assert may_line["opening"]["principal"] - may_line["closing"]["principal"] == principal_taken
-    assert payment["value_date"] == DUE.isoformat()
+    assert april_line["closing"] == {"principal": 200_000, "interest": 10_000, "laybye_hold": 0}
+    assert svc.ledger.bucket_balance(loan, "principal") == 200_000
+    assert svc.ledger.bucket_balance(loan, "interest") == 10_000
+    assert svc.ledger.bucket_balance(loan, "service") == 6_900
+    april_memos = [
+        transaction.memo_rands
+        for transaction in svc.ledger.store.transactions_for(ORG, active["ledger_loan_id"])
+        if transaction.kind == "interest_accrual"
+        and ADVANCE <= transaction.value_date <= APRIL_END
+        and transaction.memo_rands is not None
+    ]
+    assert len(april_memos) == 30
+    assert to_cents(sum(april_memos, Decimal(0))) == 10_000
+    service_charges = [charge for charge in loan.charges if charge.bucket == "service"]
+    interest_charges = [charge for charge in loan.charges if charge.bucket == "interest"]
+    assert [(charge.ex_vat_cents, charge.vat_cents, charge.remaining_cents) for charge in service_charges] == [
+        (6_000, 900, 6_900)
+    ]
+    assert [(charge.remaining_cents, charge.due_on) for charge in interest_charges] == [(10_000, APRIL_END)]
+    assert all(charge.ex_vat_cents <= 6_000 for charge in service_charges)
+
+    payment = _pay(svc, booked["agreement_id"], receipt, key="pay-smoke")
     assert payment["status"] == "allocated"
+    assert payment["value_date"] == DUE.isoformat()
+    assert payment["allocations"] == [
+        {"bucket": "interest", "cents": 10_000},
+        {"bucket": "service", "cents": 6_900},
+        {"bucket": "principal", "cents": 5_000},
+    ]
+    assert svc.ledger.bucket_balance(loan, "interest") == 0
+    assert svc.ledger.bucket_balance(loan, "service") == 0
+    assert svc.ledger.bucket_balance(loan, "principal") == 195_000
+
+    may = _statement(svc, DUE, DUE)
+    may_line = may["loans"][0]
+    assert may_line["opening"] == april_line["closing"]
+    _assert_integer_cents(svc, active["ledger_loan_id"], payment, april, may)
     assert "lms.enigma.client" not in sys.modules
     assert "lms.enigma" not in sys.modules
     assert [call[2] for call in stub.calls] == [
         "agreement.book",
         "disbursement.confirm",
         "agreement.book",
+        "statement.issue",
         "payment.accept",
         "statement.issue",
-        "statement.issue",
     ]
-
-    expected = [
-        {"bucket": "interest", "cents": interest},
-        {"bucket": "service", "cents": fee_total},
-        {"bucket": "principal", "cents": PRINCIPAL_PART_CENTS},
-    ]
-    gaps: list[str] = []
-    if payment["allocations"] != expected:
-        gaps.append(
-            "Payment did not allocate in section 126 order (interest, then fees, then principal).\n"
-            f"  Receipt {_rands(receipt)} on {DUE.isoformat()} before any debit of interest or the service fee.\n"
-            f"  Actual allocations: {payment['allocations']}.\n"
-            "  Locked §8 allocates only amounts that are already due. Unbilled interest is not allocatable.\n"
-            "  Servicing debits interest and the service fee inside statement issue, which this path runs after the receipt.\n"
-            f"  Engine figures for this contract, had they been due first: interest {_rands(interest)}, "
-            f"service fee {_rands(fee_total)} ({_rands(ex_vat)} ex VAT + {_rands(vat)} VAT), "
-            f"principal {_rands(PRINCIPAL_PART_CENTS)}."
-        )
-    if april_line["closing"]["interest"] != interest:
-        gaps.append(
-            "April interest is not the contractual amount on R2 000.\n"
-            f"  Engine on a constant 200 000 cents for 1–30 April at 5% actual/actual: {_rands(interest)}.\n"
-            f"  Statement 1–30 April closing interest: {_rands(april_line['closing']['interest'])}.\n"
-            f"  Statement 1 May closing interest: {_rands(may_line['closing']['interest'])}.\n"
-            "  accrue_day reads the live principal. The 1 May receipt had already reduced it, so April "
-            "was accrued on the post-payment balance. §1 dates that receipt 1 May, so April's base stays R2 000."
-        )
-    if payment["payment_id"] not in str(may):
-        service_balance = svc.ledger.bucket_balance(loan, "service")
-        gaps.append(
-            "The statement does not show the receipt, and it has no fee balance.\n"
-            f"  1–30 April closing: {april_line['closing']}.\n"
-            f"  1 May opening (equals that closing): {may_line['opening']}.\n"
-            f"  1 May closing: {may_line['closing']}.\n"
-            f"  Service-fee bucket after both statements: {_rands(service_balance)}. "
-            "It is not an opening or closing key. The receipt is not a statement line. "
-            "The principal movement is the only sign of the payment."
-        )
-    if gaps:
-        held = (
-            "Held on this run:\n"
-            f"  Booking froze Ada Borrower, 8001015800085, 1 Main Road, Cape Town, "
-            f"and the elections above. Nominal annual rate is 60% (5% x 12). "
-            f"No ledger account existed until disbursement.\n"
-            f"  Disbursement is active. Principal posted: {_rands(CASH_CENTS)} on {ADVANCE.isoformat()}.\n"
-            f"  1 May opening equals 1–30 April closing: {may_line['opening']}.\n"
-            f"  Principal fell by the principal leg of the receipt, {_rands(principal_taken)}.\n"
-            "  Every posted amount, balance, and allocation is an int. EnigmaStub returned success. "
-            "No HTTP client was imported and the blocked socket was not used.\n"
-            "  A missing organisation election (leniency, threshold, initiation-interest, repo fall, "
-            "VAT-on-maxima, late disbursement, partial prepayment) is covered by "
-            "test_missing_election_fails_closed."
-        )
-        comparison = _numbers_when_april_is_debited_first(interest, fee_total)
-        pytest.fail(held + "\n\n" + "\n\n".join(gaps) + "\n\n" + comparison)
+    assert all(transaction.kind != "write_off" for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id))
 
 
-def test_section_126_when_april_is_debited_before_the_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Same contract. The April statement, which is what debits interest and the fee, runs before the receipt.
+def test_same_day_capitalisation_is_not_applied_before_the_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Raise the 28 October same-day order. Do not treat the current posting order as the rule.
 
-    This is not the smoke order. It shows what the existing ledger does once those amounts are due.
+    Main 1435869 says that on a calendar day, capitalisation at 00:00 comes
+    before payments recognised that day. The same section still says to
+    process same-day events in recognition order. The ledger follows
+    recognition order. The 1 May statement, posted after the receipt, accrues
+    1 May on the reduced principal and levies a second service fee.
     """
     _block_http(monkeypatch)
-    interest = _engine_april_interest()
-    _ex, _vat, fee_total = _engine_service_fee()
-    receipt = interest + fee_total + PRINCIPAL_PART_CENTS
-    svc = Servicing(enigma=CountingStub())
-    booked, active = _book_disburse(svc, svc.enigma)
-    april = _statement(svc, ADVANCE, APRIL_END)
-    payment = _pay(svc, booked["agreement_id"], receipt, key="pay-after-bill")
+    stub = CountingStub()
+    svc = Servicing(enigma=stub)
+    booked, active = _book_disburse(svc, stub)
+    _statement(svc, ADVANCE, APRIL_END)
+    payment = _pay(svc, booked["agreement_id"], 21_900, key="pay-same-day")
     may = _statement(svc, DUE, DUE)
-    _assert_integer_cents(svc, active["ledger_loan_id"], payment, april, may)
-
-    assert payment["allocations"] == [
-        {"bucket": "interest", "cents": 10_000},
-        {"bucket": "service", "cents": 6_900},
-        {"bucket": "principal", "cents": 5_000},
-    ]
-    assert april["loans"][0]["closing"] == {"principal": 200_000, "interest": 10_000, "laybye_hold": 0}
-    assert may["loans"][0]["opening"] == april["loans"][0]["closing"]
-    # R50 of principal, then 1 May interest on the reduced balance. The receipt was
-    # recognised before that day's accrual, so §1 applies it first.
-    assert may["loans"][0]["closing"] == {"principal": 195_000, "interest": 315, "laybye_hold": 0}
     loan = _loan(svc, active["ledger_loan_id"])
-    assert svc.ledger.bucket_balance(loan, "principal") == 195_000
-    assert svc.ledger.bucket_balance(loan, "interest") == 315
-    # April's fee was paid. May is a later calendar month inside the contractual end,
-    # so §9 levies another full monthly fee. It is not on the statement.
+    payment_tx = svc.ledger.store.get_transaction(ORG, payment["ledger_transaction_id"])
+    may_accruals = [
+        transaction
+        for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id)
+        if transaction.kind == "interest_accrual" and transaction.value_date == DUE
+    ]
+    assert may["loans"][0]["closing"]["interest"] == 315
     assert svc.ledger.bucket_balance(loan, "service") == 6_900
+    assert may_accruals
+    assert all(transaction.recognition_sequence > payment_tx.recognition_sequence for transaction in may_accruals)
+    pytest.fail(
+        "1 May capitalisation is not applied before the 1 May receipt.\n"
+        f"  Receipt allocations: {payment['allocations']}.\n"
+        f"  1 May statement closing: {may['loans'][0]['closing']}.\n"
+        "  Interest of R3.15 (315 cents) is 1 May on R1 950, the balance after the receipt. "
+        "A day capitalised first on the R2 000 April balance would be R3.23 (323 cents).\n"
+        "  A second service fee of R69.00 is levied for May when the statement runs, after the receipt.\n"
+        "  Locked §1 and §8 (main 1435869) tell the engine to capitalise the day's due amounts "
+        "at 00:00 and then allocate payments. They also still say same-day events follow "
+        "recognition sequence. The code does the second. It does not reorder a payment behind "
+        "that day's capitalisation. Whether 1 May interest is due that day, or only at month-end, "
+        "is not settled by the two bullets. This test does not choose one."
+    )
 
 
 def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -624,21 +607,3 @@ def _kinds(svc: Servicing, ledger_loan_id: str) -> dict[str, int]:
     return counts
 
 
-def _numbers_when_april_is_debited_first(interest: int, fee_total: int) -> str:
-    svc = Servicing(enigma=CountingStub())
-    booked, active = _book_disburse(svc, svc.enigma)
-    april = _statement(svc, ADVANCE, APRIL_END)
-    payment = _pay(svc, booked["agreement_id"], interest + fee_total + PRINCIPAL_PART_CENTS, key="compare")
-    may = _statement(svc, DUE, DUE)
-    loan = _loan(svc, active["ledger_loan_id"])
-    return (
-        "Same contract when the April statement debits interest and the service fee before the receipt "
-        "(existing servicing methods, not the smoke order):\n"
-        f"  April closing: {april['loans'][0]['closing']}.\n"
-        f"  Allocations: {payment['allocations']}.\n"
-        f"  1 May opening: {may['loans'][0]['opening']}.\n"
-        f"  1 May closing: {may['loans'][0]['closing']}.\n"
-        f"  Service bucket after 1 May: {_rands(svc.ledger.bucket_balance(loan, 'service'))}. "
-        "April's fee was paid. May is inside the contractual end, so §9 levies another full "
-        "R60 ex VAT plus VAT for that calendar month. The statement does not show it."
-    )
