@@ -53,6 +53,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Funeral benefit is paid to the named beneficiary and leaves the loan and Laybye as they are.
 - Death may not apply the Laybye without a section 124 authority signed in life; otherwise the Laybye stays with the estate.
 - Structured as a deposit-insurance style arrangement (client pays for a period, then loan is disbursed). Not deposit-taking under the Banks Act for Day-1 purposes.
+- Credit life statements and accounts sit in the insurer’s domain. The LMS does not keep them.
+- If collections are automated from the LMS, the LMS must know the credit-life premium amount so it can raise one collection for the loan instalment and a separate collection for the credit-life premium.
 
 ## 5. Day count and accrual
 
