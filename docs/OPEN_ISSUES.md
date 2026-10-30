@@ -127,6 +127,8 @@ S1 is closed. `Ledger.quote_settlement` delegates to the calculation engine. `Do
 | F7 | The calculation engine rounds each interest bill and clears the unbilled remainder. The ledger rounds the cumulative memo. On 1 March to 10 April 2026 the two totals matched (6 667 cents). A one-cent difference fails closed. No balancing journal is posted. | Code change | Use one rounding rule for both books, or record that a one-cent difference stays a refusal. |
 
 
+
+
 ## Summary
 
 | Classification | Count | Action before production |
@@ -143,3 +145,4 @@ J1 to J12 are the daily-batch gaps. They are not new rules. J1 records that main
 G1 to G10 are the restructure gaps. They are not new rules. G1 records that main's locked file was a pointer. This tree already has the restored document. That row is not closed here.
 The restructure flow is orchestration section 10. The daily batch is section 9. The settlement receipt is section 11. The steps are unchanged.
 F1 to F7 are the early-settlement gaps. They are not new rules. docs/LOCKED_DECISIONS.md was not edited by that path.
+K1 to K9 are the staff-screen gaps. They are not new rules. K5 is not closed. On this tree the collection-campaign migration stays `0008_collection_campaigns.sql`, Layer 2 staff stays `0009_layer2_staff.sql`, and the re-advance stays `0010_settlement_readvance.sql`. Those prefixes were already unique. K5 asked not to put the campaign file back on 0008 beside `0008_layer2_staff.sql`. That staff file is already 0009, so restoring 0008 does not recreate that pair.

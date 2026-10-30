@@ -346,3 +346,11 @@ The payment-rail layer found these points unset. Nothing in this section is a de
 - Whether interest that accrues on a payment date is itself due that day, or only on an instalment due date, is not settled beyond “capitalise due amounts, then allocate”.
 - Section 8 and section 19 say the residual write-off threshold default is R100, and section 19 also says an unset election fails closed. `resolve_residual_threshold_cents` still returns 5 000 cents when both levels are null. This layer does not call that resolver and does not choose between those readings.
 - Settlement re-advance has no module order in the orchestration note. The route, the settlement-month fee, and the points this command does not decide are recorded in `docs/settlement-readvance/`. That note is not a rule.
+## Open points raised while implementing Layer 2
+
+These points are unresolved. Nothing in this section changes a rule above or chooses a reading.
+
+1. Decisions 3 and 19 store the campaign fall-away choice and trigger on the campaign, and decision 19 also stores them as an organisation election with an optional product override. The document does not say which stored value applies when they differ.
+2. The document does not say which campaign applies when more than one campaign period includes the recognition date of a new loan.
+3. Decision 3 defines the campaign price as a base rate less a discount. Decision 13 says the LMS uses the rate supplied by the decision engine. The document does not say whether a loan that qualifies for a campaign keeps the supplied rate, or uses the campaign net.
+4. Decision 8 says the residual write-off threshold defaults to R100. Decision 19 says unset elections fail closed and lists that threshold with a default of R100. The document does not say whether a null threshold means R100 or a failed command.

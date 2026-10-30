@@ -1,6 +1,6 @@
 # Campaign schema
 
-In-process records live on `CollectionCampaigns`. The same shape is in `db/migrations/0008_collection_campaigns.sql`. Dates are Johannesburg recognition dates. Money is integer cents. Rates are decimals in the same unit as the contractual periodic rate (monthly on a short-term loan, annual on an unsecured loan).
+In-process records live on `CollectionCampaigns`. The same shape is in `db/migrations/0009_collection_campaigns.sql`. On the collection-campaign branch the file is `0008_collection_campaigns.sql`. This branch uses 0009 because `0008_layer2_staff.sql` already occupies 0008. Dates are Johannesburg recognition dates. Money is integer cents. Rates are decimals in the same unit as the contractual periodic rate (monthly on a short-term loan, annual on an unsecured loan).
 
 ## `collection_campaign`
 
