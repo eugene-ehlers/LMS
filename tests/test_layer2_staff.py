@@ -15,7 +15,7 @@ from lms.staff.authority import (
     ROLE_ELECTIONS_WRITE,
     StaffActor,
 )
-from lms.staff.elections import ElectionValues
+from lms.staff.elections import ElectionValues, resolve_elections
 from lms.staff.service import StaffOffice
 from lms_config.exceptions import CalculationInputError
 from lms_config.locked import campaign_rate, resolve_residual_threshold_cents
@@ -316,8 +316,22 @@ def test_elections_fail_closed_and_product_override_wins():
         headers(),
     )
     assert missing[0] == 422
-    # The Layer 0 resolver still fills R50. This layer does not use that fill.
-    assert resolve_residual_threshold_cents(None, None) == 5_000
+    assert resolve_residual_threshold_cents(None, None) == 10_000
+    assert resolve_residual_threshold_cents(0, None) == 0
+    filled = resolve_elections(
+        ElectionValues(
+            vat_on_rand_maxima="exclusive",
+            late_disbursement="keep_instalment",
+            partial_prepayment="shorten_term",
+            interest_on_deferred_initiation="none",
+            repo_rate_fall="contract_rate",
+            in_duplum_trigger="collections_default",
+            residual_write_off_threshold_cents=None,
+            campaign_fall_away_choice="does_not_fall_away",
+        ),
+        None,
+    )
+    assert filled.residual_write_off_threshold_cents == 10_000
 
     assert dispatch(office, "PUT", f"/v1/staff/organisations/{ORG}/elections", elections(), headers())[0] == 200
     resolved = dispatch(office, "POST", f"/v1/staff/organisations/{ORG}/elections/resolve", {}, headers())

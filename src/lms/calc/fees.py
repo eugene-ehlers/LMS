@@ -172,3 +172,37 @@ def service_fee_cents(
         fraction=fraction,
         vat_registered=vat_registered,
     )
+
+
+def settlement_booked_initiation(
+    *,
+    capitalised: bool,
+    outstanding_ex_vat_cents: int,
+    outstanding_gross_cents: int | None,
+    vat_rate: Decimal,
+    already_in_principal: bool,
+) -> tuple[int, int]:
+    """Principal to add, and the initiation component, for a settlement quote.
+
+    The booked fee is used. The statutory initiation formula is not.
+    A capitalised fee is already part of the loan value. It is not added
+    again. When the fold has already put that ex-VAT amount in principal,
+    ``already_in_principal`` is true and the principal addition is zero.
+    A fee that is not capitalised is not yet due. Its outstanding portion
+    is added to the settlement value, and VAT is included in that portion.
+    ``outstanding_gross_cents`` is set when the outstanding charge already
+    includes VAT. Otherwise VAT is calculated on the ex-VAT amount.
+    """
+    if outstanding_ex_vat_cents < 0 or (outstanding_gross_cents is not None and outstanding_gross_cents < 0):
+        raise RuleError("initiation", "Booked initiation cannot be negative.")
+    if outstanding_gross_cents is not None:
+        if capitalised:
+            return 0, 0
+        return 0, outstanding_gross_cents
+    if outstanding_ex_vat_cents == 0:
+        return 0, 0
+    _ex_vat, vat, gross = add_vat(outstanding_ex_vat_cents, vat_rate)
+    if capitalised:
+        principal_add = 0 if already_in_principal else outstanding_ex_vat_cents
+        return principal_add, vat
+    return 0, gross

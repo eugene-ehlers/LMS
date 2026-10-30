@@ -33,8 +33,10 @@ from lms.servicing.service import AgreementRecord, Servicing
 from lms.settlement.errors import SettlementError
 from lms.statements.errors import DocumentsError
 from lms.statements.models import StoredQuote
+from lms.calc.fees import settlement_booked_initiation
 from lms.statements.service import (
     Documents,
+    _booked_initiation,
     _engine_agreement,
     _payment_events,
     _policy,
@@ -442,6 +444,8 @@ class Settlement:
             )
         self._accrue_through(ledger, record, account, as_of, vat_rate, repos)
         account = ledger.store.get(record.organisation_id, record.ledger_loan_id or "")
+        self._include_initiation_vat(ledger, record, account, stored, vat_rate)
+        account = ledger.store.get(record.organisation_id, record.ledger_loan_id or "")
         owing = _amount_owing(account)
         if owing != stored.total_cents:
             quoted_initiation = dict(stored.components).get("initiation", 0)
@@ -453,8 +457,7 @@ class Settlement:
             if quoted_initiation != booked_initiation:
                 detail += (
                     f" Quoted initiation is {quoted_initiation} cents and the ledger initiation balance "
-                    f"is {booked_initiation} cents. The booked fee and the statutory formula are not "
-                    "the same, and the difference was not posted."
+                    f"is {booked_initiation} cents."
                 )
             raise SettlementError("quote-mismatch", detail + " The receipt was not allocated.")
         try:
@@ -463,6 +466,51 @@ class Settlement:
                 loan_id=account.loan_id,
                 cents=cents,
                 recognised_at=value_instant(value_date(recognised_at)),
+            )
+        except LedgerError as exc:
+            raise SettlementError(exc.code, str(exc)) from exc
+
+    def _include_initiation_vat(
+        self,
+        ledger: Ledger,
+        record: AgreementRecord,
+        account: LoanAccount,
+        stored: StoredQuote,
+        vat_rate: Decimal,
+    ) -> None:
+        """The booked fee's VAT is part of the settlement value.
+
+        A capitalised fee is already in principal and is not posted again.
+        The VAT on that fee, and the VAT on a non-capitalised outstanding fee
+        whose charge does not yet hold it, is posted so the receipt can pay it.
+        """
+        capitalised = account.snapshot.initiation_capitalised
+        ex_vat, gross = _booked_initiation(account, capitalised)
+        _principal_add, initiation = settlement_booked_initiation(
+            capitalised=capitalised,
+            outstanding_ex_vat_cents=ex_vat,
+            outstanding_gross_cents=gross,
+            vat_rate=vat_rate,
+            already_in_principal=(
+                capitalised and account.snapshot.interest_on_deferred_initiation == "permitted"
+            ),
+        )
+        quoted = dict(stored.components).get("initiation", 0)
+        if initiation != quoted:
+            return
+        gap = quoted - ledger.bucket_balance(account, "initiation")
+        if gap <= 0:
+            return
+        due = account.disbursement_value_date or stored.as_of
+        try:
+            ledger.levy_charge(
+                organisation_id=record.organisation_id,
+                loan_id=account.loan_id,
+                bucket="initiation",
+                cents=gap,
+                due_on=due,
+                recognised_at=value_instant(stored.as_of),
+                interest_cap_present=True,
             )
         except LedgerError as exc:
             raise SettlementError(exc.code, str(exc)) from exc

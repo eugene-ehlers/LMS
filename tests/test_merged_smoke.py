@@ -334,38 +334,51 @@ def _fail_closed(smoke: Smoke, servicing: Servicing, collections: Collections) -
         f"book with the elections set: trigger {bare.resolved.in_duplum_trigger!r}, "
         f"residual {bare.resolved.residual_write_off_threshold_cents}"
     )
-    unset = servicing.book(
+    try:
+        servicing.book(
+            organisation_id=ORG,
+            person_id="person-trigger-unset",
+            product=micro_short_term(),
+            settings=_settings(in_duplum_trigger=None, residual_write_off_threshold_cents=None),
+            recognised_at=to_recognition_instant(date(2026, 4, 1)),
+            cash_advanced_cents=CASH,
+            frequency="monthly",
+            schedule=((date(2026, 5, 1), CASH),),
+            initiation_fee_cents=0,
+            quoted_disbursement=date(2026, 4, 1),
+            idempotency_key="book-trigger-unset",
+        )
+        smoke.fail("booking without an in-duplum trigger succeeded")
+    except Exception as exc:
+        code = getattr(exc, "code", type(exc).__name__)
+        smoke.say(f"fail closed, missing in-duplum trigger at book: {code}: {exc}")
+        if code != "election-unset":
+            smoke.fail(f"booking without a trigger raised {code}")
+    filled = servicing.book(
         organisation_id=ORG,
-        person_id="person-trigger-unset",
+        person_id="person-residual-unset",
         product=micro_short_term(),
-        settings=_settings(in_duplum_trigger=None, residual_write_off_threshold_cents=None),
+        settings=_settings(residual_write_off_threshold_cents=None),
         recognised_at=to_recognition_instant(date(2026, 4, 1)),
         cash_advanced_cents=CASH,
         frequency="monthly",
         schedule=((date(2026, 5, 1), CASH),),
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
-        idempotency_key="book-trigger-unset",
+        idempotency_key="book-residual-unset",
     )
     smoke.say(
-        f"book with trigger and residual omitted: status {unset.status}, "
-        f"stored trigger {unset.resolved.in_duplum_trigger!r}, "
-        f"stored residual {unset.resolved.residual_write_off_threshold_cents}"
+        f"book with residual omitted: status {filled.status}, "
+        f"stored trigger {filled.resolved.in_duplum_trigger!r}, "
+        f"stored residual {filled.resolved.residual_write_off_threshold_cents}"
     )
-    if unset.resolved.in_duplum_trigger is None:
-        smoke.gap(
-            "Decision 19 says an unset in-duplum trigger fails closed. "
-            "Servicing.book stored None and returned the agreement. "
-            "Event: book with in_duplum_trigger omitted."
-        )
-    if unset.resolved.residual_write_off_threshold_cents != RESIDUAL:
-        smoke.gap(
-            "Decision 8 and Decision 19 name a residual default of R100 and also say unset fails closed. "
-            f"resolve stored {unset.resolved.residual_write_off_threshold_cents} cents when both levels were null. "
-            "Event: book with residual_write_off_threshold_cents omitted. Already C4 and C6."
+    if filled.resolved.residual_write_off_threshold_cents != RESIDUAL:
+        smoke.fail(
+            "an omitted residual stored "
+            f"{filled.resolved.residual_write_off_threshold_cents} cents"
         )
     try:
-        collections.bind(unset.agreement_id, in_duplum_trigger=None, residual_threshold_cents=RESIDUAL)
+        collections.bind(bare.agreement_id, in_duplum_trigger=None, residual_threshold_cents=RESIDUAL)
         smoke.fail("bind with an unset trigger succeeded")
     except CollectionsError as exc:
         smoke.say(f"fail closed, bind without trigger: {exc.code}")
@@ -694,12 +707,9 @@ def _settlement(smoke, servicing, documents, engine, identity) -> None:
             f"A full fee in April and in the May settlement month is {_rands(13_800)}."
         )
     if initiation:
-        smoke.gap(
+        smoke.fail(
             "The agreement was booked with an initiation fee of 0 cents. "
-            f"The settlement quote includes initiation {_rands(initiation)}. "
-            "Documents.settlement_quote builds an engine agreement without the booked initiation amount, "
-            "and the engine prices the statutory initiation formula. The quote did not post that fee. "
-            "Event: settlement requested on 15 May 2026."
+            f"The settlement quote includes initiation {_rands(initiation)}."
         )
     smoke.measured["quote"] = (
         quote.principal_cents,
@@ -1028,11 +1038,11 @@ def _pin(smoke: Smoke) -> None:
         "quote": (
             200_000,
             14_839,
-            44_275,
+            13_800,
             0,
-            259_114,
+            228_639,
             "2026-05-22",
-            (("initiation", 30_475), ("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
+            (("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
         ),
         "collections": (200_000, 200_000, 196_900, 0, 0, True, 196_900),
         "write_off": (

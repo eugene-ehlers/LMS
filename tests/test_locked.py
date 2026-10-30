@@ -59,6 +59,7 @@ def _org(**overrides) -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="adjust_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="collections_default",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -122,12 +123,20 @@ def test_leniency_and_threshold_are_not_invented():
     product = micro_short_term()
     with pytest.raises(CalculationInputError, match="leniency_days"):
         resolve_customer_settings(
-            OrganisationSettings(leniency_days=None, full_payment_threshold_percent=Decimal("95")),
+            OrganisationSettings(
+                leniency_days=None,
+                full_payment_threshold_percent=Decimal("95"),
+                in_duplum_trigger="collections_default",
+            ),
             product,
         )
     with pytest.raises(CalculationInputError, match="full_payment_threshold"):
         resolve_customer_settings(
-            OrganisationSettings(leniency_days=4, full_payment_threshold_percent=None),
+            OrganisationSettings(
+                leniency_days=4,
+                full_payment_threshold_percent=None,
+                in_duplum_trigger="collections_default",
+            ),
             product,
         )
     chosen = _resolved(product)

@@ -40,6 +40,7 @@ def settings() -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="collections_default",
     )
 
 
@@ -216,6 +217,8 @@ def test_open_ended_campaign_resumes_only_when_staff_end_it():
         selector="loans",
         loan_ids=(loan.loan_id,),
     )
+    before_rate = loan.snapshot.base_rate
+    before_instalments = tuple((item.due_on, item.amount_cents) for item in loan.slices)
     later = campaigns.accrue(
         organisation_id="org-a",
         loan_id=loan.loan_id,
@@ -237,6 +240,8 @@ def test_open_ended_campaign_resumes_only_when_staff_end_it():
         interest_cap_present=True,
     )
     assert resumed.periodic_rate == Decimal("0.05")
+    assert loan.snapshot.base_rate == before_rate == Decimal("0.05")
+    assert tuple((item.due_on, item.amount_cents) for item in loan.slices) == before_instalments
 
 
 def test_zero_rate_accrues_zero_and_a_holiday_does_not():

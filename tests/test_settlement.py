@@ -12,6 +12,7 @@ from lms.calc.calendar import binding_until
 from lms.calc.fees import initiation_fee, opening_service_fraction, service_fee_cents
 from lms.calc.models import FeeCapBasis, VatRate
 from lms.servicing.enigma import EnigmaStub
+from lms.servicing.errors import ServicingError
 from lms.servicing.service import Servicing
 from lms.settlement.api import dispatch
 from lms.settlement.errors import SettlementError
@@ -187,11 +188,23 @@ def test_missing_ncr_fails_closed_and_is_audited():
 
 
 def test_missing_in_duplum_trigger_fails_closed():
-    _svc, settlement, record = world(initiation=0, trigger=None)
-    with pytest.raises(SettlementError) as raised:
-        quote(settlement, record)
+    svc = Servicing(enigma=EnigmaStub())
+    with pytest.raises(ServicingError) as raised:
+        svc.book(
+            organisation_id="org-a",
+            person_id="person-a",
+            product=micro_short_term(),
+            settings=settings(in_duplum_trigger=None),
+            recognised_at=at(ADVANCE, 8),
+            cash_advanced_cents=100_000,
+            frequency="monthly",
+            schedule=((DUE, 100_000),),
+            initiation_fee_cents=0,
+            idempotency_key="book-no-trigger",
+        )
     assert raised.value.code == "election-unset"
-    assert str(raised.value) == "missing election: in_duplum_trigger"
+    assert str(raised.value) == "in_duplum_trigger is not set on the product or the organisation"
+    assert svc.agreements == {}
 
 
 def test_execute_allocates_the_quote_and_marks_the_agreement_settled():
@@ -328,34 +341,31 @@ def test_opening_month_fraction_is_not_shortened_to_the_settlement_day():
     assert record.status == "settled"
 
 
-def test_booked_initiation_that_differs_from_the_quote_is_not_posted():
+def test_booked_zero_initiation_is_not_added_again():
     svc, settlement, record = world(initiation=0)
     quoted = quote(settlement, record, vat=VAT_15)
     stored = settlement.documents.quotes[(record.agreement_id, AS_OF, AS_OF)]
     service = sum(amount for kind, amount in stored.components if kind == "service")
     initiation = sum(amount for kind, amount in stored.components if kind == "initiation")
     assert service == 13_800
-    assert initiation == 17_250
+    assert initiation == 0
     assert quoted.early_termination_cents == 0
-    with pytest.raises(SettlementError) as raised:
-        settlement.execute(
-            agreement_id=record.agreement_id,
-            quote_id=quoted.quote_id,
-            cents=quoted.amount_owing_cents,
-            recognised_at=at(date(2026, 4, 15), 15),
-            interest_cap_present=True,
-            vat_rate=VAT_15,
-            idempotency_key="settle-mismatch",
-        )
-    assert raised.value.code == "quote-mismatch"
-    assert "17250" in str(raised.value)
-    assert "0 cents" in str(raised.value)
-    assert "was not posted" in str(raised.value)
-    assert kinds(svc, record) == {"booking"}
-    assert record.status == "active"
+    assert quoted.amount_owing_cents == 120_467
+    done = settlement.execute(
+        agreement_id=record.agreement_id,
+        quote_id=quoted.quote_id,
+        cents=quoted.amount_owing_cents,
+        recognised_at=at(date(2026, 4, 15), 15),
+        interest_cap_present=True,
+        vat_rate=VAT_15,
+        idempotency_key="settle-booked-zero",
+    )
+    assert done.balance_cents == 0
+    assert record.status == "settled"
+    assert "charge" not in kinds(svc, record)
 
 
-def test_booked_ex_vat_cap_still_fails_when_the_quote_adds_vat():
+def test_non_capitalised_booked_fee_includes_vat_and_settles():
     ex_vat, vat, total = initiation_fee(
         100_000,
         on=ADVANCE,
@@ -365,20 +375,77 @@ def test_booked_ex_vat_cap_still_fails_when_the_quote_adds_vat():
     assert (ex_vat, vat, total) == (15_000, 2_250, 17_250)
     svc, settlement, record = world(initiation=ex_vat)
     quoted = quote(settlement, record, vat=VAT_15)
-    with pytest.raises(SettlementError) as raised:
-        settlement.execute(
-            agreement_id=record.agreement_id,
-            quote_id=quoted.quote_id,
-            cents=quoted.amount_owing_cents,
-            recognised_at=at(AS_OF, 12),
-            interest_cap_present=True,
-            vat_rate=VAT_15,
-            idempotency_key="settle-vat",
-        )
-    assert raised.value.code == "quote-mismatch"
-    assert "17250" in str(raised.value)
-    assert "15000" in str(raised.value)
-    assert kinds(svc, record) == {"booking"}
+    stored = settlement.documents.quotes[(record.agreement_id, AS_OF, AS_OF)]
+    initiation = sum(amount for kind, amount in stored.components if kind == "initiation")
+    assert initiation == 17_250
+    assert quoted.amount_owing_cents == 137_717
+    done = settlement.execute(
+        agreement_id=record.agreement_id,
+        quote_id=quoted.quote_id,
+        cents=quoted.amount_owing_cents,
+        recognised_at=at(AS_OF, 12),
+        interest_cap_present=True,
+        vat_rate=VAT_15,
+        idempotency_key="settle-vat",
+    )
+    assert done.balance_cents == 0
+    assert record.status == "settled"
+    charges = [
+        item
+        for item in svc.ledger.store.transactions_for(record.organisation_id, record.ledger_loan_id)
+        if item.kind == "charge" and item.amount_cents == vat
+    ]
+    assert len(charges) == 1
+
+
+def test_capitalised_booked_fee_is_not_added_again_and_vat_is_included():
+    """Day-1 booking keeps the fee non-capitalised. The quote still has the rule."""
+    from lms.calc.ledger import quote_settlement
+    from lms.calc.models import Agreement, Policy, Product
+
+    agreement = Agreement(
+        product=Product.MICRO,
+        credit_provider_org_id="org",
+        consumer_party_id="person",
+        product_enrolment_id="enrol",
+        cash_advanced_cents=100_000,
+        advance_date=ADVANCE,
+        maturity_date=DUE,
+        agreed_monthly_rate=Decimal("0.05"),
+        principal_instalments=((DUE, 100_000),),
+        initiation_capitalised=True,
+        use_booked_initiation=True,
+        booked_initiation_ex_vat_cents=15_000,
+    )
+    policy = Policy(
+        leniency_days=1,
+        full_payment_threshold_percent=Decimal("100"),
+        service_fee_monthly_cents=0,
+        interest_on_deferred_initiation=False,
+    )
+    quoted = quote_settlement(
+        agreement,
+        as_of=AS_OF,
+        policy=policy,
+        vat_rates=(VatRate(ADVANCE, VAT_15),),
+    )
+    components = dict(quoted.components)
+    assert components["principal"] == 115_000
+    assert components["initiation"] == 2_250
+    permitted = quote_settlement(
+        agreement,
+        as_of=AS_OF,
+        policy=Policy(
+            leniency_days=1,
+            full_payment_threshold_percent=Decimal("100"),
+            service_fee_monthly_cents=0,
+            interest_on_deferred_initiation=True,
+        ),
+        vat_rates=(VatRate(ADVANCE, VAT_15),),
+    )
+    permitted_parts = dict(permitted.components)
+    assert permitted_parts["principal"] == 115_000
+    assert permitted_parts["initiation"] == 2_250
 
 
 def test_short_surplus_and_late_receipts_are_not_allocated():

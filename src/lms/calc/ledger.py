@@ -13,6 +13,7 @@ from lms.calc.fees import (
     initiation_fee,
     opening_service_fraction,
     service_fee_cents,
+    settlement_booked_initiation,
     vat_on,
 )
 from lms.calc.interest import accrual_weight, campaign_terms, daily_interest_rands, divisor_days
@@ -453,6 +454,27 @@ def _capitalise_initiation(
     capitalised fee is spread across instalments is not locked. That choice is
     recorded in the implementation note and is not a second rule.
     """
+    if agreement.use_booked_initiation:
+        if (
+            state.initiation_levied
+            or day != agreement.advance_date
+            or not agreement.initiation_capitalised
+            or not policy.interest_on_deferred_initiation
+        ):
+            return state
+        total = agreement.booked_initiation_ex_vat_cents
+        if total <= 0:
+            return replace(state, initiation_levied=True)
+        slices = list(state.principal_slices)
+        earliest = min(range(len(slices)), key=lambda index: (slices[index].due_on, slices[index].sequence))
+        slice_ = slices[earliest]
+        slices[earliest] = PrincipalSlice(
+            slice_.due_on,
+            slice_.amount_cents + total,
+            slice_.remaining_cents + total,
+            slice_.sequence,
+        )
+        return replace(state, principal_slices=tuple(slices), initiation_levied=True)
     if state.initiation_levied or day != agreement.advance_date or not agreement.initiation_capitalised:
         return state
     _ex_vat, _vat, total = _priced_initiation(agreement, day, policy, vat_rates)
@@ -471,6 +493,8 @@ def _capitalise_initiation(
 
 
 def _levy_initiation(state: State, agreement: Agreement, day: date, policy: Policy, vat_rates: tuple[VatRate, ...]) -> State:
+    if agreement.use_booked_initiation:
+        return state
     if state.initiation_levied or day != agreement.advance_date or agreement.initiation_capitalised:
         return state
     ex_vat, vat, total = _priced_initiation(agreement, day, policy, vat_rates)
@@ -810,15 +834,34 @@ def quote_settlement(
         vat_rates,
         settle_on=as_of,
     )
-    components = _component_totals(state)
+    principal_add = 0
+    initiation_add = 0
+    if agreement.use_booked_initiation:
+        rate = vat_on(agreement.advance_date, vat_rates) if policy.vat_registered else Decimal(0)
+        principal_add, initiation_add = settlement_booked_initiation(
+            capitalised=agreement.initiation_capitalised,
+            outstanding_ex_vat_cents=agreement.booked_initiation_ex_vat_cents,
+            outstanding_gross_cents=agreement.booked_initiation_gross_cents,
+            vat_rate=rate,
+            already_in_principal=(
+                agreement.initiation_capitalised and policy.interest_on_deferred_initiation
+            ),
+        )
+    totals = dict(_component_totals(state))
+    if principal_add:
+        totals["principal"] = totals.get("principal", 0) + principal_add
+    if initiation_add:
+        totals["initiation"] = totals.get("initiation", 0) + initiation_add
+    components = tuple(sorted((kind, amount) for kind, amount in totals.items() if amount))
     interest = sum(amount for kind, amount in components if kind == "interest")
     fees = sum(amount for kind, amount in components if kind not in ("interest", "principal"))
-    total = payoff_cents(state)
+    principal = totals.get("principal", 0)
+    total = payoff_cents(state) + principal_add + initiation_add
     return SettlementQuote(
         as_of=as_of,
         delivered_on=delivered,
         valid_until=binding_until(delivered, holidays),
-        principal_cents=state.principal_cents,
+        principal_cents=principal,
         interest_cents=interest,
         fee_cents=fees,
         early_termination_cents=0,

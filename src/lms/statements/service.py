@@ -812,6 +812,8 @@ def _service_fee_cents(record: AgreementRecord) -> int:
 
 def _engine_agreement(record: AgreementRecord, account: LoanAccount) -> Agreement:
     product = Product.MICRO if account.snapshot.classification == "short_term" else Product.PERSONAL
+    capitalised = account.snapshot.initiation_capitalised
+    ex_vat, gross = _booked_initiation(account, capitalised)
     return Agreement(
         product=product,
         credit_provider_org_id=record.organisation_id,
@@ -822,10 +824,75 @@ def _engine_agreement(record: AgreementRecord, account: LoanAccount) -> Agreemen
         maturity_date=account.contractual_end,
         agreed_monthly_rate=account.snapshot.base_rate if product == Product.MICRO else None,
         margin_annual=account.snapshot.base_rate if product == Product.PERSONAL else Decimal("0.21"),
-        principal_instalments=tuple((slice_.due_on, slice_.amount_cents) for slice_ in account.slices),
+        principal_instalments=_cash_instalments(account, record.cash_advanced_cents),
         campaign_interest_discount=account.snapshot.discount_rate,
-        initiation_capitalised=account.snapshot.initiation_capitalised,
+        initiation_capitalised=capitalised,
+        use_booked_initiation=True,
+        booked_initiation_ex_vat_cents=ex_vat,
+        booked_initiation_gross_cents=gross,
     )
+
+
+def _booked_initiation(account: LoanAccount, capitalised: bool) -> tuple[int, int | None]:
+    """Ex-VAT outstanding, and a gross figure when VAT is already on the charge."""
+    if capitalised:
+        return account.capitalised_initiation_cents, None
+    ex_vat = 0
+    gross = 0
+    saw_gross = False
+    for charge in account.charges:
+        if charge.bucket != "initiation" or charge.remaining_cents <= 0:
+            continue
+        if charge.vat_cents:
+            saw_gross = True
+            gross += charge.remaining_cents
+        else:
+            ex_vat += charge.remaining_cents
+    if saw_gross and ex_vat:
+        raise DocumentsError(
+            "initiation",
+            "The outstanding initiation fee is partly stored with VAT and partly without. "
+            "The settlement quote does not mix those two figures.",
+        )
+    if saw_gross:
+        return 0, gross
+    return ex_vat, None
+
+
+def _cash_instalments(account: LoanAccount, cash_advanced_cents: int) -> tuple[tuple[date, int], ...]:
+    """Instalments that sum to the cash advanced.
+
+    A capitalised initiation fee is already inside the ledger slices. The
+    engine requires instalments to sum to the cash advanced, so that fee is
+    removed here and put back by the booked-initiation quote. It is not priced
+    a second time.
+    """
+    slices = [(item.due_on, item.amount_cents) for item in account.slices]
+    if not account.snapshot.initiation_capitalised:
+        return tuple(slices)
+    remaining = account.capitalised_initiation_cents
+    order = sorted(range(len(slices)), key=lambda index: (slices[index][0], index))
+    for index in order:
+        if remaining <= 0:
+            break
+        due, amount = slices[index]
+        take = min(amount, remaining)
+        slices[index] = (due, amount - take)
+        remaining -= take
+    if remaining:
+        raise DocumentsError(
+            "initiation",
+            "The capitalised initiation fee is larger than the principal slices. "
+            "The settlement quote does not add it again.",
+        )
+    cash = tuple((due, amount) for due, amount in slices if amount > 0)
+    if sum(amount for _due, amount in cash) != cash_advanced_cents:
+        raise DocumentsError(
+            "initiation",
+            "Removing the capitalised initiation fee did not leave the cash advanced. "
+            "The settlement quote does not invent a principal figure.",
+        )
+    return cash
 
 
 def _policy(account: LoanAccount, service_fee_monthly_cents: int) -> Policy:

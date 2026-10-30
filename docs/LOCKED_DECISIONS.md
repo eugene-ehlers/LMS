@@ -4,7 +4,7 @@ Single source of truth for all decisions that have been researched and locked.
 All future agents, chats and developers must follow these rules.
 Do not re-open a locked decision without an explicit change request.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Standing instruction for all agents
 
@@ -31,6 +31,10 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Same logic applies to related fee points.
 - A capitalised initiation fee that was capitalised before the default date sits inside the in-duplum ceiling.
 - Day-1: only products where section 102 explicitly allows capitalisation may capitalise the initiation fee. Short-term and unsecured default to non-capitalised.
+- A settlement quote uses the booked initiation fee. It does not use the statutory formula.
+- If the initiation fee is capitalised, it is already part of the loan value. It is not added again.
+- If the initiation fee is not capitalised, the outstanding portion is not yet due. It is added to the settlement value.
+- VAT is always included in the settlement value. The client remains accountable for the VAT portion.
 
 ## 3. Zero rates, zero fees and campaigns
 
@@ -243,11 +247,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Partial-prepayment choice (shorten term or drop instalment)
   - Interest on deferred initiation fee
   - Repo-rate fall choice
-  - In-duplum trigger (contractual_breach / collections_default)
-  - Residual write-off threshold (default R100)
+  - In-duplum trigger (contractual_breach / collections_default). Booking fails closed when this trigger is unset on both the organisation and the product.
+  - Residual write-off threshold. The platform default is R100. An unset organisation value and an unset product value fill R100. A stored value, including zero, is kept. A product value overrides the organisation.
   - Campaign discount fall-away choice (falls_away_on_default / does_not_fall_away)
   - Campaign fall-away trigger (contractual_breach / collections_default)
-- Unset values fail closed.
+- Unset values fail closed. The residual write-off threshold is the exception: an unset value fills R100.
 - Campaign fall-away choice and trigger are stored per campaign.
 - Role names for edits must be descriptive and follow best practice (for example lms.elections.write, lms.campaign.write).
 
@@ -333,3 +337,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - The original contractual rate, fees, and instalment remain stored for disclosure. The campaign values are stored separately and are used for accrual during the campaign period.
 - Every collection-campaign change is audited. The audit record includes who applied it, when, the accounts affected, and the before and after values.
 - A change that alters the contractual term or the contractual instalment amount is a restructure and is not a collection campaign.
+
+## 29. Non-campaign rate or fee change
+
+- A non-campaign rate or fee change requires a written notice of at least five business days before it takes effect (section 104(2)).
+- A temporary reduction is stored as a concession or discount that goes to zero when the period ends.
+- The original contractual rate and fees remain effective and are not changed.
+- Resuming the original rate does not require a second notice.
+- An interest-rate change does not automatically reduce the contractual instalment. The instalment remains stable unless a reduced-payment process is followed.
