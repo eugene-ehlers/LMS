@@ -140,6 +140,12 @@ S1 is closed. `Ledger.quote_settlement` delegates to the calculation engine. `Do
 | K8 | The audit extract accepts the Layer 2 write roles and does not accept `lms.collection_campaign.write` on its own. No batch-status role is locked. | Decide later | An operator who holds only the collection-campaign role cannot open the batch screen. Lock a role if that operator must see batch status. |
 | K9 | A blank NCR number is refused by the staff route as `ncr_registration_number is required` before the service sentence that says the number is compulsory. A number of all zeros, including `0000000` and `NCRCP0000`, is accepted by that route. | Decide later | The screen shows the route's reason. The two refusal sentences name the same blank field. |
 
+## Merge stop
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| M1 | After pull request 48, `python3 -m pytest -q` reports 13 failed, 298 passed, 2 skipped. The three pre-existing smoke failures remain: `test_same_day_capitalisation_is_not_applied_before_the_receipt`, `test_rejected_statement_leaves_no_interest_bill`, and `test_layer1_smoke`. Ten tests in `tests/test_settlement_readvance.py` are new failures. Each books through `_book` without `in_duplum_trigger`. Decision 19 returns 422 `election-unset` (`in_duplum_trigger is not set on the product or the organisation`). The tests expect 200 at `tests/test_settlement_readvance.py:101`. The ten tests are `test_five_percent_is_stored_when_a_same_year_short_term_loan_is_settled`, `test_three_percent_flag_rejects_a_five_percent_rate_and_does_not_settle`, `test_three_percent_rate_is_stored_and_the_settings_rate_is_ignored`, `test_missing_election_or_ncr_number_fails_closed`, `test_settlement_month_is_a_full_fee_and_a_short_receipt_is_not_allocated`, `test_opening_month_fraction_is_not_shortened_by_an_earlier_settlement`, `test_missing_new_loan_names_both_out_of_scope_commands_and_uses_johannesburg_date`, `test_cents_timestamp_flag_and_fall_away_fail_closed`, `test_unsecured_re_advance_stores_the_margin_and_needs_a_repo_rate`, and `test_same_key_with_a_different_body_conflicts_and_a_settled_agreement_is_refused`. The ordered merge stopped here. | Code change | Supply `in_duplum_trigger` on the re-advance booking fixtures, or expect `election-unset`. Do not drop the Decision 19 booking check. |
+
 ## Closed
 
 The S2 in this table is the merged-smoke initiation quote. The collection-process S2 stays open.
@@ -159,7 +165,7 @@ The S2 in this table is the merged-smoke initiation quote. The collection-proces
 |----------------|-------|--------------------------|
 | Decide later | 18 | Lock the rule or confirm the external contract when the case becomes real. |
 | Rule change | 25 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
-| Code change | 19 | Update the existing functions, or restore the locked document. |
+| Code change | 20 | Update the existing functions, or restore the locked document. |
 | Database change | 3 | Add a classification column. |
 
 All agents have completed. All issues are recorded so they can be closed in a single pass before production.
@@ -170,3 +176,4 @@ G1 to G11 are the restructure gaps. They are not new rules. G1 records that main
 The restructure flow is orchestration section 10. The daily batch is section 9. The settlement receipt is section 11. The steps are unchanged.
 F1 to F7 are the early-settlement gaps. They are not new rules.
 K1 to K9 are the staff-screen gaps. They are not new rules. K5 is not closed. On this tree the collection-campaign migration stays `0008_collection_campaigns.sql`, Layer 2 staff stays `0009_layer2_staff.sql`, and the re-advance stays `0010_settlement_readvance.sql`.
+M1 is the merge stop after pull request 48. The re-advance fixtures book without an in-duplum trigger, and Decision 19 now refuses that booking. The ordered merge stopped. The tests and the lock were not changed.
