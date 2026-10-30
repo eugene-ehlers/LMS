@@ -142,6 +142,8 @@ S1 is closed. `Ledger.quote_settlement` delegates to the calculation engine. `Do
 
 ## Closed
 
+The S2 in this table is the merged-smoke initiation quote. The collection-process S2 stays open.
+
 | ID | Resolution |
 |----|------------|
 | C4 | Decision 19. The residual write-off threshold has a platform default of R100. An unset organisation value and an unset product value fill R100. A stored value, including zero, is kept. A product value overrides the organisation. |
