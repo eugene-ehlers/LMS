@@ -1,0 +1,9 @@
+[project]
+name = "lms"
+version = "0.0.0"
+description = "LMS daily calculation batch status"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
