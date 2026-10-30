@@ -31,6 +31,10 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Same logic applies to related fee points.
 - A capitalised initiation fee that was capitalised before the default date sits inside the in-duplum ceiling.
 - Day-1: only products where section 102 explicitly allows capitalisation may capitalise the initiation fee. Short-term and unsecured default to non-capitalised.
+- A settlement quote uses the booked initiation fee, not the statutory formula.
+- If the initiation fee is capitalised, it is already part of the loan value. Do not add it again.
+- If the initiation fee is not capitalised, the outstanding portion is not yet due. Add it to the settlement value.
+- VAT must always be included in the settlement value. The client remains accountable for the VAT portion.
 
 ## 3. Zero rates, zero fees and campaigns
 
@@ -156,6 +160,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Option B: accrue at the lower of contract rate and current statutory maximum, and issue the section 104 notice.
 - Choice stored per organisation or per product.
 - No platform default; fails closed until the provider chooses.
+- A non-campaign rate or fee change also requires a written notice of at least five business days before it takes effect (section 104(2)).
 
 ## 12. Statements and documents
 
@@ -243,11 +248,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Partial-prepayment choice (shorten term or drop instalment)
   - Interest on deferred initiation fee
   - Repo-rate fall choice
-  - In-duplum trigger (contractual_breach / collections_default)
-  - Residual write-off threshold (default R100)
+  - In-duplum trigger (contractual_breach / collections_default). Booking fails closed if this trigger is unset.
+  - Residual write-off threshold. The platform default is R100. An unset organisation or product value fills R100.
   - Campaign discount fall-away choice (falls_away_on_default / does_not_fall_away)
   - Campaign fall-away trigger (contractual_breach / collections_default)
-- Unset values fail closed.
+- Unset values fail closed. The residual write-off threshold is the exception: an unset value fills R100.
 - Campaign fall-away choice and trigger are stored per campaign.
 - Role names for edits must be descriptive and follow best practice (for example lms.elections.write, lms.campaign.write).
 
@@ -336,6 +341,13 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 Points section 28 does not settle are listed in `docs/collection-campaigns/gaps.md`.
 
+## 29. Temporary reductions
+
+- A temporary reduction is stored as a concession or discount that goes to zero when the period ends.
+- The original contractual rate and fees remain effective and are not changed.
+- Resuming the original rate does not require a second notice.
+- An interest-rate change does not automatically reduce the contractual instalment. The instalment remains stable unless a reduced-payment process is followed.
+
 ## Open points raised while implementing Layer 2
 
 These points are unresolved. Nothing in this section changes a rule above or chooses a reading.
@@ -343,4 +355,3 @@ These points are unresolved. Nothing in this section changes a rule above or cho
 1. Decisions 3 and 19 store the campaign fall-away choice and trigger on the campaign, and decision 19 also stores them as an organisation election with an optional product override. The document does not say which stored value applies when they differ.
 2. The document does not say which campaign applies when more than one campaign period includes the recognition date of a new loan.
 3. Decision 3 defines the campaign price as a base rate less a discount. Decision 13 says the LMS uses the rate supplied by the decision engine. The document does not say whether a loan that qualifies for a campaign keeps the supplied rate, or uses the campaign net.
-4. Decision 8 says the residual write-off threshold defaults to R100. Decision 19 says unset elections fail closed and lists that threshold with a default of R100. The document does not say whether a null threshold means R100 or a failed command.

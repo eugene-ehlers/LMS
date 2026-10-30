@@ -807,6 +807,14 @@ def _service_fee_cents(record: AgreementRecord) -> int:
 
 def _engine_agreement(record: AgreementRecord, account: LoanAccount) -> Agreement:
     product = Product.MICRO if account.snapshot.classification == "short_term" else Product.PERSONAL
+    capitalised = account.snapshot.initiation_capitalised
+    booked = record.initiation_fee_cents
+    if capitalised and account.capitalised_initiation_cents != booked:
+        raise DocumentsError(
+            "initiation-booked",
+            "The capitalised initiation on the loan does not match the booked initiation fee. "
+            "The settlement quote was not built.",
+        )
     return Agreement(
         product=product,
         credit_provider_org_id=record.organisation_id,
@@ -817,9 +825,14 @@ def _engine_agreement(record: AgreementRecord, account: LoanAccount) -> Agreemen
         maturity_date=account.contractual_end,
         agreed_monthly_rate=account.snapshot.base_rate if product == Product.MICRO else None,
         margin_annual=account.snapshot.base_rate if product == Product.PERSONAL else Decimal("0.21"),
-        principal_instalments=tuple((slice_.due_on, slice_.amount_cents) for slice_ in account.slices),
+        principal_instalments=tuple(
+            (slice_.due_on, slice_.amount_cents)
+            for slice_ in sorted(account.slices, key=lambda item: (item.due_on, item.sequence))
+        ),
         campaign_interest_discount=account.snapshot.discount_rate,
-        initiation_capitalised=account.snapshot.initiation_capitalised,
+        initiation_capitalised=capitalised,
+        booked_initiation_ex_vat_cents=booked,
+        initiation_already_in_principal=capitalised and booked > 0,
     )
 
 

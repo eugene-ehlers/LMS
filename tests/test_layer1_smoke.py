@@ -815,13 +815,6 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     )
     _expect(problems, "payment.accept" in mandates, f"payment.accept was not checked: {mandates}")
     gaps.append(
-        "Remaining uncertainty: Decision 19 says an unset election fails closed, and "
-        "leniency already fails at resolve time. An unset in-duplum trigger is stored "
-        "as None and does not fail Servicing.book, so Layer 0 booking stays unchanged. "
-        "Collections.bind and resolve_in_duplum_trigger still fail closed. Whether "
-        "booking itself must reject a missing trigger is not settled."
-    )
-    gaps.append(
         "Remaining uncertainty: once a Laybye exists, a receipt pays due section 126 "
         "amounts and the remainder goes to the Laybye. The partial-prepayment election "
         "is not applied to that remainder. Locked §4 and §13 do not say which one runs first."

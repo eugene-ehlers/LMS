@@ -216,6 +216,9 @@ class CollectionCampaigns:
         date. A rest-of-term reduction continues through the contractual end
         stored on each application. A null end date is open-ended; setting
         the date is what ends it, and campaign-period values then resume.
+        Decision 29: the concession goes to zero when the period ends. The
+        contractual rate, fees, and instalment are not rewritten, and ending
+        does not take a second section 104(2) notice.
         """
         actor = authorise(self.access, organisation_id=organisation_id, actor_id=actor_id)
         day = _recognition_day(recognised_at)

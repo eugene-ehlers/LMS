@@ -58,7 +58,7 @@ Combining organisation, product, and a loan list in one request is refused.
 
 ## Notice calendar
 
-Five business days uses `lms_config.calendar.add_business_days` and the statutory public holidays from that module. Presidential one-off holidays are data (`ref_public_holiday`), not part of that function. A caller can pass `extra_holidays` on the service. The HTTP route does not. Whether ending a campaign needs its own section 104(2) notice is not stated. Ending does not require a second notice date.
+Five business days uses `lms_config.calendar.add_business_days` and the statutory public holidays from that module. Presidential one-off holidays are data (`ref_public_holiday`), not part of that function. A caller can pass `extra_holidays` on the service. The HTTP route does not. Decision 29: resuming the original rate does not require a second notice. Ending does not require a second notice date.
 
 ## Role name
 

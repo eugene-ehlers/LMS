@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from lms.calc.calendar import binding_until, is_business_day
+from lms.calc.ledger import quote_settlement
+from lms.calc.models import Agreement, Policy, Product, VatRate
 from lms.servicing.enigma import EnigmaStub
 from lms.servicing.service import Servicing
 from lms.statements.errors import DocumentsError
@@ -38,6 +40,7 @@ def settings() -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="collections_default",
     )
 
 
@@ -331,3 +334,58 @@ def test_settlement_quote_is_zero_early_termination_and_binds_for_five_business_
         vat_rate=Decimal("0.15"),
     )
     assert again == quote
+    assert dict(quote.components).get("initiation", 0) == 0
+
+
+def test_settlement_quote_uses_the_booked_initiation_fee_and_its_vat():
+    docs, svc, _store = documents()
+    record = svc.book(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        settings=settings(),
+        recognised_at=at(1, 8),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((DUE, 100_000),),
+        initiation_fee_cents=10_000,
+        idempotency_key="book-fee",
+    )
+    record = svc.disburse(record.agreement_id, recognised_at=at(1, 10))
+    quote = docs.settlement_quote(
+        agreement_id=record.agreement_id,
+        as_of=date(2026, 4, 15),
+        delivered_on=date(2026, 4, 15),
+        request_on=date(2026, 4, 10),
+        holidays=frozenset(),
+        vat_rate=Decimal("0.15"),
+    )
+    parts = dict(quote.components)
+    assert parts["initiation"] == 11_500
+    assert quote.principal_cents == 100_000
+
+    policy = Policy(leniency_days=1, full_payment_threshold_percent=Decimal("100"))
+    vat = (VatRate(date(2026, 1, 1), Decimal("0.15")),)
+    capitalised = Agreement(
+        product=Product.MICRO,
+        credit_provider_org_id="org-a",
+        consumer_party_id="person-a",
+        product_enrolment_id="enrol",
+        cash_advanced_cents=100_000,
+        advance_date=date(2026, 3, 1),
+        maturity_date=DUE,
+        agreed_monthly_rate=Decimal("0.05"),
+        principal_instalments=((DUE, 110_000),),
+        initiation_capitalised=True,
+        booked_initiation_ex_vat_cents=10_000,
+        initiation_already_in_principal=True,
+    )
+    capitalised_quote = quote_settlement(
+        capitalised,
+        as_of=date(2026, 4, 15),
+        policy=policy,
+        vat_rates=vat,
+    )
+    capitalised_parts = dict(capitalised_quote.components)
+    assert capitalised_quote.principal_cents == 110_000
+    assert capitalised_parts["initiation"] == 1_500

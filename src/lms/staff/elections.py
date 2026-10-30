@@ -1,12 +1,11 @@
 """Decision 19 elections. Organisation row, optional product override.
 
 Unset values fail closed when a caller asks for the resolved row. A list
-returns the stored nulls. The residual threshold is not filled: decision 8
-names R100 and decision 19 says an unset election fails closed, and this
-module does not choose between those two sentences.
+returns the stored nulls. The residual threshold is the exception in
+decision 19: an unset organisation or product value fills R100.
 
-``resolve_residual_threshold_cents`` is not called. It fills 5 000 cents.
-``resolve_in_duplum_trigger`` is called. It already fails closed.
+``resolve_residual_threshold_cents`` fills 10 000 cents.
+``resolve_in_duplum_trigger`` fails closed.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from lms_config.locked import (
     VAT_EXCLUSIVE,
     VAT_INCLUSIVE,
     resolve_in_duplum_trigger,
+    resolve_residual_threshold_cents,
 )
 from lms.staff.rates import integer_cents
 
@@ -173,12 +173,7 @@ def _pick(product_value, organisation_value):
 
 
 def _residual(organisation: int | None, product: int | None) -> int:
-    chosen = product if product is not None else organisation
-    if chosen is None:
-        raise CalculationInputError(
-            "residual_write_off_threshold_cents is not set on the product or the organisation"
-        )
-    return integer_cents(chosen, "residual write-off threshold")
+    return resolve_residual_threshold_cents(organisation, product)
 
 
 def _one(value: str | None, allowed: frozenset[str], label: str) -> None:
