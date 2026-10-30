@@ -1737,10 +1737,12 @@ class Ledger:
 
 
 def resolve_customer_settings_for_booking(organisation: OrganisationSettings, product: ProductTerms):
-    """The configuration layer's resolver. Imported lazily is unnecessary; called directly."""
-    from lms_config.locked import resolve_customer_settings
+    """Resolve elections for a booking. An unset in-duplum trigger is refused."""
+    from lms_config.locked import require_booking_in_duplum_trigger, resolve_customer_settings
 
-    return resolve_customer_settings(organisation, product)
+    resolved = resolve_customer_settings(organisation, product)
+    require_booking_in_duplum_trigger(resolved.in_duplum_trigger)
+    return resolved
 
 
 def _day_count(code: str) -> DayCount:

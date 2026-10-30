@@ -1,9 +1,9 @@
 -- Decisions 6, 8 and 19. In-duplum trigger and residual write-off threshold.
 -- Organisation row, optional product override.
--- in_duplum_trigger has no default: null fails closed in the read path.
+-- in_duplum_trigger has no default: null fails closed, including at booking.
 -- residual_write_off_threshold_cents has no column default. Null means the
--- collections read applies the decision 8 amount of R50 (5 000 cents).
--- A stored zero is a client choice, not the R50 default.
+-- collections read applies the decision 19 amount of R100 (10 000 cents).
+-- A stored zero is a client choice, not the R100 default.
 
 SET TIME ZONE 'UTC';
 
@@ -20,10 +20,10 @@ ALTER TABLE lms.cfg_organisation_settings
     );
 
 COMMENT ON COLUMN lms.cfg_organisation_settings.in_duplum_trigger IS
-  'Decisions 6 and 19. contractual_breach or collections_default. Null fails closed. There is no platform default.';
+  'Decisions 6 and 19. contractual_breach or collections_default. Null fails closed, including at booking. There is no platform default.';
 
 COMMENT ON COLUMN lms.cfg_organisation_settings.residual_write_off_threshold_cents IS
-  'Decisions 8 and 19. Cents. Null is the decision 8 default of 5000 (R50), applied by resolve_residual_threshold_cents. The column itself has no default.';
+  'Decisions 8 and 19. Cents. Null is the platform default of 10000 (R100), applied by resolve_residual_threshold_cents. The column itself has no default.';
 
 ALTER TABLE lms.cfg_product_terms
   ADD COLUMN in_duplum_trigger text
@@ -41,4 +41,4 @@ COMMENT ON COLUMN lms.cfg_product_terms.in_duplum_trigger IS
   'Decision 19 product override. Null inherits the organisation.';
 
 COMMENT ON COLUMN lms.cfg_product_terms.residual_write_off_threshold_cents IS
-  'Decision 19 product override. Null inherits the organisation, including the R50 read when both are null.';
+  'Decision 19 product override. Null inherits the organisation, including the R100 read when both are null.';

@@ -1,7 +1,10 @@
 """A non-campaign rate or fee change.
 
-The contractual rate, fees, instalment, and term stay on the loan. The
-copies on ``AccountRateFee`` are the originals kept for disclosure.
+The contractual rate, fees, instalment, and term stay on the loan. A
+temporary reduction is a concession. It is zero after the end date, and
+the original contractual rate and fees stay effective. Resuming them does
+not take a second notice. The copies on ``AccountRateFee`` are those
+originals kept for disclosure.
 """
 
 from __future__ import annotations

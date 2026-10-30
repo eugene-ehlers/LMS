@@ -38,6 +38,7 @@ def provider_settings(**overrides) -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -157,6 +158,8 @@ def test_reduction_is_used_from_the_effective_instant_and_originals_resume_after
         contractual_fees_cents={account.loan_id: {"service": 6_000}},
     )
     assert outcome.ok is True
+    assert "concession" in outcome.message
+    assert "does not require a second notice" in outcome.message
     assert instalments(account) == before
     assert account.contractual_end == end
     assert account.payment_frequency == frequency

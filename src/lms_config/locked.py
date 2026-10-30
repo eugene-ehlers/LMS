@@ -61,7 +61,8 @@ class OrganisationSettings:
     vat_on_rand_maxima: str | None = None
     late_disbursement: str | None = None
     partial_prepayment: str | None = None
-    # Decision 19. Null is unset. Booking does not fill either one in.
+    # Decision 19. Null is unset. Booking refuses a null in-duplum trigger.
+    # The residual threshold is filled by resolve_residual_threshold_cents.
     in_duplum_trigger: str | None = None
     residual_write_off_threshold_cents: int | None = None
 
@@ -79,10 +80,10 @@ class ResolvedCreditSettings:
     late_disbursement: str
     partial_prepayment: str
     # Copied at origination when the organisation or product stored one.
-    # None means the caller has not chosen. Collections fails closed on use.
+    # None means the caller has not chosen. Booking and collections fail closed.
     in_duplum_trigger: str | None = None
-    # Decision 8. resolve_customer_settings writes 5 000 cents when both levels are null.
-    residual_write_off_threshold_cents: int = 5_000
+    # Decision 19. resolve_customer_settings writes 10 000 cents when both levels are null.
+    residual_write_off_threshold_cents: int = 10_000
 
 
 def resolve_customer_settings(
@@ -113,19 +114,17 @@ def resolve_customer_settings(
     vat = _override(product.vat_on_rand_maxima, organisation.vat_on_rand_maxima)
     late = _override(product.late_disbursement, organisation.late_disbursement)
     prepay = _override(product.partial_prepayment, organisation.partial_prepayment)
-    # Decision 19 lists the in-duplum trigger with the elections that fail
-    # closed when unset. An unset trigger is stored as None so a Layer 0
-    # booking that does not choose one still posts. resolve_in_duplum_trigger
-    # and Collections.bind fail closed when they are asked to use it.
-    # Whether booking itself must reject a missing trigger is not settled.
+    # Decision 19. An unknown string fails here. A null is left as None so a
+    # caller that is not booking can still read the other elections.
+    # require_booking_in_duplum_trigger refuses that null on the booking path.
     trigger = _override(product.in_duplum_trigger, organisation.in_duplum_trigger)
     if trigger is not None and trigger not in IN_DUPLUM_TRIGGERS:
         raise CalculationInputError(
             "in_duplum_trigger is not set on the product or the organisation"
         )
-    # Decision 8 names R50 when both levels are null. Decision 19 also says
-    # unset elections fail closed. The R50 sentence is the specific rule
-    # this resolver follows. It is not a third reading.
+    # Decision 19. An unset organisation and product fill R100. A stored
+    # value, including zero, wins. Other elections in this function still
+    # fail closed when unset.
     residual = resolve_residual_threshold_cents(
         organisation.residual_write_off_threshold_cents,
         product.residual_write_off_threshold_cents,
@@ -288,11 +287,10 @@ TRIGGER_CONTRACTUAL_BREACH = "contractual_breach"
 TRIGGER_COLLECTIONS_DEFAULT = "collections_default"
 IN_DUPLUM_TRIGGERS = frozenset({TRIGGER_CONTRACTUAL_BREACH, TRIGGER_COLLECTIONS_DEFAULT})
 
-# Decision 8 names R50 as the residual write-off threshold when the client
-# has not stored one. Decision 19 also says unset elections fail closed.
-# The R50 sentence is the specific rule for this election. Other elections
-# in decision 19 still fail closed when unset. R50 is 5 000 cents.
-RESIDUAL_WRITE_OFF_DEFAULT_CENTS = 5_000
+# Decision 19. The residual write-off threshold has a platform default of
+# R100. An unset organisation or product value fills R100. Other elections
+# still fail closed when unset. R100 is 10 000 cents.
+RESIDUAL_WRITE_OFF_DEFAULT_CENTS = 10_000
 
 
 def resolve_in_duplum_trigger(organisation: str | None, product: str | None = None) -> str:
@@ -305,11 +303,20 @@ def resolve_in_duplum_trigger(organisation: str | None, product: str | None = No
     return chosen
 
 
+def require_booking_in_duplum_trigger(trigger: str | None) -> str:
+    """Decision 19. Booking fails closed if the in-duplum trigger is unset."""
+    if trigger not in IN_DUPLUM_TRIGGERS:
+        raise CalculationInputError(
+            "in_duplum_trigger is not set on the product or the organisation"
+        )
+    return trigger
+
+
 def resolve_residual_threshold_cents(
     organisation: int | None,
     product: int | None = None,
 ) -> int:
-    """Decision 8. A stored value wins. A null at both levels is R50.
+    """Decision 19. A stored value wins. A null at both levels is R100.
 
     The amount is cents. Zero is a stored choice. A negative value is refused.
     """

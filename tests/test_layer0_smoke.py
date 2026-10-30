@@ -77,6 +77,7 @@ ELECTIONS = {
     "vat_on_rand_maxima": "exclusive",
     "late_disbursement": "keep_instalment",
     "partial_prepayment": "shorten_term",
+    "in_duplum_trigger": "contractual_breach",
 }
 
 # §19 stores these on the organisation. The short-term template does not
@@ -89,6 +90,7 @@ ORGANISATION_ELECTIONS = (
     "vat_on_rand_maxima",
     "late_disbursement",
     "partial_prepayment",
+    "in_duplum_trigger",
 )
 
 

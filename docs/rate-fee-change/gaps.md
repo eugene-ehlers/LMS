@@ -6,17 +6,17 @@ These points are not settled by the locked decisions, or they conflict with a lo
 
 `docs/LOCKED_DECISIONS.md` on this branch ends at section 21. On `main` the file is a placeholder pointing at `/tmp/locked_updated.md`, and that file is not on disk. The restored text through section 28 is commit `325acc6`. This change follows that text and the brief. It does not edit the locked-decisions file. See H1.
 
-## Section 104(2) is not its own locked section
+## Section 104(2) for a non-campaign change
 
-Decision 28 states the five-business-day notice inside collection campaigns. This path is not a collection campaign. The Act's section 104(2) requires written notice of at least five business days before a change to the rate, the amount of a credit fee or charge, or the frequency or time for payment of a credit fee or charge. The code follows the brief and that subsection. It does not add a locked rule. See H2.
+Decision 22: a non-campaign rate or fee change also requires a written notice of at least five business days before it takes effect (section 104(2)). H2 is closed.
 
 The count uses section 2(5): exclude the notice date, include the effective date, and skip Saturdays, Sundays, and statutory public holidays. Presidential one-off holidays are `extra_holidays` on the service. The HTTP route does not accept them. See H9.
 
-## Resuming the original rate can be an increase
+## A temporary reduction is a concession
 
-Section 104(1) says a credit provider must not unilaterally increase the periodic or incidental service fees, or the interest rate except on a variable-rate agreement. The brief says that when an end date is set, the original rate and fees resume. Resuming a higher contractual rate or fee is an increase relative to the reduced values then in force.
+Decision 22: a temporary reduction is stored as a concession or discount that goes to zero when the period ends. The original contractual rate and fees remain effective and are not changed. Resuming the original rate does not require a second notice. An interest-rate change does not automatically reduce the contractual instalment. H3 is closed.
 
-The code resumes them and does not take a second notice date. Ending does not extend the reduction. Moving the end date later is refused (`end-extends`) because that would need its own notice and this command does not carry one. See H3.
+Ending does not extend the reduction. Moving the end date later is refused (`end-extends`) because that would need its own notice and this command does not carry one.
 
 ## Decision 11 and section 104(3) are not this path
 

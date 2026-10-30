@@ -10,6 +10,6 @@ Migration `db/migrations/0008_rate_fee_change.sql` matches the in-process store.
 | `rate_fee_change_fee_original` | Contractual fee cents copied at apply |
 | `rate_fee_change_instalment` | Copy of the contractual principal lines |
 
-Applying a change does not update `loan_account` or `schedule_line`.
+Applying a change does not update `loan_account` or `schedule_line`. The periodic rate and fee amounts on the change are a concession. They apply only through the end date. After that date the concession is zero and the copied contractual rate and fees apply. The loan's contractual rate, fees, and instalment are not written.
 
 The audit event is `RATE_FEE_CHANGE`, category `operational`. The payload carries the outcome, the reason code on failure, the actor, the recognition date, the loan ids, and the before and after values. It does not carry `amount_cents`.

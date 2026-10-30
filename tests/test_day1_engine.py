@@ -9,7 +9,7 @@ from lms.calc.allocation import allocate_payment
 from lms.calc.examples import VAT_15
 from lms.calc.fees import initiation_fee, opening_service_fraction
 from lms.calc.interest import interest_for_dates, nominal_annual_rate, periods_per_year
-from lms.calc.ledger import charge_remaining, run
+from lms.calc.ledger import charge_remaining, quote_settlement, run
 from lms.calc.models import (
     Agreement,
     Charge,
@@ -156,6 +156,59 @@ def test_capitalised_initiation_is_inside_the_duplum_ceiling():
     assert capital_state.episodes[0].ceiling_cents == 100_000 + fee_total
     assert deferred_state.episodes[0].ceiling_cents == 100_000
     assert charge_remaining(deferred_state, "initiation") == fee_total
+
+
+def test_settlement_quote_uses_the_booked_initiation_fee_not_the_statutory_cap():
+    common = dict(
+        product=Product.MICRO,
+        credit_provider_org_id="org",
+        consumer_party_id="person",
+        product_enrolment_id="enrol",
+        cash_advanced_cents=100_000,
+        advance_date=date(2026, 3, 1),
+        maturity_date=date(2026, 6, 15),
+    )
+    policy = Policy(**STATED, fee_cap_basis=FeeCapBasis.EXCLUSIVE)
+    as_of = date(2026, 4, 15)
+    zero = Agreement(
+        principal_instalments=((date(2026, 6, 15), 100_000),),
+        booked_initiation_ex_vat_cents=0,
+        **common,
+    )
+    zero_quote = quote_settlement(zero, as_of=as_of, policy=policy, vat_rates=VAT_15)
+    assert dict(zero_quote.components).get("initiation", 0) == 0
+
+    deferred = Agreement(
+        principal_instalments=((date(2026, 6, 15), 100_000),),
+        booked_initiation_ex_vat_cents=10_000,
+        **common,
+    )
+    deferred_quote = quote_settlement(deferred, as_of=as_of, policy=policy, vat_rates=VAT_15)
+    assert dict(deferred_quote.components)["initiation"] == 11_500
+    assert deferred_quote.principal_cents == 100_000
+    partly_paid = quote_settlement(
+        deferred,
+        (Payment(date(2026, 3, 2), 5_000),),
+        as_of=as_of,
+        policy=policy,
+        vat_rates=VAT_15,
+    )
+    assert dict(partly_paid.components)["initiation"] == 6_500
+
+    capitalised = Agreement(
+        principal_instalments=((date(2026, 6, 15), 110_000),),
+        booked_initiation_ex_vat_cents=10_000,
+        initiation_capitalised=True,
+        **common,
+    )
+    capitalised_quote = quote_settlement(capitalised, as_of=as_of, policy=policy, vat_rates=VAT_15)
+    assert capitalised_quote.principal_cents == 110_000
+    assert dict(capitalised_quote.components)["initiation"] == 1_500
+    assert capitalised_quote.total_cents == (
+        capitalised_quote.principal_cents
+        + capitalised_quote.interest_cents
+        + capitalised_quote.fee_cents
+    )
 
 
 def test_actual_and_30_360_day_counts():

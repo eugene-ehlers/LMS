@@ -105,7 +105,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Capitalisation and payment allocation need not occur on the same calendar day. Capitalisation may be month-end; payment may be on the client's payday. Each is processed on its own recognition date.
 - Fees and interest charged may never exceed NCA limits.
 - If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment.
-- Small residual write-off threshold is client-configurable. Default value is R50. It is not automatic.
+- Small residual write-off threshold is client-configurable. Default value is R100. It is not automatic.
 - If the client does not pay exactly the contractual instalment, the difference becomes part of arrears. Normal arrears, in-duplum and collections rules then apply. The client either continues paying until the loan is fully repaid, or the outstanding amount is written off.
 - Provision and write-off are per client requirement and can be manual or formula-based (arrears, recency, months on book, promise-to-pay adherence, contactability, etc.).
 
@@ -196,9 +196,9 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Partial-prepayment choice (shorten term or drop instalment)
   - Interest on deferred initiation fee
   - Repo-rate fall choice
-  - In-duplum trigger (contractual_breach / collections_default)
-  - Residual write-off threshold (default R50)
-- Unset values fail closed.
+  - In-duplum trigger (contractual_breach / collections_default). Booking fails closed if the in-duplum trigger is unset.
+  - Residual write-off threshold. The residual write-off threshold has a platform default of R100. An unset organisation or product value fills R100.
+- Unset values fail closed. The residual write-off threshold is the exception: an unset organisation or product value fills R100.
 
 ## 20. Prescription (section 126B)
 
@@ -215,3 +215,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It is not required for pure hosting or for Laybye/BNPL.
 - A blank NCR number blocks those communications and extracts. It does not block booking.
 - Trading name, addresses, telephone numbers, payment-account details and brand assets are also LMS-owned and are not supplied by Enigma.
+
+## 22. Non-campaign rate or fee change
+
+- A non-campaign rate or fee change also requires a written notice of at least five business days before it takes effect (section 104(2)).
+- A temporary reduction is stored as a concession or discount that goes to zero when the period ends.
+- The original contractual rate and fees remain effective and are not changed.
+- Resuming the original rate does not require a second notice.
+- An interest-rate change does not automatically reduce the contractual instalment. The instalment remains stable unless a reduced-payment process is followed.

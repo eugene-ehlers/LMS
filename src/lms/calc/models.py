@@ -201,6 +201,9 @@ class Agreement:
     # caller's statement that this product may capitalise. The engine does not
     # keep a section 102 product list.
     initiation_capitalised: bool = False
+    # None prices the statutory initiation cap. An int, including zero, is the
+    # booked ex-VAT initiation fee. A settlement quote uses that amount.
+    booked_initiation_ex_vat_cents: int | None = None
 
     def __post_init__(self) -> None:
         if not self.credit_provider_org_id or not self.consumer_party_id:
@@ -222,8 +225,15 @@ class Agreement:
                 "product",
                 "Lay-by plans are not interest-bearing agreements. Use the lay-by functions.",
             )
+        if self.booked_initiation_ex_vat_cents is not None and self.booked_initiation_ex_vat_cents < 0:
+            raise RuleError("initiation", "Initiation fee cannot be negative.")
         slices = self.resolved_instalments()
-        if sum(amount for _, amount in slices) != self.cash_advanced_cents:
+        loan_value = self.cash_advanced_cents
+        if self.initiation_capitalised and self.booked_initiation_ex_vat_cents is not None:
+            # The booked fee is already inside the loan value. Do not require
+            # the slices to exclude it, and do not add it a second time.
+            loan_value += self.booked_initiation_ex_vat_cents
+        if sum(amount for _, amount in slices) != loan_value:
             raise RuleError("instalments", "Principal instalments must sum to the cash advanced.")
         for due_on, amount in slices:
             if amount <= 0:

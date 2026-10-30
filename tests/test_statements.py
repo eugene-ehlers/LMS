@@ -38,6 +38,7 @@ def settings() -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
 
 
@@ -331,3 +332,39 @@ def test_settlement_quote_is_zero_early_termination_and_binds_for_five_business_
         vat_rate=Decimal("0.15"),
     )
     assert again == quote
+    assert dict(quote.components).get("initiation", 0) == 0
+
+
+def _quote(docs: Documents, record, delivered: date = date(2026, 4, 15)):
+    return docs.settlement_quote(
+        agreement_id=record.agreement_id,
+        as_of=delivered,
+        delivered_on=delivered,
+        request_on=date(2026, 4, 10),
+        holidays=frozenset(),
+        vat_rate=Decimal("0.15"),
+    )
+
+
+def test_settlement_quote_uses_the_booked_initiation_fee_and_its_vat():
+    docs, svc, _store = documents()
+    deferred = svc.book(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        settings=settings(),
+        recognised_at=at(1, 8),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((DUE, 100_000),),
+        initiation_fee_cents=10_000,
+        idempotency_key="book-deferred-fee",
+    )
+    deferred = svc.disburse(deferred.agreement_id, recognised_at=at(1, 10))
+    deferred_quote = _quote(docs, deferred)
+    assert dict(deferred_quote.components)["initiation"] == 11_500
+    assert deferred_quote.principal_cents == 100_000
+    assert deferred_quote.total_cents == (
+        deferred_quote.principal_cents + deferred_quote.interest_cents + deferred_quote.fee_cents
+    )
+

@@ -1,9 +1,12 @@
 """Apply a section 104 rate or fee change to selected accounts.
 
-The notice document is not produced here. The contractual term and the
-contractual instalment are not written. Original rate and fees stay on the
-account and are copied here for disclosure. Accrual uses the new values
-from the effective date through the end date, inclusive.
+The notice document is not produced here. A non-campaign change needs a
+written notice of at least five business days before it takes effect
+(section 104(2)). The contractual term and the contractual instalment are
+not written. A temporary reduction is a concession. The original rate and
+fees stay on the account and are copied here for disclosure. The concession
+is zero after the end date, so the original rate resumes without a second
+notice. An interest-rate change does not reduce the contractual instalment.
 
 A collection campaign, a restructure, and an early settlement are refused.
 """
@@ -834,7 +837,9 @@ class RateFeeChanges:
         message = (
             f"Rate or fee change {change_id} ends on {end_date.isoformat()}. "
             "The new values apply on that date. The original rate and fees resume on the "
-            f"next recognition date. Ended by {actor_id}."
+            "next recognition date. The concession is zero after that date. "
+            "Resuming the original rate does not require a second notice. "
+            f"Ended by {actor_id}."
         )
         outcome = Outcome(
             True,
@@ -1510,7 +1515,9 @@ def _apply_confirmation(change: RateFeeChange, count: int) -> str:
         f"{change.effective_date.isoformat()} at 00:00 Africa/Johannesburg. "
         f"Section 104(2) notice date {change.notice_date.isoformat()}. "
         f"Applied by {change.created_by}. "
-        "The contractual term and instalment were not changed."
+        "The contractual term and instalment were not changed. "
+        "The reduction is a concession. The original contractual rate and fees remain effective. "
+        "An interest-rate change does not reduce the contractual instalment."
     )
     if change.end_date is None:
         return (
@@ -1520,5 +1527,6 @@ def _apply_confirmation(change: RateFeeChange, count: int) -> str:
     return (
         text
         + f" The new values apply on {change.end_date.isoformat()} and the original rate and fees "
-        "resume on the next recognition date."
+        "resume on the next recognition date. The concession is zero after that date. "
+        "Resuming the original rate does not require a second notice."
     )

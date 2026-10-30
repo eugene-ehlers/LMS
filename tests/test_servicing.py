@@ -34,6 +34,7 @@ def settings(**overrides) -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -292,6 +293,7 @@ def test_routes_book_and_reject_a_missing_election():
             "vat_on_rand_maxima": "exclusive",
             "late_disbursement": "keep_instalment",
             "partial_prepayment": "shorten_term",
+            "in_duplum_trigger": "contractual_breach",
         },
     }
     status, payload = dispatch(svc, "POST", "/v1/agreements", body, {"Idempotency-Key": "http-1"})
@@ -310,6 +312,12 @@ def test_routes_book_and_reject_a_missing_election():
     status, rejected = dispatch(svc, "POST", "/v1/agreements", body, {"Idempotency-Key": "http-2"})
     assert status == 422
     assert rejected["code"] == "election-unset"
+    body["settings"]["repo_rate_fall"] = "contract_rate"
+    body["settings"]["in_duplum_trigger"] = None
+    status, missing_trigger = dispatch(svc, "POST", "/v1/agreements", body, {"Idempotency-Key": "http-3"})
+    assert status == 422
+    assert missing_trigger["code"] == "election-unset"
+    assert "in_duplum_trigger" in missing_trigger["message"]
 
 
 def test_clip_is_not_invoked():
