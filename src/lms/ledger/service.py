@@ -783,6 +783,21 @@ class Ledger:
             extra_effects=(Effect("mark_service_month", year=period[0], month=period[1]),),
         )
 
+    def settlement_balance_cents(self, organisation_id: str, loan_id: str) -> int:
+        """Remaining charges plus remaining principal, in cents.
+
+        Unbilled interest is not included. Capitalise it first. A mismatch
+        between the principal bucket and the slices fails closed.
+        """
+        account = self._loan(organisation_id, loan_id)
+        unbilled = self._unbilled_interest_cents(account)
+        if unbilled != 0:
+            raise LedgerError(
+                "unbilled-interest",
+                "Accrued interest is still unbilled. Capitalise it before the settlement receipt is allocated.",
+            )
+        return self._owed_cents(account)
+
     def post_payment(
         self,
         *,
@@ -791,6 +806,7 @@ class Ledger:
         cents: int,
         recognised_at: datetime,
         attributed_due_on: date | None = None,
+        settle: bool = False,
     ) -> Transaction:
         """Allocate a receipt.
 
@@ -800,12 +816,23 @@ class Ledger:
         The lock does not say whether prepayment runs before the Laybye.
         A loan with no Laybye child keeps the prepayment election, then
         ``overpayment-unset`` when a remainder has no home.
+
+        ``settle=True`` pays every remaining principal slice. That is section
+        125, in section 126 order, and it is not the section 13 prepayment
+        choice. An early-termination charge is not added.
         """
         account = self._loan(organisation_id, loan_id)
         if cents < 0:
             raise LedgerError("payment", "A receipt cannot be negative.")
         if not self._loan_portion_only:
             self._last_laybye_transaction_id = None
+            if settle:
+                return self._post_settlement(
+                    account,
+                    cents=cents,
+                    recognised_at=recognised_at,
+                    attributed_due_on=attributed_due_on,
+                )
             if self._children(account):
                 return self._post_loan_then_laybye(
                     account,
@@ -843,6 +870,7 @@ class Ledger:
             as_of=day,
             prepayment=choice,
             apply_prepayment=not additional_due,
+            settle=settle,
         )
         if additional_due and first.suspense_cents:
             raise LedgerError("unbalanced", "The fee portion of the receipt was not applied.")
@@ -863,6 +891,7 @@ class Ledger:
                 as_of=day,
                 prepayment=choice,
                 apply_prepayment=True,
+                settle=settle,
             )
             if second.suspense_cents:
                 raise LedgerError(
@@ -913,6 +942,97 @@ class Ledger:
         )
         self._assert_consistent(account)
         return transaction
+
+    def _post_settlement(
+        self,
+        account: LoanAccount,
+        *,
+        cents: int,
+        recognised_at: datetime,
+        attributed_due_on: date | None,
+    ) -> Transaction:
+        """Pay the settlement balance in section 126 order, then any Laybye excess.
+
+        The receipt is not posted when it is short of the balance, or when it
+        exceeds the balance and no Laybye child exists. LOCKED_DECISIONS §4 and §8.
+        """
+        total = self._owed_cents(account)
+        unbilled = self._unbilled_interest_cents(account)
+        if unbilled != 0:
+            raise LedgerError(
+                "unbilled-interest",
+                "Accrued interest is still unbilled. Capitalise it before the settlement receipt is allocated.",
+            )
+        if cents < total:
+            raise LedgerError(
+                "settlement-short",
+                f"The settlement receipt is {cents} cents. The balance is {total} cents. "
+                "The agreement is not settled.",
+            )
+        if cents > total and not self._children(account):
+            raise LedgerError(
+                "overpayment-unset",
+                "The settlement receipt exceeds the balance and no Laybye is linked. "
+                "LOCKED_DECISIONS §4 and §8 give that excess no home. The agreement is not settled.",
+            )
+        if total and attributed_due_on is None:
+            raise LedgerError(
+                "due-date-attribution-unset",
+                "LOCKED_DECISIONS §6 compares the amount received for a due date. "
+                "A settlement receipt without an attributed due date is not posted.",
+            )
+        excess = cents - total
+        loan_tx = None
+        if total:
+            self._loan_portion_only = True
+            try:
+                loan_tx = self.post_payment(
+                    organisation_id=account.organisation_id,
+                    loan_id=account.loan_id,
+                    cents=total,
+                    recognised_at=recognised_at,
+                    attributed_due_on=attributed_due_on,
+                    settle=True,
+                )
+            finally:
+                self._loan_portion_only = False
+        if excess:
+            laybye_tx = self.credit_laybye(
+                organisation_id=account.organisation_id,
+                parent_loan_id=account.loan_id,
+                cents=excess,
+                recognised_at=recognised_at,
+            )
+            self._last_laybye_transaction_id = laybye_tx.transaction_id
+        if loan_tx is not None:
+            return loan_tx
+        raise LedgerError(
+            "settlement-short",
+            "The settlement balance is 0 cents. There is nothing to allocate, so the receipt is not a settlement.",
+        )
+
+    def _owed_cents(self, account: LoanAccount) -> int:
+        charges = sum(charge.remaining_cents for charge in account.charges)
+        principal = sum(slice_.remaining_cents for slice_ in account.slices)
+        bucket = self.bucket_balance(account, "principal")
+        if bucket != principal:
+            raise LedgerError(
+                "unbalanced",
+                "Principal slices do not match the principal bucket. The agreement is not settled.",
+            )
+        return charges + principal
+
+    def _unbilled_interest_cents(self, account: LoanAccount) -> int:
+        net = Decimal(0)
+        for transaction in self._tx_for(account):
+            if transaction.memo_rands is not None and self._root_kind(transaction) == "interest_accrual":
+                net += transaction.memo_rands
+        if net < 0:
+            raise LedgerError(
+                "bill-below-booked",
+                "Billed interest would exceed the accrued memo. Reverse the bill rather than posting a negative one.",
+            )
+        return to_cents(net) - self._billed_accrual_cents(account)
 
     def _post_loan_then_laybye(
         self,

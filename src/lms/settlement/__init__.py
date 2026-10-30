@@ -1,11 +1,17 @@
-"""Early settlement. Quote, then a receipt that matches the quote."""
+"""Settlement quotes, matching receipts, and decision-engine re-advances."""
 
 from lms.settlement.errors import SettlementError
-from lms.settlement.service import QuoteConfirmation, Settlement, SettlementConfirmation
+from lms.settlement.service import (
+    QuoteConfirmation,
+    Settlement,
+    SettlementConfirmation,
+    SettlementReadvance,
+)
 
 __all__ = [
     "QuoteConfirmation",
     "Settlement",
     "SettlementConfirmation",
     "SettlementError",
+    "SettlementReadvance",
 ]

@@ -1,4 +1,9 @@
-"""HTTP-shaped contracts for early settlement. No session middleware."""
+"""HTTP-shaped contracts for early settlement and settlement re-advance.
+
+The re-advance route is POST /v1/settlement-readvances. Every other path uses
+the early-settlement quote and matching receipt. The two paths do not share a
+formula.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ from lms.settlement.service import Settlement
 
 
 def dispatch(
-    settlement: Settlement,
+    command,
     method: str,
     path: str,
     body: dict | None,
@@ -19,8 +24,18 @@ def dispatch(
 ) -> tuple[int, dict]:
     body = body or {}
     headers = headers or {}
+    parts = [part for part in path.split("/") if part]
+    if parts == ["v1", "settlement-readvances"]:
+        if method.upper() == "POST":
+            key = headers.get("Idempotency-Key") or headers.get("idempotency-key") or ""
+            return command.settle_and_readvance(body, key)
+        return 404, {
+            "outcome": "failure",
+            "code": "not-found",
+            "message": "No settlement re-advance route matches this request.",
+        }
     try:
-        return 200, _route(settlement, method.upper(), path, body, headers)
+        return 200, _route(command, method.upper(), path, body, headers)
     except SettlementError as exc:
         return exc.status, {"success": False, "code": exc.code, "reason": str(exc)}
 

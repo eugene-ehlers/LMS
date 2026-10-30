@@ -1,0 +1,19 @@
+# Settlement re-advance gaps
+
+These are unset points. They are not rules. The command fails closed or follows a locked step that already exists. It does not fill a value in.
+
+1. `docs/LOCKED_DECISIONS.md` on `main` is a stub. This branch carries sections 1–27. Section 28, collection campaigns, is not on this branch. Collection campaigns are out of scope.
+2. `docs/ORCHESTRATION.md` is not on this branch. On `main`, section 7 is a settlement quote only (`Ledger.quote_settlement`, `Documents.settlement_quote`). It does not name a re-advance. This command uses only the locked steps the request named: capitalise (Decision 1, and the existing settlement fold for interest up to the settlement date), the full service fee in the settlement month (Decision 9, with the opening month left on the locked fraction), section 126 allocation with the remaining principal paid because the balance must reach zero (Decision 8), an early-termination charge of R0, settled only at R0, the decision-engine rate, term, instalment, and 5% / 3% flag stored without concurrent, subsequent, or restructure rules (Decision 13), identity frozen at booking (Decision 16), elections frozen (Decision 19), a new loan number linked for audit (Decision 25), and a specific success or failure written to the audit log (Decision 23). No other module order is invented.
+3. The ordinary receipt rail bills interest and levies a service fee when a schedule due date has arrived. This command bills interest on the settlement date and levies the full fee for each month after the opening month through the settlement month, even when that month's instalment date is later. Ordinary receipts are unchanged. Whether interest that accrues on a payment date is due that day stays open for ordinary receipts.
+4. The five-business-day settlement quote is not required here. The orchestration note binds a quote, not a re-advance. Early settlement without a new loan, and a term or instalment change on the same agreement, are refused. They are not implemented.
+5. An open in-duplum episode is not closed by settlement. The calculator closes one. This command does not.
+6. Interest after the contractual end is not accrued. The ledger rejects an accrual outside the term.
+7. Campaign fall-away choice and trigger are not columns on organisation settings or on the election snapshot in this layer. They are frozen on the agreement record and on the re-advance link. When the request sets a product value, that value wins. That precedence is the same pattern as the other Decision 19 elections. It is not a separate locked rule for the case where the product and the organisation disagree.
+8. An unset residual write-off threshold fails closed. `resolve_residual_threshold_cents` is not called, so neither R100 nor R50 is written in.
+9. No locked role name exists for this command. The mandate string is `lms.settlement.readvance`.
+10. The loan-number character pattern is not locked. This command reuses the existing 12-digit series and does not skip a number. Servicing does not issue a number when it books. This command issues one for the new loan after disbursement. The settled loan's number is recorded only when it was already registered.
+11. The wire unit of a decision-engine rate is not locked. The rate is stored in the unit the ledger already uses. A decimal string is required. No conversion is applied.
+12. A request with no `organisation_id` cannot be written to the audit log. The caller receives that reason.
+13. If booking or numbering the new loan fails after the receipt has posted, the existing agreement stays settled and the failure says so. There is no automatic reversal.
+14. Pure hosting is not a column on the compliance row. This command does not treat a missing flag as pure hosting. A short-term or unsecured re-advance always requires an NCR number.
+15. Collection campaigns, a same-agreement restructure, and early settlement without a new loan are out of scope.

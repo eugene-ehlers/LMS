@@ -64,6 +64,17 @@ class AgreementRecord:
     ledger_loan_id: str | None = None
     laybye_loan_id: str | None = None
     disbursement_value_date: date | None = None
+    # Set when the decision engine supplied the rate and the 5% / 3% flag.
+    # Ordinary booking leaves these empty and still counts prior short-term loans.
+    rate_supplied_by_decision_engine: bool = False
+    short_term_rate_cap: Decimal | None = None
+    contractual_instalment_cents: int | None = None
+    term_count: int | None = None
+    short_term_rate_flag: str | None = None
+    application_number: str | None = None
+    settled_from_agreement_id: str | None = None
+    campaign_fall_away_choice: str | None = None
+    campaign_fall_away_trigger: str | None = None
 
 
 @dataclass
@@ -122,6 +133,8 @@ class Servicing:
         quoted_disbursement: date | None = None,
         idempotency_key: str,
         repos: tuple[RepoRate, ...] = (),
+        rate_supplied_by_decision_engine: bool = False,
+        short_term_rate_cap: Decimal | None = None,
     ) -> AgreementRecord:
         """POST /v1/agreements. Freeze elections. Do not post to the ledger."""
         fingerprint = _fingerprint(
@@ -135,6 +148,8 @@ class Servicing:
                 "quoted_disbursement": quoted_disbursement.isoformat() if quoted_disbursement else None,
                 "recognised_at": recognised_at.isoformat(),
                 "classification": product.classification,
+                "rate_supplied_by_decision_engine": rate_supplied_by_decision_engine,
+                "short_term_rate_cap": None if short_term_rate_cap is None else str(short_term_rate_cap),
             }
         )
         replay = self._replay("book", organisation_id, idempotency_key, fingerprint)
@@ -154,6 +169,8 @@ class Servicing:
             advance=quoted_disbursement or value_date(recognised_at),
             repos=repos,
             agreement_id=None,
+            rate_supplied_by_decision_engine=rate_supplied_by_decision_engine,
+            short_term_rate_cap=short_term_rate_cap,
         )
         disclosure = _annual_equivalent(product, resolved)
         record = AgreementRecord(
@@ -175,6 +192,8 @@ class Servicing:
             frozen_id_number=identity.id_number,
             frozen_service_address=identity.service_address,
             annual_equivalent_rate=disclosure,
+            rate_supplied_by_decision_engine=rate_supplied_by_decision_engine,
+            short_term_rate_cap=short_term_rate_cap,
         )
         self.agreements[record.agreement_id] = record
         self._remember("book", organisation_id, idempotency_key, fingerprint, record.agreement_id)
@@ -338,6 +357,8 @@ class Servicing:
             advance=advance,
             repos=repos,
             agreement_id=record.agreement_id,
+            rate_supplied_by_decision_engine=record.rate_supplied_by_decision_engine,
+            short_term_rate_cap=record.short_term_rate_cap,
         )
         try:
             if record.ledger_loan_id is not None:
@@ -394,6 +415,7 @@ class Servicing:
         idempotency_key: str,
         agreement_id: str | None = None,
         attributed_due_on: date | None = None,
+        settle: bool = False,
     ) -> PaymentRecord:
         """POST /v1/payments. Unmatched receipts stay out of the loan ledger."""
         fingerprint = _fingerprint(
@@ -404,6 +426,7 @@ class Servicing:
                 "recognised_at": recognised_at.isoformat(),
                 "agreement_id": agreement_id,
                 "attributed_due_on": attributed_due_on.isoformat() if attributed_due_on else None,
+                "settle": settle,
             }
         )
         replay = self._replay("payment", organisation_id, idempotency_key, fingerprint)
@@ -426,7 +449,7 @@ class Servicing:
             self.payments[record.payment_id] = record
             self._remember("payment", organisation_id, idempotency_key, fingerprint, record.payment_id)
             return record
-        self._allocate(record, matched, attributed_due_on)
+        self._allocate(record, matched, attributed_due_on, settle=settle)
         self.payments[record.payment_id] = record
         self._remember("payment", organisation_id, idempotency_key, fingerprint, record.payment_id)
         return record
@@ -617,6 +640,8 @@ class Servicing:
         advance: date,
         repos: tuple[RepoRate, ...],
         agreement_id: str | None,
+        rate_supplied_by_decision_engine: bool = False,
+        short_term_rate_cap: Decimal | None = None,
     ) -> None:
         """Call the calculation engine. Do not copy its amounts onto the ledger."""
         if product.classification not in _CREDIT:
@@ -633,7 +658,19 @@ class Servicing:
                 "The initiation fee is above the cap returned by the calculation engine.",
             )
         engine_product = _ENGINE_PRODUCT[product.classification]
-        priors = self._prior_inceptions(organisation_id, person_id, advance, agreement_id)
+        if short_term_rate_cap is not None and resolved.base_rate > short_term_rate_cap:
+            raise ServicingError(
+                "short-term-rate",
+                "The rate supplied by the decision engine exceeds the cap for the supplied "
+                "5% / 3% flag. The LMS does not choose a different flag.",
+            )
+        # Decision 13. A rate the decision engine already classified is stored.
+        # Prior loans are not counted to turn that rate into the other cap.
+        priors = (
+            ()
+            if rate_supplied_by_decision_engine
+            else self._prior_inceptions(organisation_id, person_id, advance, agreement_id)
+        )
         try:
             agreement = Agreement(
                 product=engine_product,
@@ -731,7 +768,13 @@ class Servicing:
             payload={"transaction_id": laybye_tx.transaction_id},
         )
 
-    def _allocate(self, payment: PaymentRecord, agreement: AgreementRecord, attributed_due_on: date | None) -> None:
+    def _allocate(
+        self,
+        payment: PaymentRecord,
+        agreement: AgreementRecord,
+        attributed_due_on: date | None,
+        settle: bool = False,
+    ) -> None:
         if agreement.status not in _ALLOCATABLE or agreement.ledger_loan_id is None:
             raise ServicingError("status", f"Cannot allocate to an agreement in {agreement.status}.")
         if attributed_due_on is None:
@@ -747,6 +790,7 @@ class Servicing:
                 cents=payment.cents,
                 recognised_at=payment.recognised_at,
                 attributed_due_on=attributed_due_on,
+                settle=settle,
             )
         except LedgerError as exc:
             raise _from_downstream(exc) from exc
