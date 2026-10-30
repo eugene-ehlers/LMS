@@ -9,7 +9,7 @@ from lms.calc.allocation import allocate_payment
 from lms.calc.examples import VAT_15
 from lms.calc.fees import initiation_fee, opening_service_fraction
 from lms.calc.interest import interest_for_dates, nominal_annual_rate, periods_per_year
-from lms.calc.ledger import charge_remaining, run
+from lms.calc.ledger import charge_remaining, quote_settlement, run
 from lms.calc.models import (
     Agreement,
     Charge,
@@ -350,3 +350,66 @@ def test_zero_rate_and_zero_fee_do_not_raise():
     assert charge_remaining(state, "interest") == 0
     assert charge_remaining(state, "service") == 0
     assert state.status == "open"
+
+
+def _initiation_component(quote) -> int:
+    return sum(amount for kind, amount in quote.components if kind == "initiation")
+
+
+def _deferred(due: date, **extra: object) -> Agreement:
+    values: dict[str, object] = dict(
+        product=Product.MICRO,
+        credit_provider_org_id="org",
+        consumer_party_id="person",
+        product_enrolment_id="enrol",
+        cash_advanced_cents=100_000,
+        advance_date=date(2026, 3, 1),
+        maturity_date=date(2026, 6, 30),
+        initiation_paid_upfront=False,
+        principal_instalments=((due, 100_000),),
+    )
+    values.update(extra)
+    return Agreement(**values)  # type: ignore[arg-type]
+
+
+def test_settlement_quote_uses_the_booked_initiation_fee():
+    policy = Policy(**STATED)
+    due = date(2026, 6, 15)
+    advance = date(2026, 3, 1)
+    deferred = _deferred(due, booked_initiation_cents=10_000)
+    state = run(deferred, until=advance, policy=policy, vat_rates=VAT_15).state
+    initiation = next(charge for charge in state.charges if charge.kind == "initiation")
+    assert initiation.due_on == due
+    assert initiation.remaining_cents == 11_500
+    quote = quote_settlement(deferred, as_of=advance, policy=policy, vat_rates=VAT_15)
+    assert _initiation_component(quote) == 11_500
+
+    paid = quote_settlement(
+        deferred,
+        (Payment(advance, 4_000, purpose="initiation_upfront"),),
+        as_of=advance,
+        policy=policy,
+        vat_rates=VAT_15,
+    )
+    assert _initiation_component(paid) == 7_500
+
+    zero = _deferred(due, booked_initiation_cents=0)
+    assert _initiation_component(
+        quote_settlement(zero, as_of=advance, policy=policy, vat_rates=VAT_15)
+    ) == 0
+
+    capitalised = Agreement(
+        product=Product.MICRO,
+        credit_provider_org_id="org",
+        consumer_party_id="person",
+        product_enrolment_id="enrol",
+        cash_advanced_cents=100_000,
+        advance_date=advance,
+        maturity_date=due,
+        initiation_capitalised=True,
+        booked_initiation_cents=10_000,
+        principal_instalments=((due, 110_000),),
+    )
+    capital = quote_settlement(capitalised, as_of=advance, policy=policy, vat_rates=VAT_15)
+    assert capital.principal_cents == 110_000
+    assert _initiation_component(capital) == 1_500

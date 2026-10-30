@@ -1,7 +1,7 @@
-"""Pins for the five Layer 1 gaps. Amounts stay in integer cents.
+"""Pins for the Layer 1 gaps. Amounts stay in integer cents.
 
-Two readings are still not chosen. An unset in-duplum trigger does not fail
-booking. A Laybye remainder is not run through the partial-prepayment election.
+Booking refuses a missing in-duplum trigger. A null residual fills R100.
+A Laybye remainder is not run through the partial-prepayment election.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from lms.collections.errors import CollectionsError
 from lms.collections.service import Collections
 from lms.laybye.service import allocate_receipt
 from lms.ledger.service import Ledger
@@ -60,6 +59,7 @@ def settings(**overrides) -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -78,36 +78,39 @@ def test_migration_prefixes_apply_in_one_order():
     assert not list(directory.glob("0005_collections_elections.sql"))
 
 
-def test_booked_elections_fail_closed_only_when_used():
-    resolved = resolve_customer_settings(settings(), micro_short_term())
-    assert resolved.in_duplum_trigger is None
-    assert resolved.residual_write_off_threshold_cents == RESIDUAL_WRITE_OFF_DEFAULT_CENTS
+def test_booking_refuses_a_missing_in_duplum_trigger_and_fills_r100():
+    with pytest.raises(CalculationInputError, match="in_duplum_trigger"):
+        resolve_customer_settings(settings(in_duplum_trigger=None), micro_short_term())
     with pytest.raises(CalculationInputError):
         resolve_in_duplum_trigger(None)
+    filled = resolve_customer_settings(
+        settings(in_duplum_trigger="collections_default"),
+        micro_short_term(),
+    )
+    assert filled.in_duplum_trigger == "collections_default"
+    assert filled.residual_write_off_threshold_cents == RESIDUAL_WRITE_OFF_DEFAULT_CENTS == 10_000
     chosen = resolve_customer_settings(
         settings(in_duplum_trigger="collections_default", residual_write_off_threshold_cents=5_000),
         replace(micro_short_term(), in_duplum_trigger="contractual_breach"),
     )
     assert chosen.in_duplum_trigger == "contractual_breach"
     servicing = Servicing(enigma=EnigmaStub())
-    record = servicing.book(
-        organisation_id="org-a",
-        person_id="person-a",
-        product=micro_short_term(),
-        settings=settings(),
-        recognised_at=at(date(2026, 4, 1), 8),
-        cash_advanced_cents=100_000,
-        frequency="monthly",
-        schedule=((DUE, 100_000),),
-        initiation_fee_cents=0,
-        idempotency_key="book-no-trigger",
-    )
-    assert record.resolved.in_duplum_trigger is None
-    collections_bind = Collections(servicing)
-    with pytest.raises(CollectionsError) as missing:
-        collections_bind.bind(record.agreement_id, in_duplum_trigger=None)
-    assert missing.value.code == "trigger-unset"
-    assert collections_bind.cases == {}
+    with pytest.raises(ServicingError) as missing:
+        servicing.book(
+            organisation_id="org-a",
+            person_id="person-a",
+            product=micro_short_term(),
+            settings=settings(in_duplum_trigger=None),
+            recognised_at=at(date(2026, 4, 1), 8),
+            cash_advanced_cents=100_000,
+            frequency="monthly",
+            schedule=((DUE, 100_000),),
+            initiation_fee_cents=0,
+            idempotency_key="book-no-trigger",
+        )
+    assert missing.value.code == "election-unset"
+    assert "in_duplum_trigger" in str(missing.value)
+    assert servicing.agreements == {}
 
 
 def test_book_linked_laybye_keeps_the_receipt_as_cash_in_until_grant():

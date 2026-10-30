@@ -38,6 +38,7 @@ def settings() -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
 
 
@@ -311,6 +312,7 @@ def test_settlement_quote_is_zero_early_termination_and_binds_for_five_business_
         vat_rate=Decimal("0.15"),
     )
     assert quote.early_termination_cents == 0
+    assert sum(amount for kind, amount in quote.components if kind == "initiation") == 0
     assert quote.valid_until == binding_until(delivered, holidays)
     assert quote.deliver_by == add_business_days(request, 5, holidays)
     assert quote.total_cents == quote.principal_cents + quote.interest_cents + quote.fee_cents

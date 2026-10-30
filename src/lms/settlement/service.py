@@ -80,7 +80,8 @@ _PREPAY = {PREPAY_SHORTEN, PREPAY_DROP}
 _INITIATION = {INTEREST_ON_INITIATION_NONE, INTEREST_ON_INITIATION_PERMITTED}
 _REPO = {REPO_FALL_CONTRACT, REPO_FALL_LOWER}
 
-# Decision 19 names. A missing value fails closed. The residual default is not filled.
+# Decision 19 names. A missing value fails closed. An omitted residual is left
+# null so resolve_customer_settings fills the platform default of R100.
 _REQUIRED = (
     ("leniency_days", "leniency days"),
     ("full_payment_threshold_percent", "full payment threshold"),
@@ -91,7 +92,6 @@ _REQUIRED = (
     ("late_disbursement", "late disbursement"),
     ("partial_prepayment", "partial prepayment"),
     ("in_duplum_trigger", "in-duplum trigger"),
-    ("residual_write_off_threshold_cents", "residual write-off threshold"),
     ("campaign_fall_away_choice", "campaign fall-away choice"),
 )
 
@@ -825,12 +825,19 @@ def _elections(settings, product_elections) -> dict:
     _one(merged["late_disbursement"], _LATE, "late disbursement")
     _one(merged["partial_prepayment"], _PREPAY, "partial prepayment")
     _one(merged["in_duplum_trigger"], _TRIGGERS, "in-duplum trigger")
-    residual = merged["residual_write_off_threshold_cents"]
-    if type(residual) is not int or residual < 0:
+    if (
+        "residual_write_off_threshold_cents" in product_elections
+        and product_elections["residual_write_off_threshold_cents"] is not None
+    ):
+        residual = product_elections["residual_write_off_threshold_cents"]
+    else:
+        residual = settings.get("residual_write_off_threshold_cents")
+    if residual is not None and (type(residual) is not int or residual < 0):
         raise SettlementError(
             "election-unset",
             "missing election: residual write-off threshold",
         )
+    merged["residual_write_off_threshold_cents"] = residual
     choice = merged["campaign_fall_away_choice"]
     _check_fall_away(choice)
     if choice == _DOES_NOT_FALL_AWAY:

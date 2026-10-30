@@ -201,6 +201,10 @@ class Agreement:
     # caller's statement that this product may capitalise. The engine does not
     # keep a section 102 product list.
     initiation_capitalised: bool = False
+    # Booked initiation fee in ex-VAT cents. None keeps the statutory formula
+    # for a worked example. An integer, including zero, is the booked fee a
+    # settlement quote must use. The quote adds VAT. It does not price the formula.
+    booked_initiation_cents: int | None = None
 
     def __post_init__(self) -> None:
         if not self.credit_provider_org_id or not self.consumer_party_id:
@@ -209,6 +213,13 @@ class Agreement:
             raise RuleError("enigma", "Product enrolment id is required.")
         if self.cash_advanced_cents <= 0:
             raise RuleError("principal", "Cash advanced must be positive.")
+        if self.booked_initiation_cents is not None and (
+            type(self.booked_initiation_cents) is not int or self.booked_initiation_cents < 0
+        ):
+            raise RuleError(
+                "initiation",
+                "The booked initiation fee must be a non-negative number of cents.",
+            )
         if self.maturity_date < self.advance_date:
             raise RuleError("term", "Maturity cannot precede the advance date.")
         if self.product == Product.MICRO:
@@ -223,7 +234,11 @@ class Agreement:
                 "Lay-by plans are not interest-bearing agreements. Use the lay-by functions.",
             )
         slices = self.resolved_instalments()
-        if sum(amount for _, amount in slices) != self.cash_advanced_cents:
+        expected = self.cash_advanced_cents
+        if self.initiation_capitalised and self.booked_initiation_cents and self.principal_instalments:
+            # The capitalised fee is already inside the booked principal slices.
+            expected += self.booked_initiation_cents
+        if sum(amount for _, amount in slices) != expected:
             raise RuleError("instalments", "Principal instalments must sum to the cash advanced.")
         for due_on, amount in slices:
             if amount <= 0:

@@ -9,7 +9,7 @@ These are unset points. They are not rules. The command fails closed or follows 
 5. An open in-duplum episode is not closed by settlement. The calculator closes one. This command does not.
 6. Interest after the contractual end is not accrued. The ledger rejects an accrual outside the term.
 7. Campaign fall-away choice and trigger are not columns on organisation settings or on the election snapshot in this layer. They are frozen on the agreement record and on the re-advance link. When the request sets a product value, that value wins. That precedence is the same pattern as the other Decision 19 elections. It is not a separate locked rule for the case where the product and the organisation disagree.
-8. An unset residual write-off threshold fails closed. `resolve_residual_threshold_cents` is not called, so neither R100 nor R50 is written in.
+8. Closed by Decision 19. An omitted residual write-off threshold is filled with R100 (10 000 cents) by `resolve_residual_threshold_cents`. A stored zero stays zero. An unset in-duplum trigger still fails closed.
 9. No locked role name exists for this command. The mandate string is `lms.settlement.readvance`.
 10. The loan-number character pattern is not locked. This command reuses the existing 12-digit series and does not skip a number. Servicing does not issue a number when it books. This command issues one for the new loan after disbursement. The settled loan's number is recorded only when it was already registered.
 11. The wire unit of a decision-engine rate is not locked. The rate is stored in the unit the ledger already uses. A decimal string is required. No conversion is applied.
