@@ -129,14 +129,28 @@ S1 is closed. `Ledger.quote_settlement` delegates to the calculation engine. `Do
 
 
 
+## Staff UI (Agent K)
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| K1 | No route records the daily calculation batch. The batch screen calls `GET /v1/staff/organisations/{id}/audit` and reports that no batch run is stored. It does not accrue, capitalise, or flag default. | Code change | A batch module must record start, finish, accounts processed, accounts failed, and a reason per failure before the screen can show a run. |
+| K2 | `lms.collection_campaigns.api.dispatch` has no list or read route. The list and the edit form read `CollectionCampaigns.campaigns` for the signed-in organisation. They do not apply overlap, notice, or rate rules. | Code change | Add a read to the collection-campaign route. The screen should call that route. |
+| K3 | A missing `lms.collection_campaign.write` is mapped by `authorise` to an ambiguous Enigma failure, which names the wrong cause. The screen states the missing role and does not call the route in that case. Timeout and a suspended enrolment still go to the route. | Code change | `authorise` should return the missing-role reason. The screen can then call the route for that case as well. |
+| K4 | `STAFF_UI_REPORTED` is not in `ref_audit_event_type`. The in-process audit log accepts it. A database insert would fail. `CAMPAIGN_CREATED` and the other Layer 2 event types are in the same position. | Database change | Add the event codes before those rows are inserted. |
+| K5 | The collection-campaign branch still names its migration `0008_collection_campaigns.sql`. This branch names it `0009_collection_campaigns.sql` so it does not share 0008 with `0008_layer2_staff.sql`. | Database change | Keep 0009 when the collection-campaign branch is merged. Do not restore the 0008 filename beside the staff migration. |
+| K6 | `docs/LOCKED_DECISIONS.md` on `main` is a stub. This branch keeps Layer 2 sections 1 to 27 and appends section 28 from the collection-campaign branch. The collection branch's section 21 was not copied: it omits the compulsory NCR number and the all-zeros test number. | Rule change | Land one locked file that contains sections 1 to 28. Do not treat the stub on `main` as the rule text. |
+| K7 | Decision 3 on this file says every campaign has an end date. Section 28 allows an open-ended collection campaign. The existing collection-campaign route accepts a null end date. The screen sends null when the field is blank and shows the route's result. | Rule change | Name which sentence applies to a collection campaign. The screen does not choose. |
+| K8 | The audit extract accepts the Layer 2 write roles and does not accept `lms.collection_campaign.write` on its own. No batch-status role is locked. | Decide later | An operator who holds only the collection-campaign role cannot open the batch screen. Lock a role if that operator must see batch status. |
+| K9 | A blank NCR number is refused by the staff route as `ncr_registration_number is required` before the service sentence that says the number is compulsory. A number of all zeros, including `0000000` and `NCRCP0000`, is accepted by that route. | Decide later | The screen shows the route's reason. The two refusal sentences name the same blank field. |
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
-| Decide later | 16 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 25 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
-| Code change | 17 | Update the existing functions, or restore the locked document. |
-| Database change | 1 | Add a classification column. |
+| Decide later | 18 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 27 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
+| Code change | 20 | Update the existing functions, or restore the locked document. |
+| Database change | 3 | Add a classification column. |
 
 All agents have completed. All issues are recorded so they can be closed in a single pass before production.
 S1 to S6 under Collection-process removal were found while removing collection-process state. They are not new rules. That S1 stays open.
