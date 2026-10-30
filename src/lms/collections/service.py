@@ -83,6 +83,8 @@ class CollectionsView:
     provision_cents: int | None
     written_off: bool
     residual_threshold_cents: int
+    in_duplum_ceiling_reached: bool = False
+    in_duplum_ceiling_warning: str | None = None
 
 
 class Collections:
@@ -479,6 +481,8 @@ class Collections:
             provision_cents=case.provision_cents,
             written_off=case.written_off,
             residual_threshold_cents=case.residual_threshold_cents,
+            in_duplum_ceiling_reached=account.in_duplum_ceiling_reached,
+            in_duplum_ceiling_warning=account.in_duplum_ceiling_warning,
         )
 
     def _record_breaches(self, case: Case, account: LoanAccount, check_on: date) -> None:

@@ -47,6 +47,7 @@ RUN_KEYS = {
     "finished_at",
     "accounts_processed",
     "accounts_failed",
+    "accounts_at_ceiling",
     "status",
     "outcome",
     "actor_id",
@@ -161,6 +162,7 @@ def test_successful_batch_records_johannesburg_times_counts_and_audit(tmp_path: 
         assert finished.finished_at == "2026-10-28T00:15:02.000000+02:00"
         assert finished.accounts_processed == 2
         assert finished.accounts_failed == 0
+        assert finished.accounts_at_ceiling == 0
         assert finished.failures == ()
         assert finished.actor_id == "person-1"
         assert finished.alert is None

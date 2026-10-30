@@ -228,12 +228,11 @@ def test_in_duplum_fresh_ceiling_on_second_default():
         recognised_at=at(2026, 5, 15, 9),
         interest_cap_present=True,
     )
-    assert loan.episodes[1].accrued_cents == 90_000
-    assert ledger.bucket_balance(loan, "interest") == 90_000
-    assert IN_DUPLUM_CLIP_POSTS is False
-    with pytest.raises(LedgerError) as caught:
-        ledger.clip_in_duplum()
-    assert caught.value.code == "in-duplum-clip-off"
+    assert loan.episodes[1].accrued_cents == 80_000
+    assert ledger.bucket_balance(loan, "interest") == 80_000
+    assert loan.in_duplum_ceiling_reached is True
+    assert IN_DUPLUM_CLIP_POSTS is True
+    ledger.clip_in_duplum()
 
 
 def test_payment_allocation_order():

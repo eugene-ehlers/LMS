@@ -32,7 +32,7 @@ from lms.calc.models import (
     State,
     VatRate,
 )
-from lms.calc.money import to_cents
+from lms.calc.money import cents_to_rands, to_cents
 from lms.ledger.errors import LedgerError
 from lms.ledger.models import (
     FREQUENCIES,
@@ -97,6 +97,28 @@ _REVERSIBLE = {
     "settlement",
 }
 _ZERO_PRICE = {ZERO_COST, CPA_LAYBY}
+# Decision 7. These are the charges the Day-1 clip stops once the episode
+# ceiling is reached: interest, fees, credit insurance, default
+# administration, and collection costs.
+_CLIPPED_BUCKETS = frozenset(
+    {
+        "interest",
+        "initiation",
+        "service",
+        "credit_insurance",
+        "default_administration",
+        "collection_costs",
+        "additional_monthly",
+    }
+)
+
+
+def _ceiling_warning(ceiling_cents: int, accrued_cents: int) -> str:
+    return (
+        "In-duplum ceiling reached. Further interest, fees, credit insurance, "
+        "default administration, and collection costs are not levied until the episode is closed. "
+        f"Ceiling {ceiling_cents} cents. Accrued {accrued_cents} cents."
+    )
 
 
 def next_due_date(day: date, frequency: str) -> date:
@@ -129,8 +151,13 @@ def nominal_annual(periodic_rate: Decimal, periods_per_year: int) -> Decimal:
 
 
 class Ledger:
-    def __init__(self, store: LedgerStore | None = None) -> None:
+    def __init__(self, store: LedgerStore | None = None, audit: object | None = None) -> None:
         self.store = store or LedgerStore()
+        if audit is None:
+            from lms.regulatory.audit import AuditLog
+
+            audit = AuditLog()
+        self.audit = audit
         self._loan_portion_only = False
         self._last_laybye_transaction_id: str | None = None
 
@@ -628,7 +655,10 @@ class Ledger:
         account = self._loan(organisation_id, loan_id)
         net = Decimal(0)
         for transaction in self._tx_for(account):
-            if transaction.memo_rands is not None and self._root_kind(transaction) == "interest_accrual":
+            if transaction.memo_rands is not None and self._root_kind(transaction) in {
+                "interest_accrual",
+                "interest_suppressed",
+            }:
                 net += transaction.memo_rands
         if net < 0:
             raise LedgerError(
@@ -645,17 +675,25 @@ class Ledger:
             )
         if delta == 0:
             return None
+        allowed, suppressed = self._clip_levy(account, "interest", delta)
         day = value_date(recognised_at)
-        return self._charge(
+        if allowed == 0:
+            self._suppress_interest_memo(account, recognised_at, net, already, allowed)
+            self._stop_at_ceiling(account, recognised_at)
+            return None
+        transaction = self._charge(
             account,
             bucket="interest",
-            cents=delta,
+            cents=allowed,
             due_on=day,
             recognised_at=recognised_at,
             kind="interest_bill",
-            ex_vat_cents=delta,
+            ex_vat_cents=allowed,
             vat_cents=0,
         )
+        if suppressed:
+            self._suppress_interest_memo(account, recognised_at, net, already, allowed)
+        return transaction
 
     def levy_charge(
         self,
@@ -1025,7 +1063,10 @@ class Ledger:
     def _unbilled_interest_cents(self, account: LoanAccount) -> int:
         net = Decimal(0)
         for transaction in self._tx_for(account):
-            if transaction.memo_rands is not None and self._root_kind(transaction) == "interest_accrual":
+            if transaction.memo_rands is not None and self._root_kind(transaction) in {
+                "interest_accrual",
+                "interest_suppressed",
+            }:
                 net += transaction.memo_rands
         if net < 0:
             raise LedgerError(
@@ -1537,11 +1578,32 @@ class Ledger:
         return self._statement(organisation_id, person_id, period_start, period_end)
 
     def clip_in_duplum(self) -> None:
+        """The Day-1 clip is applied when a charge is levied.
+
+        Calling this method does not post a second clip. Three unnamed
+        section 103(5) edges stay unnamed.
+        """
         if not IN_DUPLUM_CLIP_POSTS:
             raise LedgerError(
                 "in-duplum-clip-off",
-                "LOCKED_DECISIONS §7: the clip stays off. Three section 103(5) edges are unnamed.",
+                "LOCKED_DECISIONS §7: the in-duplum clip is not being posted.",
             )
+
+    def in_duplum_clip_status(self, organisation_id: str, loan_id: str) -> dict:
+        """Flag and warning an operator can read for one loan. Amounts are cents."""
+        account = self.store.get(organisation_id, loan_id)
+        episode = self._open_episode(account)
+        return {
+            "loan_id": account.loan_id,
+            "in_duplum_ceiling_reached": account.in_duplum_ceiling_reached,
+            "warning": account.in_duplum_ceiling_warning,
+            "episode_no": None if episode is None else episode.episode_no,
+            "ceiling_cents": None if episode is None else episode.ceiling_cents,
+            "accrued_cents": None if episode is None else episode.accrued_cents,
+        }
+
+    def account_hit_in_duplum_ceiling(self, organisation_id: str, loan_id: str) -> bool:
+        return self.store.get(organisation_id, loan_id).in_duplum_ceiling_reached
 
     def bucket_balance(self, account: LoanAccount, bucket: str, *, as_of: date | None = None) -> int:
         total = 0
@@ -1696,6 +1758,79 @@ class Ledger:
         )
         return rate, weight, divisor_days(day, Product.MICRO, day_count)
 
+    def _clip_levy(self, account: LoanAccount, bucket: str, cents: int) -> tuple[int, int]:
+        """Return the cents that may be levied, and the cents the clip holds back.
+
+        The ceiling itself is not recalculated. Room is the ceiling minus
+        charges already accrued in the open episode. A payment does not
+        increase that room.
+        """
+        if not IN_DUPLUM_CLIP_POSTS or bucket not in _CLIPPED_BUCKETS or cents <= 0:
+            return cents, 0
+        episode = self._open_episode(account)
+        if episode is None:
+            return cents, 0
+        room = max(0, episode.ceiling_cents - episode.accrued_cents)
+        allowed = min(cents, room)
+        return allowed, cents - allowed
+
+    def _suppress_interest_memo(
+        self,
+        account: LoanAccount,
+        recognised_at: datetime,
+        net: Decimal,
+        already_billed_cents: int,
+        allowed_cents: int,
+    ) -> None:
+        """Drop unbilled interest the clip did not levy, so a later bill cannot post it."""
+        kept = cents_to_rands(already_billed_cents + allowed_cents)
+        adjustment = kept - net
+        if adjustment == 0:
+            return
+        self._post(
+            account,
+            kind="interest_suppressed",
+            recognised_at=recognised_at,
+            entries=(),
+            effects=(),
+            memo_rands=adjustment,
+            amount_cents=0,
+        )
+
+    def _stop_at_ceiling(self, account: LoanAccount, recognised_at: datetime) -> None:
+        episode = self._open_episode(account)
+        if episode is None or account.in_duplum_ceiling_reached:
+            return
+        if episode.accrued_cents != episode.ceiling_cents:
+            return
+        self._post(
+            account,
+            kind="in_duplum_clip",
+            recognised_at=recognised_at,
+            entries=(),
+            effects=(Effect("raise_ceiling_flag", episode_no=episode.episode_no),),
+            amount_cents=0,
+        )
+
+    def _audit_ceiling(self, account: LoanAccount, recognised_at: datetime) -> None:
+        episode = self._open_episode(account)
+        if episode is None or not account.in_duplum_ceiling_warning:
+            return
+        self.audit.append(
+            organisation_id=account.organisation_id,
+            occurred_at=recognised_at,
+            event_type="IN_DUPLUM_CEILING",
+            category="operational",
+            enigma_person_id=account.person_id,
+            payload={
+                "warning": account.in_duplum_ceiling_warning,
+                "loan_id": account.loan_id,
+                "episode_no": episode.episode_no,
+                "ceiling_cents": episode.ceiling_cents,
+                "accrued_cents": episode.accrued_cents,
+            },
+        )
+
     def _charge(
         self,
         account: LoanAccount,
@@ -1709,10 +1844,35 @@ class Ledger:
         vat_cents: int,
         extra_effects: tuple[Effect, ...] = (),
     ) -> Transaction:
+        requested = cents
+        allowed, _suppressed = self._clip_levy(account, bucket, requested)
+        if allowed != requested and ex_vat_cents + vat_cents == requested:
+            ex_vat_cents = min(ex_vat_cents, allowed)
+            vat_cents = allowed - ex_vat_cents
+        cents = allowed
+        episode = self._open_episode(account)
+        if cents == 0 and requested > 0 and episode is not None and bucket in _CLIPPED_BUCKETS:
+            self._stop_at_ceiling(account, recognised_at)
+            return self._post(
+                account,
+                kind="in_duplum_clip",
+                recognised_at=recognised_at,
+                entries=(),
+                effects=(),
+                amount_cents=0,
+            )
         sequence = account.next_charge_sequence
         account.next_charge_sequence += 1
         charge_id = str(uuid4())
-        effects = [
+        effects: list[Effect] = []
+        if (
+            episode is not None
+            and bucket in _CLIPPED_BUCKETS
+            and not account.in_duplum_ceiling_reached
+            and episode.accrued_cents + cents == episode.ceiling_cents
+        ):
+            effects.append(Effect("raise_ceiling_flag", episode_no=episode.episode_no))
+        effects.append(
             Effect(
                 "increase_charge",
                 cents=cents,
@@ -1723,10 +1883,9 @@ class Ledger:
                 levied_on=value_date(recognised_at),
                 ex_vat_cents=ex_vat_cents,
                 vat_cents=vat_cents,
-            ),
-            *extra_effects,
-        ]
-        episode = self._open_episode(account)
+            )
+        )
+        effects.extend(extra_effects)
         if episode is not None and cents:
             effects.append(Effect("increase_accrued", cents=cents, episode_no=episode.episode_no))
         entries: tuple[Entry, ...] = ()
@@ -1859,7 +2018,10 @@ class Ledger:
             attributed_due_on=attributed_due_on,
         )
         self.store.append(transaction)
+        was_flagged = account.in_duplum_ceiling_reached
         self._apply(account, effects)
+        if not was_flagged and account.in_duplum_ceiling_reached:
+            self._audit_ceiling(account, recognised_at)
         return transaction
 
     def _apply(self, account: LoanAccount, effects: tuple[Effect, ...]) -> None:
@@ -1895,16 +2057,30 @@ class Ledger:
                 episode = self._episode(account, effect.episode_no or 0)
                 episode.accrued_cents += effect.cents
             elif effect.op == "open_episode":
-                account.episodes.append(
-                    Episode(effect.episode_no or 0, effect.levied_on or account.disbursement_value_date, effect.cents)
+                episode = Episode(
+                    effect.episode_no or 0,
+                    effect.levied_on or account.disbursement_value_date,
+                    effect.cents,
                 )
+                account.episodes.append(episode)
+                if IN_DUPLUM_CLIP_POSTS and episode.ceiling_cents == episode.accrued_cents:
+                    account.in_duplum_ceiling_reached = True
             elif effect.op == "close_episode":
                 episode = self._episode(account, effect.episode_no or 0)
                 episode.closed_on = effect.levied_on
+                account.in_duplum_ceiling_reached = False
+                account.in_duplum_ceiling_warning = None
+            elif effect.op == "raise_ceiling_flag":
+                account.in_duplum_ceiling_reached = True
             elif effect.op == "fall_away":
                 account.discount_fallen_away = True
             else:
                 raise LedgerError("effect", f"Unknown ledger effect {effect.op}.")
+        episode = self._open_episode(account)
+        if account.in_duplum_ceiling_reached and episode is not None:
+            account.in_duplum_ceiling_warning = _ceiling_warning(
+                episode.ceiling_cents, episode.accrued_cents
+            )
 
     def _undo(self, account: LoanAccount, effects: tuple[Effect, ...]) -> None:
         for effect in reversed(effects):
@@ -1930,6 +2106,16 @@ class Ledger:
                 account.service_months.discard((effect.year or 0, effect.month or 0))
             elif effect.op == "increase_accrued":
                 self._episode(account, effect.episode_no or 0).accrued_cents -= effect.cents
+            elif effect.op == "raise_ceiling_flag":
+                episode = self._open_episode(account)
+                if episode is not None and episode.accrued_cents >= episode.ceiling_cents:
+                    account.in_duplum_ceiling_reached = True
+                    account.in_duplum_ceiling_warning = _ceiling_warning(
+                        episode.ceiling_cents, episode.accrued_cents
+                    )
+                else:
+                    account.in_duplum_ceiling_reached = False
+                    account.in_duplum_ceiling_warning = None
             else:
                 raise LedgerError("reversal-undefined", f"A reversal does not undo {effect.op}.")
 

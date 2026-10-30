@@ -33,6 +33,7 @@ from lms.batch.timekeeping import JOHANNESBURG, format_jhb, parse_recognition_da
 class _Progress:
     processed: int = 0
     failed: int = 0
+    at_ceiling: int = 0
 
 
 class SystemClock:
@@ -180,6 +181,12 @@ class BatchService:
                 )
                 if failure is not None:
                     break
+            if _account_hit_ceiling(
+                calculation,
+                organisation_id=run.organisation_id,
+                account_id=account_id,
+            ):
+                progress.at_ceiling += 1
             if failure is not None:
                 try:
                     recorded = self._store.record_account_failure(
@@ -189,6 +196,7 @@ class BatchService:
                         reason=failure.reason,
                         accounts_processed=progress.processed + 1,
                         accounts_failed=progress.failed + 1,
+                        accounts_at_ceiling=progress.at_ceiling,
                         recorded_at=self._timestamp(),
                     )
                 except PersistenceError as exc:
@@ -203,7 +211,10 @@ class BatchService:
             else:
                 try:
                     updated = self._store.record_progress(
-                        run.id, progress.processed + 1, progress.failed
+                        run.id,
+                        progress.processed + 1,
+                        progress.failed,
+                        progress.at_ceiling,
                     )
                 except PersistenceError as exc:
                     raise BatchError(
@@ -218,6 +229,7 @@ class BatchService:
                 run_id=run.id,
                 accounts_processed=progress.processed,
                 accounts_failed=progress.failed,
+                accounts_at_ceiling=progress.at_ceiling,
                 finished_at=self._timestamp(),
                 actor_id=run.actor_id,
             )
@@ -244,6 +256,7 @@ class BatchService:
                 reason=reason,
                 accounts_processed=progress.processed,
                 accounts_failed=progress.failed,
+                accounts_at_ceiling=progress.at_ceiling,
                 recorded_at=recorded_at,
                 actor_id=run.actor_id,
             )
@@ -366,6 +379,13 @@ def _run_step(
             recorded_at="",
         )
     return None
+
+
+def _account_hit_ceiling(calculation: object, *, organisation_id: str, account_id: str) -> bool:
+    method = getattr(calculation, "account_hit_in_duplum_ceiling", None)
+    if method is None:
+        return False
+    return bool(method(organisation_id=organisation_id, account_id=account_id))
 
 
 def _with_step(step: str, reason: str) -> str:

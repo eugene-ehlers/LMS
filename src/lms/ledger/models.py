@@ -160,6 +160,8 @@ class LoanAccount:
     service_months: set[tuple[int, int]] = field(default_factory=set)
     schedule_versions: list[ScheduleVersion] = field(default_factory=list)
     next_charge_sequence: int = 1
+    in_duplum_ceiling_reached: bool = False
+    in_duplum_ceiling_warning: str | None = None
 
     def __setattr__(self, name: str, value: object) -> None:
         if (

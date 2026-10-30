@@ -87,6 +87,7 @@ class BatchRun:
     finished_at: str | None
     accounts_processed: int
     accounts_failed: int
+    accounts_at_ceiling: int
     status: str
     outcome: str
     actor_id: str
@@ -108,6 +109,7 @@ class BatchRun:
             "finished_at": self.finished_at,
             "accounts_processed": self.accounts_processed,
             "accounts_failed": self.accounts_failed,
+            "accounts_at_ceiling": self.accounts_at_ceiling,
             "status": self.status,
             "outcome": self.outcome,
             "actor_id": self.actor_id,

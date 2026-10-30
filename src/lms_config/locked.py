@@ -36,10 +36,12 @@ PREPAY_SHORTEN = "shorten_term"
 PREPAY_DROP = "drop_instalment"
 PROVIDER_DAY_COUNTS = {DAY_COUNT_ACTUAL_ACTUAL, DAY_COUNT_30_360}
 
-# Decision 7. Three unnamed section 103(5) edges are unsigned. The clip
-# stays off. No posting may treat this flag as true until counsel lists
-# those edges. The arithmetic in duplum.py is not a posting.
-IN_DUPLUM_CLIP_POSTS = False
+# Decision 7. The in-duplum clip is on for Day-1. When accrued charges
+# during an open episode equal the ceiling, posting stops until the
+# episode is closed. Three unnamed section 103(5) edges stay unnamed.
+# This flag does not choose a reading for those edges, and it does not
+# change how the ceiling is calculated.
+IN_DUPLUM_CLIP_POSTS = True
 
 
 @dataclass(frozen=True, slots=True)

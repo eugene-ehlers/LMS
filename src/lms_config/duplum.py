@@ -5,11 +5,12 @@ the consumer is in default may not, in aggregate, exceed the unpaid balance
 of the principal debt at the time the default occurs.
 
 Locked decision 7 treats the ceiling as a cumulative accrual cap for that
-default episode. A payment does not reopen it. The episode ends when the
-default is purged (no payable amount remains overdue); a later default
-snapshots a new principal balance and a new cap. The base is unpaid
-principal at the first default and includes initiation capitalised before
-that default. ``duplum_base_cents`` is how that principal is assembled.
+default episode. A payment does not reopen it. The episode ends when a
+collections-default cure closes it; a later default snapshots a new
+principal balance and a new cap. The base is unpaid principal at the first
+default and includes initiation capitalised before that default.
+``duplum_base_cents`` is how that principal is assembled. The ledger posts
+this cumulative clip. This module does not change the ceiling.
 
 The floating alternative — unpaid charges of those kinds may not exceed the
 snapshot, so a payment of charges creates room to accrue more — is
