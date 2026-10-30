@@ -55,13 +55,25 @@ Last updated: 2026-10-28
 | R1 | Decision 21 says "micro" and "Laybye/BNPL". The ledger stores short_term, unsecured, zero_cost, and cpa_layby. pure_hosting is not a column. The map is not locked. A missing pure_hosting value fails closed when a row would require the number. | Rule change | Lock the classification map in Decision 21. Add pure_hosting as a column or as a value that the extract can read. |
 | R2 | The ledger can post a full write-off journal. The Form 39 write-off cell stays empty. | Decide later | Lock whether Form 39 should include write-offs when the real Form 39 layout is confirmed. |
 
+## Collection-process removal
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| S1 | Orchestration section 2 handles a receipt as Servicing.accept_payment then Ledger.post_payment. Locked sections 1, 8, and 26, the collections split, and orchestration section 1 capitalise due amounts first. The payment rail already does that. | Rule change | Update docs/ORCHESTRATION.md section 2 to the locked capitalise-then-allocate order. |
+| S2 | Orchestration section 8 calls Servicing.reverse_payment for a returned unpaid item after write-off. Locked sections 8 and 26 say the item is flagged only, the balance is not reopened, and no recovery is posted. The payment rail already flags only. | Rule change | Update docs/ORCHESTRATION.md section 8 so it does not call reverse_payment on that path. |
+| S3 | Decision 8 says promise-to-pay adherence and contactability are calculated on LMS data in reporting. Decision 23 lists promise-to-pay and contact as audited LMS changes. The collections split says the LMS does not store them. After this removal there is no LMS store for reporting to read. | Rule change | Update Decision 8 and Decision 23 so reporting and audit of those facts are attributed to the collections system. Do not add an LMS store to satisfy the old wording. |
+| S4 | record_provision and open_prescription_review still run a caller-supplied formula inside the LMS. _facts still derives recency and months on book. Decision 8 says provisioning formulas run outside the LMS and that those figures are not calculated inside it. Promise-to-pay and contactability are no longer inputs. | Code change | Move the formula out, or record that a caller-supplied formula over ledger facts is the allowed instruction. Do not put promise-to-pay or contactability back. |
+| S5 | On main, docs/LOCKED_DECISIONS.md is the one-line stub written by f75d1be and ecffee7. The collection-campaign text named in the f75d1be message was never stored. This branch still has the full document through section 27. | Code change | Restore the locked document. Do not reconstruct the missing collection-campaign section from the commit message. |
+| S6 | Collections.receive still posts a receipt through Servicing.accept_payment without capitalising due amounts. Payment-rail intake capitalises first. This removal does not change Collections.receive. | Code change | Decide whether Collections.receive is still a receipt path. If it is, capitalise before accept_payment, using the existing ledger calls. |
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
-| Decide later | 9 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 7 | Update docs/LOCKED_DECISIONS.md. |
-| Code change | 3 | Update the existing functions. |
+| Decide later | 8 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 11 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
+| Code change | 6 | Update the existing functions, or restore the locked document. |
 | Database change | 1 | Add a classification column. |
 
 All agents have completed. All issues are recorded so they can be closed in a single pass before production.
+S1 to S6 were found while removing collection-process state. They are not new rules.

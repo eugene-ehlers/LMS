@@ -335,3 +335,13 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A change that alters the contractual term or the contractual instalment amount is a restructure and is not a collection campaign.
 
 Points section 28 does not settle are listed in `docs/collection-campaigns/gaps.md`.
+
+## Gaps recorded (not rules)
+
+The payment-rail layer found these points unset. Nothing in this section is a decision. The implementation fails closed or calls an existing interface. It does not fill a value in.
+
+- Section 19 does not name an automated-collections election. The configuration catalogue already has `debit_orders_enabled` (“Submit debit orders”). A missing row fails closed. The lock does not say that flag is the section 4 automation switch.
+- Section 25 does not fix the loan-number character pattern. The Bankserv user reference allows 14 characters for the mandate or agreement number. Section 13 requires the contractual instalment to be stored; the agreement stores a principal schedule. The debit-order loan line reads the section 6 amount still outstanding on that due date and does not invent unbilled interest.
+- The published Bankserv collections layout does not define a DebiCheck record, and it does not state the hash-total algorithm beyond a 12-digit field. Consumer homing-account details and the bank’s 10-character abbreviated user name are not LMS fields in this document. A credit-life premium receipt has no insurer hand-off here.
+- Whether interest that accrues on a payment date is itself due that day, or only on an instalment due date, is not settled beyond “capitalise due amounts, then allocate”.
+- Section 8 and section 19 say the residual write-off threshold default is R100, and section 19 also says an unset election fails closed. `resolve_residual_threshold_cents` still returns 5 000 cents when both levels are null. This layer does not call that resolver and does not choose between those readings.

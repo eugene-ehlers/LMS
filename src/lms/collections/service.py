@@ -43,18 +43,15 @@ PrescriptionFormula = Callable[["ProvisionFacts"], bool]
 
 @dataclass(frozen=True)
 class ProvisionFacts:
-    """Facts the ledger can show, plus two the caller must supply.
+    """Ledger-derived facts a caller-supplied formula may read.
 
-    Promise-to-pay adherence and contactability are not ledger balances.
-    A formula mode with either of them missing fails closed. This layer
-    does not score the facts.
+    Promise-to-pay and contactability are not fields. The collections
+    system owns them. This layer does not score the facts.
     """
 
     arrears_cents: int
     recency_days: int
     months_on_book: int
-    promise_to_pay: str
-    contactability: str
     as_of: date
 
 
@@ -382,10 +379,13 @@ class Collections:
         recognised_at: datetime,
         amount_cents: int | None = None,
         formula: ProvisionFormula | None = None,
-        promise_to_pay: str | None = None,
-        contactability: str | None = None,
     ) -> CollectionsView:
-        """§8. Manual amount, or a client-supplied formula. No platform score."""
+        """§8. Manual amount, or a caller-supplied formula over ledger facts.
+
+        The formula is not given a promise-to-pay or a contactability score.
+        The collections system keeps those. This method stores the resulting
+        provision cents only.
+        """
         case = self._case(agreement_id)
         if case.provision_mode is None:
             raise CollectionsError(
@@ -405,13 +405,7 @@ class Collections:
                 "provision-formula-unset",
                 "LOCKED_DECISIONS §8 allows a formula. This layer does not supply one.",
             )
-        if not promise_to_pay or not contactability:
-            raise CollectionsError(
-                "provision-factor-unset",
-                "Promise-to-pay adherence and contactability are not on the ledger. "
-                "A formula without them fails closed.",
-            )
-        facts = self._facts(agreement_id, recognised_at, promise_to_pay, contactability)
+        facts = self._facts(agreement_id, recognised_at)
         scored = formula(facts)
         if scored < 0:
             raise CollectionsError("provision-amount-unset", "A provision cannot be negative.")
@@ -424,8 +418,6 @@ class Collections:
         *,
         recognised_at: datetime,
         formula: PrescriptionFormula | None = None,
-        promise_to_pay: str | None = None,
-        contactability: str | None = None,
         signal: str = "manual",
     ) -> CollectionsView:
         """§20. Manual or a client formula. No platform prescription clock.
@@ -445,13 +437,7 @@ class Collections:
                     "prescription-formula-unset",
                     "LOCKED_DECISIONS §20 allows a formula. This layer does not supply one.",
                 )
-            if not promise_to_pay or not contactability:
-                raise CollectionsError(
-                    "prescription-factor-unset",
-                    "Promise-to-pay adherence and contactability are not on the ledger. "
-                    "A formula without them fails closed.",
-                )
-            facts = self._facts(agreement_id, recognised_at, promise_to_pay, contactability)
+            facts = self._facts(agreement_id, recognised_at)
             if not formula(facts):
                 return self.view(agreement_id, recognised_at)
             signal = "formula"
@@ -588,13 +574,7 @@ class Collections:
             )
             self._audit_episode(record, recognised_at, "closed")
 
-    def _facts(
-        self,
-        agreement_id: str,
-        recognised_at: datetime,
-        promise_to_pay: str,
-        contactability: str,
-    ) -> ProvisionFacts:
+    def _facts(self, agreement_id: str, recognised_at: datetime) -> ProvisionFacts:
         record = self.servicing._agreement(agreement_id)
         account = self._loan(record)
         check_on = value_date(recognised_at)
@@ -613,8 +593,6 @@ class Collections:
             arrears_cents=arrears,
             recency_days=(check_on - anchor).days,
             months_on_book=max(0, months),
-            promise_to_pay=promise_to_pay,
-            contactability=contactability,
             as_of=check_on,
         )
 
