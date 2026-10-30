@@ -1,7 +1,7 @@
 """Pins for the five Layer 1 gaps. Amounts stay in integer cents.
 
-Two readings are still not chosen. An unset in-duplum trigger does not fail
-booking. A Laybye remainder is not run through the partial-prepayment election.
+Decision 19: booking fails closed when the in-duplum trigger is unset.
+A Laybye remainder is not run through the partial-prepayment election.
 """
 
 from __future__ import annotations
@@ -60,6 +60,7 @@ def settings(**overrides) -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="collections_default",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -79,9 +80,10 @@ def test_migration_prefixes_apply_in_one_order():
 
 
 def test_booked_elections_fail_closed_only_when_used():
-    resolved = resolve_customer_settings(settings(), micro_short_term())
+    unset = settings(in_duplum_trigger=None)
+    resolved = resolve_customer_settings(unset, micro_short_term())
     assert resolved.in_duplum_trigger is None
-    assert resolved.residual_write_off_threshold_cents == RESIDUAL_WRITE_OFF_DEFAULT_CENTS
+    assert resolved.residual_write_off_threshold_cents == RESIDUAL_WRITE_OFF_DEFAULT_CENTS == 10_000
     with pytest.raises(CalculationInputError):
         resolve_in_duplum_trigger(None)
     chosen = resolve_customer_settings(
@@ -90,24 +92,22 @@ def test_booked_elections_fail_closed_only_when_used():
     )
     assert chosen.in_duplum_trigger == "contractual_breach"
     servicing = Servicing(enigma=EnigmaStub())
-    record = servicing.book(
-        organisation_id="org-a",
-        person_id="person-a",
-        product=micro_short_term(),
-        settings=settings(),
-        recognised_at=at(date(2026, 4, 1), 8),
-        cash_advanced_cents=100_000,
-        frequency="monthly",
-        schedule=((DUE, 100_000),),
-        initiation_fee_cents=0,
-        idempotency_key="book-no-trigger",
-    )
-    assert record.resolved.in_duplum_trigger is None
-    collections_bind = Collections(servicing)
-    with pytest.raises(CollectionsError) as missing:
-        collections_bind.bind(record.agreement_id, in_duplum_trigger=None)
-    assert missing.value.code == "trigger-unset"
-    assert collections_bind.cases == {}
+    with pytest.raises(ServicingError) as refused:
+        servicing.book(
+            organisation_id="org-a",
+            person_id="person-a",
+            product=micro_short_term(),
+            settings=unset,
+            recognised_at=at(date(2026, 4, 1), 8),
+            cash_advanced_cents=100_000,
+            frequency="monthly",
+            schedule=((DUE, 100_000),),
+            initiation_fee_cents=0,
+            idempotency_key="book-no-trigger",
+        )
+    assert refused.value.code == "election-unset"
+    assert "in_duplum_trigger" in str(refused.value)
+    assert servicing.agreements == {}
 
 
 def test_book_linked_laybye_keeps_the_receipt_as_cash_in_until_grant():

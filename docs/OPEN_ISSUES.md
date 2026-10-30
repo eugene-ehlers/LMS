@@ -35,9 +35,9 @@ Last updated: 2026-10-28
 | C1 | Fall-away choice and trigger are stored on the campaign and also as an organisation election with a product override. The lock does not say which value applies when they differ. | Rule change | Add a sentence to Decision 3 or Decision 19 that names the precedence (campaign value wins, or organisation value wins). |
 | C2 | The lock does not say which campaign applies when more than one period contains the recognition date. Intake stores nothing. | Rule change | Lock the rule (most recent campaign, or fail closed) in Decision 3. |
 | C3 | The lock does not say whether a qualifying loan keeps the decision-engine rate or uses the campaign net. Both are stored. | Rule change | Lock the rule in Decision 3 or Decision 13. |
-| C4 | Decision 8 names a residual default of R100. Decision 19 says an unset election fails closed and also names that default. A null threshold is left unset and resolve fails. | Rule change | Decide whether R100 is a platform default that fills when unset, or whether unset always fails closed. Update Decision 8 or Decision 19. |
+| C4 | Decision 8 names a residual default of R100. Decision 19 says an unset election fails closed and also names that default. A null threshold is left unset and resolve fails. | Rule change | Closed. Decision 19: the platform default is R100. An unset organisation or product value fills R100. |
 | C5 | campaign_rate still rejects a discount above the base. | Code change | Update campaign_rate to floor the net at 0 % instead of rejecting the pair. |
-| C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Code change | Update the function to fail closed or to fill R100, depending on the resolution of C4. |
+| C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Code change | Closed. The function fills R100 (10 000 cents) when both levels are null. |
 
 ## Payment rails (Agent C)
 
@@ -81,3 +81,14 @@ The counts above were written before the staff screens. The rows below are addit
 | K7 | Decision 3 on this file says every campaign has an end date. Section 28 allows an open-ended collection campaign. The existing collection-campaign route accepts a null end date. The screen sends null when the field is blank and shows the route's result. | Rule change | Name which sentence applies to a collection campaign. The screen does not choose. |
 | K8 | The audit extract accepts the Layer 2 write roles and does not accept `lms.collection_campaign.write` on its own. No batch-status role is locked. | Decide later | An operator who holds only the collection-campaign role cannot open the batch screen. Lock a role if that operator must see batch status. |
 | K9 | A blank NCR number is refused by the staff route as `ncr_registration_number is required` before the service sentence that says the number is compulsory. A number of all zeros, including `0000000` and `NCRCP0000`, is accepted by that route. | Decide later | The screen shows the route's reason. The two refusal sentences name the same blank field. |
+
+## Closed
+
+C4 and C6 are marked closed in the campaigns table above. C7, S2, H2, and H3 were recorded on other branches. They are closed here by the same locks.
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| C7 | Decision 19 says an unset in-duplum trigger fails closed. Servicing.book stores None and returns the agreement. Collections.bind then fails with trigger-unset. | Rule change | Closed. Decision 19: booking fails closed if the in-duplum trigger is unset. |
+| S2 | A settlement quote on 15 May 2026 included initiation of 30 475 cents. The agreement was booked with an initiation fee of 0 cents. The quote builds an engine agreement without that booked amount, and the engine prices the statutory formula. The fee was not posted. | Code change | Closed. Decision 2: the quote uses the booked initiation fee. A capitalised fee is not added again. An uncapitalised outstanding portion is added. VAT is included. |
+| H2 | Section 104(2) for a non-campaign change is not its own locked section. Decision 28 states the five-business-day sentence inside collection campaigns. The orchestration list had no rate-or-fee flow. | Rule change | Closed. Decision 11: a non-campaign rate or fee change also requires a written notice of at least five business days before it takes effect (section 104(2)). |
+| H3 | When the change ends, the original rate and fees resume. That is an increase relative to the reduced values. Section 104(1) prohibits a unilateral increase. The brief requires the resume. No second notice is taken. | Rule change | Closed. Decision 29: the reduction is a concession or discount that goes to zero when the period ends. The original rate and fees are not changed. Resuming does not require a second notice. The contractual instalment stays stable unless a reduced-payment process is followed. |

@@ -36,7 +36,7 @@ from lms.calc.models import (
     VatRate,
     agreement_size,
 )
-from lms.calc.money import RuleError, cents_to_rands, split_inclusive, to_cents
+from lms.calc.money import RuleError, add_vat, cents_to_rands, split_inclusive, to_cents
 
 DEFAULT_VAT: tuple[VatRate, ...] = (VatRate(date(2018, 4, 1), Decimal("0.15")),)
 
@@ -425,6 +425,10 @@ def _priced_initiation(
     policy: Policy,
     vat_rates: tuple[VatRate, ...],
 ) -> tuple[int, int, int]:
+    """Booked ex-VAT fee plus VAT. The statutory formula is only for an unbooked agreement."""
+    rate = vat_on(day, vat_rates) if policy.vat_registered else Decimal(0)
+    if agreement.booked_initiation_ex_vat_cents is not None:
+        return add_vat(agreement.booked_initiation_ex_vat_cents, rate)
     ex_vat, vat, total = initiation_fee(
         agreement.cash_advanced_cents,
         on=day,
@@ -433,7 +437,6 @@ def _priced_initiation(
         vat_registered=policy.vat_registered,
     )
     if agreement.campaign_initiation_discount_cents:
-        rate = vat_on(day, vat_rates) if policy.vat_registered else Decimal(0)
         ex_vat, vat, total = apply_ex_vat_discount(
             ex_vat, rate, agreement.campaign_initiation_discount_cents
         )
@@ -455,7 +458,24 @@ def _capitalise_initiation(
     """
     if state.initiation_levied or day != agreement.advance_date or not agreement.initiation_capitalised:
         return state
-    _ex_vat, _vat, total = _priced_initiation(agreement, day, policy, vat_rates)
+    _ex_vat, vat, total = _priced_initiation(agreement, day, policy, vat_rates)
+    if agreement.initiation_already_in_principal:
+        # Decision 2. The ex-VAT fee is already inside principal. VAT is still
+        # part of the settlement value.
+        state = replace(state, initiation_levied=True)
+        if vat <= 0:
+            return state
+        return _levy_priced(
+            state,
+            kind="initiation",
+            on=day,
+            ex_vat_cents=0,
+            vat_cents=vat,
+            total_cents=vat,
+            policy=policy,
+            vat_rate=vat_on(day, vat_rates) if policy.vat_registered else Decimal(0),
+            due_on=day,
+        )
     if total <= 0:
         return replace(state, initiation_levied=True)
     slices = list(state.principal_slices)

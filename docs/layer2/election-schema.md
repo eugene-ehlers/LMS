@@ -1,6 +1,6 @@
 # Election schema
 
-Decision 19. One organisation row, and an optional product row that overrides it. A product field left null inherits the organisation. A null at both levels fails closed when the row is resolved. The list routes return the nulls so staff can see what is still unset.
+Decision 19. One organisation row, and an optional product row that overrides it. A product field left null inherits the organisation. A null at both levels fails closed when the row is resolved, except the residual write-off threshold, which fills R100. The list routes return the nulls so staff can see what is still unset.
 
 The vocabulary is the constants already published by `lms_config.locked`. This layer does not add a second spelling.
 
@@ -14,7 +14,7 @@ The Python record is `lms.staff.elections.ElectionValues`. The organisation and 
 | `interest_on_deferred_initiation` | `none`, `permitted` | Required. Storing `none` is the provider's choice of the decision 10 default |
 | `repo_rate_fall` | `contract_rate`, `lower_of_contract_and_cap` | Required. There is no platform default |
 | `in_duplum_trigger` | `contractual_breach`, `collections_default` | Required. Resolved by `resolve_in_duplum_trigger` |
-| `residual_write_off_threshold_cents` | Integer cents, zero or greater | Required. Null is not filled. See below |
+| `residual_write_off_threshold_cents` | Integer cents, zero or greater | An unset organisation or product value fills R100 (10 000 cents). A stored value, including zero, wins |
 | `campaign_fall_away_choice` | `falls_away_on_default`, `does_not_fall_away` | Required. The choice and the trigger are one pair |
 | `campaign_fall_away_trigger` | `contractual_breach`, `collections_default`, or null | Required only when the choice is `falls_away_on_default`. Null when the choice is `does_not_fall_away` |
 
@@ -22,9 +22,7 @@ A product that sets `campaign_fall_away_choice` replaces the organisation choice
 
 ## Residual threshold
 
-Decision 8 says the default is R100. Decision 19 says an unset election fails closed and also names that default. Those sentences are an open point in `docs/LOCKED_DECISIONS.md`. This layer leaves a null as null and fails the resolve. It does not write 10 000 cents, and it does not call `resolve_residual_threshold_cents`.
-
-That resolver, on the Layer 0 tree this branch is built on, still returns 5 000 cents (R50) when both levels are null. R50 is the earlier locked sentence. It is neither R100 nor a failure. The conflict is recorded in [gaps](gaps.md). Changing the resolver would change Layer 0, which this layer is not doing.
+Decision 19 gives this threshold a platform default of R100. An unset organisation or product value fills 10 000 cents. `resolve_elections` calls `resolve_residual_threshold_cents`. A stored zero remains zero. The list routes still return a stored null so staff can see that the organisation has not chosen a different amount.
 
 ## Campaign row
 
@@ -46,4 +44,4 @@ The campaign is not an election row. It is `lms.cfg_campaign` / `lms.staff.campa
 
 ## What resolve does not call
 
-`resolve_customer_settings` also demands leniency, a payment threshold, a day count, and a campaign rate pair, and it fills the residual from `resolve_residual_threshold_cents`. Those behaviours are not the decision 19 resolve this screen needs. The in-duplum trigger is the one field delegated to the existing function, because that function already fails closed.
+`resolve_customer_settings` also demands leniency, a payment threshold, a day count, and a campaign rate pair. The decision 19 resolve does not. It does call `resolve_in_duplum_trigger`, which fails closed, and `resolve_residual_threshold_cents`, which fills R100 when both levels are null.

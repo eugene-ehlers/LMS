@@ -142,6 +142,11 @@ class Servicing:
             return self.agreements[replay]
         identity = self.enigma.check(organisation_id, person_id, "agreement.book")
         resolved = self._resolve(settings, product)
+        if resolved.in_duplum_trigger is None:
+            raise ServicingError(
+                "election-unset",
+                "in_duplum_trigger is not set on the product or the organisation",
+            )
         self._engine_validate(
             organisation_id=organisation_id,
             person_id=person_id,
