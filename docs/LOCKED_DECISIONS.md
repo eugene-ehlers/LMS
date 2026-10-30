@@ -333,3 +333,5 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - The original contractual rate, fees, and instalment remain stored for disclosure. The campaign values are stored separately and are used for accrual during the campaign period.
 - Every collection-campaign change is audited. The audit record includes who applied it, when, the accounts affected, and the before and after values.
 - A change that alters the contractual term or the contractual instalment amount is a restructure and is not a collection campaign.
+
+Points section 28 does not settle are listed in `docs/collection-campaigns/gaps.md`.
