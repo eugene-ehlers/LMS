@@ -1,6 +1,6 @@
 # Election schema
 
-Decision 19. One organisation row, and an optional product row that overrides it. A product field left null inherits the organisation. A null at both levels fails closed when the row is resolved. The list routes return the nulls so staff can see what is still unset.
+Decision 19. One organisation row, and an optional product row that overrides it. A product field left null inherits the organisation. A null at both levels fails closed when the row is resolved. The residual write-off threshold is the exception: an unset value fills R100. The list routes return the stored nulls so staff can see what is still unset.
 
 The vocabulary is the constants already published by `lms_config.locked`. This layer does not add a second spelling.
 
@@ -13,8 +13,8 @@ The Python record is `lms.staff.elections.ElectionValues`. The organisation and 
 | `partial_prepayment` | `shorten_term`, `drop_instalment` | Required |
 | `interest_on_deferred_initiation` | `none`, `permitted` | Required. Storing `none` is the provider's choice of the decision 10 default |
 | `repo_rate_fall` | `contract_rate`, `lower_of_contract_and_cap` | Required. There is no platform default |
-| `in_duplum_trigger` | `contractual_breach`, `collections_default` | Required. Resolved by `resolve_in_duplum_trigger` |
-| `residual_write_off_threshold_cents` | Integer cents, zero or greater | Required. Null is not filled. See below |
+| `in_duplum_trigger` | `contractual_breach`, `collections_default` | Required. Booking fails closed when it is unset. Resolved by `resolve_in_duplum_trigger` |
+| `residual_write_off_threshold_cents` | Integer cents, zero or greater | An unset organisation value and an unset product value fill R100. A stored value, including zero, is kept. A list returns the stored null. |
 | `campaign_fall_away_choice` | `falls_away_on_default`, `does_not_fall_away` | Required. The choice and the trigger are one pair |
 | `campaign_fall_away_trigger` | `contractual_breach`, `collections_default`, or null | Required only when the choice is `falls_away_on_default`. Null when the choice is `does_not_fall_away` |
 
@@ -22,9 +22,7 @@ A product that sets `campaign_fall_away_choice` replaces the organisation choice
 
 ## Residual threshold
 
-Decision 8 says the default is R100. Decision 19 says an unset election fails closed and also names that default. Those sentences are an open point in `docs/LOCKED_DECISIONS.md`. This layer leaves a null as null and fails the resolve. It does not write 10 000 cents, and it does not call `resolve_residual_threshold_cents`.
-
-That resolver, on the Layer 0 tree this branch is built on, still returns 5 000 cents (R50) when both levels are null. R50 is the earlier locked sentence. It is neither R100 nor a failure. The conflict is recorded in [gaps](gaps.md). Changing the resolver would change Layer 0, which this layer is not doing.
+Decision 19. The platform default is R100. `resolve_elections` calls `resolve_residual_threshold_cents`. An unset organisation value and an unset product value fill 10 000 cents. A stored value, including zero, is kept. A product value overrides the organisation. A list returns the stored null so staff can see what has not been chosen. Booking uses the same fill. Booking fails closed when the in-duplum trigger is unset.
 
 ## Campaign row
 

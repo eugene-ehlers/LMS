@@ -4,7 +4,9 @@ A collection campaign is a bulk change on accounts that already exist
 (LOCKED_DECISIONS §28, NCA section 95). It is not the origination discount
 stored on the agreement at booking (LOCKED_DECISIONS §3 on this branch).
 The contractual rate, fees, instalment, and term stay on the loan. The
-copies below are the values the campaign must not rewrite.
+copies below are the values the campaign must not rewrite. A temporary
+reduction is a concession (LOCKED_DECISIONS §29). It goes to zero when
+the period ends. The contractual instalment is not reduced with the rate.
 """
 
 from __future__ import annotations
@@ -24,8 +26,10 @@ FEE_TYPES = (
     "additional_monthly",
 )
 
-# NCA section 104(2), locked in section 28: written notice of at least five
-# business days before the change takes effect. This is not a client election.
+# NCA section 104(2), locked in section 28 for a collection campaign and in
+# section 29 for a non-campaign rate or fee change: written notice of at
+# least five business days before the change takes effect. Resuming the
+# original rate does not require a second notice. This is not a client election.
 NOTICE_BUSINESS_DAYS = 5
 
 # Section 28: a rate or fee change is for the campaign period or the rest of
