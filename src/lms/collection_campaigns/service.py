@@ -213,9 +213,12 @@ class CollectionCampaigns:
         """Set ``end_date``.
 
         A campaign-period reduction and a payment holiday stop after that
-        date. A rest-of-term reduction continues through the contractual end
-        stored on each application. A null end date is open-ended; setting
-        the date is what ends it, and campaign-period values then resume.
+        date. The reduction is a concession. It goes to zero when the period
+        ends. The original contractual rate, fees, and instalment stay in
+        force and are not rewritten. Resuming them does not require a second
+        notice (LOCKED_DECISIONS §29). A rest-of-term reduction continues
+        through the contractual end stored on each application. A null end
+        date is open-ended; setting the date is what ends it.
         """
         actor = authorise(self.access, organisation_id=organisation_id, actor_id=actor_id)
         day = _recognition_day(recognised_at)

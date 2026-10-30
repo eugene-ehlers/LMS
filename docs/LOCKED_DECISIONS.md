@@ -4,7 +4,7 @@ Single source of truth for all decisions that have been researched and locked.
 All future agents, chats and developers must follow these rules.
 Do not re-open a locked decision without an explicit change request.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Standing instruction for all agents
 
@@ -31,6 +31,10 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Same logic applies to related fee points.
 - A capitalised initiation fee that was capitalised before the default date sits inside the in-duplum ceiling.
 - Day-1: only products where section 102 explicitly allows capitalisation may capitalise the initiation fee. Short-term and unsecured default to non-capitalised.
+- A settlement quote uses the booked initiation fee. It does not use the statutory formula.
+- If the initiation fee is capitalised, it is already part of the loan value. It is not added again.
+- If the initiation fee is not capitalised, the outstanding portion is not yet due. It is added to the settlement value.
+- VAT is always included in the settlement value. The client remains accountable for the VAT portion.
 
 ## 3. Zero rates, zero fees and campaigns
 
@@ -243,11 +247,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Partial-prepayment choice (shorten term or drop instalment)
   - Interest on deferred initiation fee
   - Repo-rate fall choice
-  - In-duplum trigger (contractual_breach / collections_default)
-  - Residual write-off threshold (default R100)
+  - In-duplum trigger (contractual_breach / collections_default). Booking fails closed when this trigger is unset on both the organisation and the product.
+  - Residual write-off threshold. The platform default is R100. An unset organisation value and an unset product value fill R100. A stored value, including zero, is kept. A product value overrides the organisation.
   - Campaign discount fall-away choice (falls_away_on_default / does_not_fall_away)
   - Campaign fall-away trigger (contractual_breach / collections_default)
-- Unset values fail closed.
+- Unset values fail closed. The residual write-off threshold is the exception: an unset value fills R100.
 - Campaign fall-away choice and trigger are stored per campaign.
 - Role names for edits must be descriptive and follow best practice (for example lms.elections.write, lms.campaign.write).
 
@@ -344,13 +348,22 @@ The payment-rail layer found these points unset. Nothing in this section is a de
 - Section 25 does not fix the loan-number character pattern. The Bankserv user reference allows 14 characters for the mandate or agreement number. Section 13 requires the contractual instalment to be stored; the agreement stores a principal schedule. The debit-order loan line reads the section 6 amount still outstanding on that due date and does not invent unbilled interest.
 - The published Bankserv collections layout does not define a DebiCheck record, and it does not state the hash-total algorithm beyond a 12-digit field. Consumer homing-account details and the bank’s 10-character abbreviated user name are not LMS fields in this document. A credit-life premium receipt has no insurer hand-off here.
 - Whether interest that accrues on a payment date is itself due that day, or only on an instalment due date, is not settled beyond “capitalise due amounts, then allocate”.
-- Section 8 and section 19 say the residual write-off threshold default is R100, and section 19 also says an unset election fails closed. `resolve_residual_threshold_cents` still returns 5 000 cents when both levels are null. This layer does not call that resolver and does not choose between those readings.
+- Decision 19 fills an unset residual write-off threshold with R100. A stored value, including zero, is kept. The earlier payment-rail note that the resolver returned 5 000 cents, and that the two readings were unsettled, is superseded.
 - Settlement re-advance has no module order in the orchestration note. The route, the settlement-month fee, and the points this command does not decide are recorded in `docs/settlement-readvance/`. That note is not a rule.
+
 ## Open points raised while implementing Layer 2
 
-These points are unresolved. Nothing in this section changes a rule above or chooses a reading.
+Points 1 to 3 are unresolved. Nothing in those points changes a rule above or chooses a reading. Point 4 is answered by Decision 19.
 
 1. Decisions 3 and 19 store the campaign fall-away choice and trigger on the campaign, and decision 19 also stores them as an organisation election with an optional product override. The document does not say which stored value applies when they differ.
 2. The document does not say which campaign applies when more than one campaign period includes the recognition date of a new loan.
 3. Decision 3 defines the campaign price as a base rate less a discount. Decision 13 says the LMS uses the rate supplied by the decision engine. The document does not say whether a loan that qualifies for a campaign keeps the supplied rate, or uses the campaign net.
-4. Decision 8 says the residual write-off threshold defaults to R100. Decision 19 says unset elections fail closed and lists that threshold with a default of R100. The document does not say whether a null threshold means R100 or a failed command.
+4. Decision 19 answers this. An unset residual write-off threshold fills R100. A stored value, including zero, is kept. A product value overrides the organisation.
+
+## 29. Non-campaign rate or fee change
+
+- A non-campaign rate or fee change requires a written notice of at least five business days before it takes effect (section 104(2)).
+- A temporary reduction is stored as a concession or discount that goes to zero when the period ends.
+- The original contractual rate and fees remain effective and are not changed.
+- Resuming the original rate does not require a second notice.
+- An interest-rate change does not automatically reduce the contractual instalment. The instalment remains stable unless a reduced-payment process is followed.

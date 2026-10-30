@@ -36,10 +36,7 @@ Last updated: 2026-10-30
 | C1 | Fall-away choice and trigger are stored on the campaign and also as an organisation election with a product override. The lock does not say which value applies when they differ. | Rule change | Add a sentence to Decision 3 or Decision 19 that names the precedence (campaign value wins, or organisation value wins). |
 | C2 | The lock does not say which campaign applies when more than one period contains the recognition date. Intake stores nothing. | Rule change | Lock the rule (most recent campaign, or fail closed) in Decision 3. |
 | C3 | The lock does not say whether a qualifying loan keeps the decision-engine rate or uses the campaign net. Both are stored. | Rule change | Lock the rule in Decision 3 or Decision 13. |
-| C4 | Decision 8 names a residual default of R100. Decision 19 says an unset election fails closed and also names that default. A null threshold is left unset and resolve fails. | Rule change | Decide whether R100 is a platform default that fills when unset, or whether unset always fails closed. Update Decision 8 or Decision 19. |
 | C5 | campaign_rate still rejects a discount above the base. | Code change | Update campaign_rate to floor the net at 0 % instead of rejecting the pair. |
-| C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Code change | Update the function to fail closed or to fill R100, depending on the resolution of C4. |
-| C7 | Decision 19 says an unset in-duplum trigger fails closed. Servicing.book stores None and returns the agreement. Collections.bind then fails with trigger-unset. | Rule change | Say whether booking itself must reject a missing trigger, or only a collections call that uses it. |
 
 ## Payment rails (Agent C)
 
@@ -70,11 +67,10 @@ Last updated: 2026-10-30
 
 ## Merged smoke
 
-These rows are the contradictions the seven-path smoke produced. C4 and C6 were hit again and are not repeated here. S1 was closed by the early-settlement path. S2 and S3 remain.
+These rows are the contradictions the seven-path smoke produced. S1 was closed by the early-settlement path. S2 is closed. S3 remains.
 
 | ID | Issue | Classification | What must change |
 |----|-------|----------------|------------------|
-| S2 | A settlement quote prices the statutory initiation formula, including VAT when the caller supplies a rate. The ledger stores the booked initiation cents and does not add VAT on top. Booking rejects an initiation amount above the ex-VAT cap, so the statutory consumer total cannot be booked through Servicing.book. The 15 May 2026 smoke quote included initiation of 30 475 cents on an agreement booked at 0. On 10 April 2026 the same formula quoted 17 250 cents. A booked zero left the capitalised ledger at 120 467 cents. Booking the ex-VAT cap of 15 000 cents left 135 467 cents. Execute now fails closed with quote-mismatch and does not post the difference. Which figure is the amount owing is still open. | Code change | Pass the booked initiation amount into the quote, or record that the statutory formula, including VAT, is the amount owing and say how that fee is posted when booking stored a lower figure. |
 | S3 | The 1 May interest memo after the R219 receipt was 3.1451612903 rands, on the R1 950 left after the receipt. Sections 1 and 8 treat the day as 00:00 and capitalise before allocating. The receipt path posted before the statement accrued that day. A memo on the R2 000 balance at the start of the day would be 3.2258064516 rands. The memo was not billed. | Rule change | Say which flow wins when a receipt and that day's accrual share a recognition date. |
 
 ## Daily batch status (Agent J)
@@ -110,8 +106,9 @@ These rows are the contradictions the seven-path smoke produced. C4 and C6 were 
 | G8 | This path freezes elections it is given. It does not read the organisation or product election store. | Code change | Resolve Decision 19 from that store when it is on this branch. Missing values already fail closed. |
 | G9 | Decision 28's five-business-day notice is locked for a collection campaign. It is not locked for a consented restructure. | Decide later | This path requires consent and does not add a notice interval. |
 | G10 | A naive `recognised_at` is reported on the response and is not written to the audit log, because Decision 1 gives it no Johannesburg day. | Code change | Keep the failure visible to operators once a timestamp rule for an unusable clock is locked. |
+| G11 | Decision 19 fills an unset residual write-off threshold with R100. The restructure path still fails closed and does not fill it. | Code change | Use the same fill as `resolve_residual_threshold_cents`. Do not choose a different default. |
 
-Open points D1 and D3 and open issue C4 apply here and are not repeated. D1: the rate integer is stored and is not a locked wire format. D3: an identity that differs from the original freeze fails closed. C4: an unset residual threshold fails closed and is not filled with R100.
+Open points D1 and D3 and open issue C4 apply here and are not repeated. D1: the rate integer is stored and is not a locked wire format. D3: an identity that differs from the original freeze fails closed. C4 is closed by Decision 19: an unset residual threshold fills R100. The restructure path still fails closed and does not fill that default.
 S1 is closed. `Ledger.quote_settlement` delegates to the calculation engine. `Documents.settlement_quote` calls that method. There is still one quote formula.
 
 ## Early settlement (Agent F)
@@ -143,20 +140,31 @@ S1 is closed. `Ledger.quote_settlement` delegates to the calculation engine. `Do
 | K8 | The audit extract accepts the Layer 2 write roles and does not accept `lms.collection_campaign.write` on its own. No batch-status role is locked. | Decide later | An operator who holds only the collection-campaign role cannot open the batch screen. Lock a role if that operator must see batch status. |
 | K9 | A blank NCR number is refused by the staff route as `ncr_registration_number is required` before the service sentence that says the number is compulsory. A number of all zeros, including `0000000` and `NCRCP0000`, is accepted by that route. | Decide later | The screen shows the route's reason. The two refusal sentences name the same blank field. |
 
+## Closed
+
+| ID | Resolution |
+|----|------------|
+| C4 | Decision 19. The residual write-off threshold has a platform default of R100. An unset organisation value and an unset product value fill R100. A stored value, including zero, is kept. A product value overrides the organisation. |
+| C6 | `resolve_residual_threshold_cents` fills 10 000 cents when both levels are null. |
+| C7 | Decision 19. Booking fails closed when the in-duplum trigger is unset on both the organisation and the product. |
+| S2 | Decision 2. The settlement quote uses the booked initiation fee. A capitalised fee is already part of the loan value and is not added again. A fee that is not capitalised has its outstanding portion added. VAT is included. The client remains accountable for the VAT portion. |
+| H2 | Section 29. A non-campaign rate or fee change requires a written notice of at least five business days before it takes effect (section 104(2)). |
+| H3 | Section 29. A temporary reduction is stored as a concession or discount that goes to zero when the period ends. The original contractual rate and fees remain effective. Resuming the original rate does not require a second notice. An interest-rate change does not automatically reduce the contractual instalment. |
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
 | Decide later | 18 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 27 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
-| Code change | 20 | Update the existing functions, or restore the locked document. |
+| Rule change | 25 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
+| Code change | 19 | Update the existing functions, or restore the locked document. |
 | Database change | 3 | Add a classification column. |
 
 All agents have completed. All issues are recorded so they can be closed in a single pass before production.
-S1 to S6 under Collection-process removal were found while removing collection-process state. They are not new rules. That S1 stays open.
-The merged smoke added C7, N6, and its own S1, S2, and S3. Early settlement closed the merged-smoke S1 by adding Ledger.quote_settlement. The collection-process S1 is a different gap and stays open. S2 and S3 in the merged-smoke section remain. No id was renumbered.
-J1 to J12 are the daily-batch gaps. They are not new rules. J1 records that main's locked file was a stub. This tree already has the restored document through section 28. That row is not closed here.
-G1 to G10 are the restructure gaps. They are not new rules. G1 records that main's locked file was a pointer. This tree already has the restored document. That row is not closed here.
+S1 to S6 under Collection-process removal were found while removing collection-process state. They are not new rules. That S1 stays open. The collection-process S2 stays open. It is not the merged-smoke S2.
+The merged smoke added C7, N6, and its own S1, S2, and S3. Early settlement closed the merged-smoke S1. Pull request 48 closed C4, C6, C7, the merged-smoke S2, H2, and H3. Those closures are the locks in Decisions 2, 19, and 29. S3 remains. No id was renumbered.
+J1 to J12 are the daily-batch gaps. They are not new rules. J1 records that main's locked file was a stub. This tree already has the restored document. That row is not closed here.
+G1 to G11 are the restructure gaps. They are not new rules. G1 records that main's locked file was a pointer. This tree already has the restored document. That row is not closed here. G11 records that the restructure path still fails closed after Decision 19 filled an unset residual with R100.
 The restructure flow is orchestration section 10. The daily batch is section 9. The settlement receipt is section 11. The steps are unchanged.
-F1 to F7 are the early-settlement gaps. They are not new rules. docs/LOCKED_DECISIONS.md was not edited by that path.
-K1 to K9 are the staff-screen gaps. They are not new rules. K5 is not closed. On this tree the collection-campaign migration stays `0008_collection_campaigns.sql`, Layer 2 staff stays `0009_layer2_staff.sql`, and the re-advance stays `0010_settlement_readvance.sql`. Those prefixes were already unique. K5 asked not to put the campaign file back on 0008 beside `0008_layer2_staff.sql`. That staff file is already 0009, so restoring 0008 does not recreate that pair.
+F1 to F7 are the early-settlement gaps. They are not new rules.
+K1 to K9 are the staff-screen gaps. They are not new rules. K5 is not closed. On this tree the collection-campaign migration stays `0008_collection_campaigns.sql`, Layer 2 staff stays `0009_layer2_staff.sql`, and the re-advance stays `0010_settlement_readvance.sql`.

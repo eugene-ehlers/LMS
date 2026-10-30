@@ -135,7 +135,7 @@ Modules called (in order):
 
 Outcome: The receipt must equal the quoted amount in cents. Its value date must fall on or between the delivery date and valid-until. Interest is the interest in the quote. Days after the quote as-of date, and before a later receipt inside the window, are not accrued. The service fee in the settlement month is the full monthly fee. The opening month keeps the locked fraction and is not shortened to the settlement day. When the balance is R0 the agreement is marked settled. A receipt that does not match is not allocated.
 
-Capitalise-then-allocate is Decision 1. The value date is 00:00 Africa/Johannesburg. The allocation order is Decision 8, and it includes principal that is not yet due, because this receipt is the section 125 settlement. The early-termination charge stays R0. A booked initiation amount that differs from the statutory figure in the quote fails closed. The difference is not posted. Gaps for this path are F1 to F7 in docs/OPEN_ISSUES.md.
+Capitalise-then-allocate is Decision 1. The value date is 00:00 Africa/Johannesburg. The allocation order is Decision 8, and it includes principal that is not yet due, because this receipt is the section 125 settlement. The early-termination charge stays R0. The quote uses the booked initiation fee. A capitalised fee is already part of the loan value and is not added again. A fee that is not capitalised has its outstanding portion added. VAT is included, and the client remains accountable for that portion. Execute posts that VAT when the ledger charge does not yet hold it, then allocates the quoted amount. Gaps for this path are F1 to F7 in docs/OPEN_ISSUES.md.
 
 ## In-duplum flows
 

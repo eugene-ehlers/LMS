@@ -1,12 +1,9 @@
 """Decision 19 elections. Organisation row, optional product override.
 
-Unset values fail closed when a caller asks for the resolved row. A list
-returns the stored nulls. The residual threshold is not filled: decision 8
-names R100 and decision 19 says an unset election fails closed, and this
-module does not choose between those two sentences.
-
-``resolve_residual_threshold_cents`` is not called. It fills 5 000 cents.
-``resolve_in_duplum_trigger`` is called. It already fails closed.
+Unset values fail closed when a caller asks for the resolved row, except the
+residual write-off threshold. An unset organisation value and an unset product
+value fill R100. A list returns the stored nulls. ``resolve_in_duplum_trigger``
+fails closed. Booking uses the same trigger rule.
 """
 
 from __future__ import annotations
@@ -27,6 +24,7 @@ from lms_config.locked import (
     VAT_EXCLUSIVE,
     VAT_INCLUSIVE,
     resolve_in_duplum_trigger,
+    resolve_residual_threshold_cents,
 )
 from lms.staff.rates import integer_cents
 
@@ -76,6 +74,11 @@ def check_elections(values: ElectionValues) -> None:
 
 def resolve_elections(organisation: ElectionValues, product: ElectionValues | None) -> ElectionValues:
     """Product override wins. A null at both levels fails closed.
+
+    The residual write-off threshold is the exception. An unset organisation
+    value and an unset product value fill R100. A list still returns the
+    stored null. Booking uses the same residual fill, and it refuses a
+    missing in-duplum trigger.
 
     The fall-away choice and trigger move together. A product that sets a
     choice does not keep the organisation trigger.
@@ -173,12 +176,7 @@ def _pick(product_value, organisation_value):
 
 
 def _residual(organisation: int | None, product: int | None) -> int:
-    chosen = product if product is not None else organisation
-    if chosen is None:
-        raise CalculationInputError(
-            "residual_write_off_threshold_cents is not set on the product or the organisation"
-        )
-    return integer_cents(chosen, "residual write-off threshold")
+    return resolve_residual_threshold_cents(organisation, product)
 
 
 def _one(value: str | None, allowed: frozenset[str], label: str) -> None:

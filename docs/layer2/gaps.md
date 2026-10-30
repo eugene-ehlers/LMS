@@ -12,7 +12,7 @@ Decision 3 allows a discount higher than the base and floors the net at 0 %. `lm
 
 ## Residual threshold
 
-`lms_config.locked.resolve_residual_threshold_cents` returns 5 000 cents when both the organisation and the product are null. The current lock says the default is R100 (10 000 cents) and also says an unset election fails closed. The staff resolve fails closed. It does not write R100 and it does not return the 5 000 cents.
+Closed. Decision 19 fills R100 (10 000 cents) when both the organisation and the product are null. A stored value, including zero, is kept. Staff resolve uses that fill. Booking fails closed when the in-duplum trigger is unset.
 
 ## Fall-away at accrual
 

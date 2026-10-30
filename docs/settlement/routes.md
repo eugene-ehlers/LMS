@@ -2,7 +2,7 @@
 
 Quote, then a receipt that matches the quote. Amounts are integer cents. The value date of a recognised event is 00:00 Africa/Johannesburg.
 
-`docs/LOCKED_DECISIONS.md` was not edited. Gaps are F1 to F7 and S2 in `docs/OPEN_ISSUES.md`.
+Decision 2 now says the quote uses the booked initiation fee, including VAT. Gaps are F1 to F7 in `docs/OPEN_ISSUES.md`. S2 is closed.
 
 ## Quote
 
@@ -119,7 +119,7 @@ A failure is HTTP 422 unless the table says otherwise. The body is:
 | `holidays-unset` | No holiday set was supplied. |
 | `repo-quote-unset` | The quote body included repo rows. |
 | `quote-window` | The receipt value date is outside delivery and valid-until. |
-| `quote-mismatch` | The cents do not equal the quote, or the capitalised ledger does not equal the quote. A booked initiation that differs from the statutory figure is named in cents. Nothing is allocated. |
+| `quote-mismatch` | The cents do not equal the quote, or the capitalised ledger does not equal the quote. Nothing is allocated. |
 | `idempotency-required` | The execute header is missing. |
 | `idempotency-conflict` | The key was used for a different receipt. HTTP 409. |
 
