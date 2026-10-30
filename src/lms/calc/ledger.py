@@ -1,0 +1,757 @@
+"""Fold civil days into a loan state. Every public function is pure."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from datetime import date, timedelta
+from decimal import Decimal
+
+from lms.calc.allocation import allocate_payment
+from lms.calc.calendar import binding_until, month_end
+from lms.calc.fees import initiation_fee, service_fee_cents, vat_on
+from lms.calc.interest import daily_interest_rands, divisor_days, periodic_rate
+from lms.calc.models import (
+    Agreement,
+    Charge,
+    Clip,
+    DuplumEpisode,
+    DuplumReset,
+    Event,
+    ManualCharge,
+    Payment,
+    Policy,
+    PrincipalSlice,
+    Product,
+    RepoRate,
+    Settlement,
+    State,
+    TerminalServiceFee,
+    VatRate,
+    agreement_size,
+)
+from lms.calc.money import RuleError, cents_to_rands, split_inclusive, to_cents
+
+DEFAULT_VAT: tuple[VatRate, ...] = (VatRate(date(2018, 4, 1), Decimal("0.15")),)
+
+
+@dataclass(frozen=True)
+class SettlementQuote:
+    as_of: date
+    delivered_on: date
+    valid_until: date
+    principal_cents: int
+    interest_cents: int
+    fee_cents: int
+    early_termination_cents: int
+    total_cents: int
+    agreement_size: str
+    components: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True)
+class RunResult:
+    state: State
+    quote: SettlementQuote | None = None
+
+
+def payoff_cents(state: State) -> int:
+    unbilled = to_cents(state.unbilled_ordinary + state.unbilled_duplum)
+    return (
+        state.principal_cents
+        + sum(charge.remaining_cents for charge in state.charges)
+        + unbilled
+    )
+
+
+def _initial(agreement: Agreement) -> State:
+    slices = tuple(
+        PrincipalSlice(due_on, amount, amount, index)
+        for index, (due_on, amount) in enumerate(agreement.resolved_instalments())
+    )
+    return State(
+        as_of=None,
+        status="open",
+        principal_slices=slices,
+        charges=(),
+        unbilled_ordinary=Decimal("0"),
+        unbilled_duplum=Decimal("0"),
+        unbilled_duplum_episode=None,
+        duplum_interest_counted_cents=0,
+        episodes=(),
+        in_default=False,
+        next_sequence=1,
+        next_episode_no=1,
+        prior_duplum_accrued_cents=0,
+        service_months_levied=(),
+        initiation_levied=False,
+        suspense_cents=0,
+        clips=(),
+        waived_cents=0,
+        settled_on=None,
+    )
+
+
+def _open_episode(state: State) -> DuplumEpisode | None:
+    for episode in state.episodes:
+        if episode.closed_on is None:
+            return episode
+    return None
+
+
+def _replace_episode(state: State, updated: DuplumEpisode) -> tuple[DuplumEpisode, ...]:
+    return tuple(
+        updated if episode.episode_no == updated.episode_no else episode
+        for episode in state.episodes
+    )
+
+
+def _overdue(state: State, day: date) -> bool:
+    if any(charge.remaining_cents > 0 and charge.due_on < day for charge in state.charges):
+        return True
+    return any(slice_.remaining_cents > 0 and slice_.due_on < day for slice_ in state.principal_slices)
+
+
+def _cured(state: State, day: date) -> bool:
+    if any(charge.remaining_cents > 0 and charge.due_on <= day for charge in state.charges):
+        return False
+    return not any(
+        slice_.remaining_cents > 0 and slice_.due_on <= day for slice_ in state.principal_slices
+    )
+
+
+def _interest_base_cents(state: State, policy: Policy) -> int:
+    base = state.principal_cents
+    if policy.interest_on_deferred_initiation:
+        base += sum(
+            charge.remaining_cents for charge in state.charges if charge.kind == "initiation"
+        )
+    return base
+
+
+def _prior_cents(state: State, policy: Policy) -> int:
+    if policy.duplum_reset == DuplumReset.AGGREGATE:
+        return state.prior_duplum_accrued_cents
+    return 0
+
+
+def _room_cents(state: State, policy: Policy, *, include_unbilled: bool) -> int:
+    episode = _open_episode(state)
+    if episode is None:
+        return 0
+    used = episode.accrued_cents + _prior_cents(state, policy)
+    if include_unbilled:
+        used += to_cents(state.unbilled_duplum)
+    return max(0, episode.ceiling_cents - used)
+
+
+def _room_rands(state: State, policy: Policy) -> Decimal:
+    episode = _open_episode(state)
+    if episode is None or not state.in_default:
+        return Decimal("Infinity")
+    used = (
+        cents_to_rands(episode.accrued_cents + _prior_cents(state, policy))
+        + state.unbilled_duplum
+    )
+    return max(Decimal(0), cents_to_rands(episode.ceiling_cents) - used)
+
+
+def _add_charge(
+    state: State,
+    *,
+    kind: str,
+    on: date,
+    ex_vat_cents: int,
+    vat_cents: int,
+    total_cents: int,
+    episode_no: int | None,
+    due_on: date | None = None,
+) -> State:
+    if total_cents <= 0:
+        return state
+    charge = Charge(
+        charge_id=f"{kind}-{state.next_sequence}",
+        kind=kind,
+        levied_on=on,
+        due_on=due_on or on,
+        ex_vat_cents=ex_vat_cents,
+        vat_cents=vat_cents,
+        amount_cents=total_cents,
+        remaining_cents=total_cents,
+        duplum_episode=episode_no,
+        sequence=state.next_sequence,
+    )
+    return replace(state, charges=state.charges + (charge,), next_sequence=state.next_sequence + 1)
+
+
+def _open_default(state: State, day: date) -> State:
+    if _open_episode(state) is not None:
+        return replace(state, in_default=True)
+    episode = DuplumEpisode(
+        episode_no=state.next_episode_no,
+        started_on=day,
+        ceiling_cents=state.principal_cents,
+        accrued_cents=0,
+        closed_on=None,
+    )
+    return replace(
+        state,
+        in_default=True,
+        episodes=state.episodes + (episode,),
+        next_episode_no=state.next_episode_no + 1,
+    )
+
+
+def _accrue(state: State, agreement: Agreement, day: date, policy: Policy, repos: tuple[RepoRate, ...]) -> State:
+    base = _interest_base_cents(state, policy)
+    if base == 0:
+        return state
+    daily = daily_interest_rands(
+        base,
+        periodic_rate(agreement, day, repos),
+        divisor_days(day, agreement.product, policy.day_count),
+    )
+    if state.in_default:
+        room = _room_rands(state, policy)
+        if daily > room:
+            daily = room
+        episode = _open_episode(state)
+        episode_no = episode.episode_no if episode else state.unbilled_duplum_episode
+        return replace(
+            state,
+            unbilled_duplum=state.unbilled_duplum + daily,
+            unbilled_duplum_episode=episode_no,
+        )
+    return replace(state, unbilled_ordinary=state.unbilled_ordinary + daily)
+
+
+def _bill_interest(state: State, day: date, policy: Policy) -> State:
+    state = _bill_ordinary_interest(state, day)
+    return _bill_duplum_interest(state, day, policy)
+
+
+def _bill_ordinary_interest(state: State, day: date) -> State:
+    if state.unbilled_ordinary == 0:
+        return state
+    cents = to_cents(state.unbilled_ordinary)
+    state = replace(state, unbilled_ordinary=Decimal("0"))
+    if cents == 0:
+        return state
+    return _add_charge(
+        state,
+        kind="interest",
+        on=day,
+        ex_vat_cents=cents,
+        vat_cents=0,
+        total_cents=cents,
+        episode_no=None,
+    )
+
+
+def _bill_duplum_interest(state: State, day: date, policy: Policy) -> State:
+    if state.unbilled_duplum == 0 and state.duplum_interest_counted_cents == 0:
+        return state
+    episode = _open_episode(state)
+    if episode is not None:
+        cents = min(to_cents(state.unbilled_duplum), _room_cents(state, policy, include_unbilled=False))
+        accrued = episode.accrued_cents + cents
+        episode = replace(episode, accrued_cents=accrued)
+        state = replace(
+            state,
+            episodes=_replace_episode(state, episode),
+            unbilled_duplum=Decimal("0"),
+            duplum_interest_counted_cents=0,
+        )
+        episode_no = episode.episode_no
+    else:
+        cents = state.duplum_interest_counted_cents
+        episode_no = state.unbilled_duplum_episode
+        state = replace(
+            state,
+            unbilled_duplum=Decimal("0"),
+            duplum_interest_counted_cents=0,
+            unbilled_duplum_episode=None,
+        )
+    if cents <= 0:
+        return state
+    return _add_charge(
+        state,
+        kind="interest",
+        on=day,
+        ex_vat_cents=cents,
+        vat_cents=0,
+        total_cents=cents,
+        episode_no=episode_no,
+    )
+
+
+def _clip_to_duplum(state: State, policy: Policy, total_cents: int) -> tuple[int, State]:
+    if not state.in_default or not policy.count_vat_in_duplum:
+        return total_cents, state
+    room = _room_cents(state, policy, include_unbilled=False)
+    charged = min(total_cents, room)
+    return charged, state
+
+
+def _consume_duplum(state: State, cents: int) -> State:
+    episode = _open_episode(state)
+    if episode is None or cents <= 0:
+        return state
+    updated = replace(episode, accrued_cents=episode.accrued_cents + cents)
+    return replace(state, episodes=_replace_episode(state, updated))
+
+
+def _levy_priced(
+    state: State,
+    *,
+    kind: str,
+    on: date,
+    ex_vat_cents: int,
+    vat_cents: int,
+    total_cents: int,
+    policy: Policy,
+    vat_rate: Decimal,
+    due_on: date | None = None,
+) -> State:
+    charged, state = _clip_to_duplum(state, policy, total_cents)
+    if charged < total_cents:
+        state = replace(
+            state,
+            clips=state.clips
+            + (Clip(on, kind, total_cents, charged, "duplum"),),
+        )
+    if charged <= 0:
+        return state
+    if charged == total_cents:
+        ex_vat, vat, total = ex_vat_cents, vat_cents, total_cents
+    else:
+        ex_vat, vat = split_inclusive(charged, vat_rate if policy.vat_registered else Decimal(0))
+        total = charged
+    episode = _open_episode(state) if state.in_default else None
+    episode_no = episode.episode_no if episode is not None else None
+    if episode is not None and policy.count_vat_in_duplum:
+        state = _consume_duplum(state, total)
+    elif episode is not None:
+        state = _consume_duplum(state, ex_vat)
+    return _add_charge(
+        state,
+        kind=kind,
+        on=on,
+        ex_vat_cents=ex_vat,
+        vat_cents=vat,
+        total_cents=total,
+        episode_no=episode_no,
+        due_on=due_on or on,
+    )
+
+
+def _levy_initiation(state: State, agreement: Agreement, day: date, policy: Policy, vat_rates: tuple[VatRate, ...]) -> State:
+    if state.initiation_levied or day != agreement.advance_date:
+        return state
+    ex_vat, vat, total = initiation_fee(
+        agreement.cash_advanced_cents,
+        on=day,
+        vat_rates=vat_rates,
+        basis=policy.fee_cap_basis,
+        vat_registered=policy.vat_registered,
+    )
+    # A deferred initiation fee is unpaid from the advance date, so s 126 allocates
+    # it before principal, but it is not a default until the first principal due date.
+    # Paying it upfront makes it due, and paid, on the advance date.
+    due = day if agreement.initiation_paid_upfront else min(
+        slice_.due_on for slice_ in state.principal_slices
+    )
+    state = _levy_priced(
+        state,
+        kind="initiation",
+        on=day,
+        ex_vat_cents=ex_vat,
+        vat_cents=vat,
+        total_cents=total,
+        policy=policy,
+        vat_rate=vat_on(day, vat_rates) if policy.vat_registered else Decimal(0),
+        due_on=due,
+    )
+    return replace(state, initiation_levied=True)
+
+
+def _levy_service(state: State, agreement: Agreement, day: date, policy: Policy, vat_rates: tuple[VatRate, ...], *, settle: bool) -> State:
+    key = (day.year, day.month)
+    if key in state.service_months_levied:
+        return state
+    is_month_end = day == month_end(day)
+    if not settle and not is_month_end:
+        return state
+    advance_key = (agreement.advance_date.year, agreement.advance_date.month)
+    if key == advance_key:
+        period_start = agreement.advance_date
+        period_end = day if settle else month_end(day)
+        # Same-month settlement stops at the settlement date. A later month-end
+        # of the commencement month uses the whole remainder of that month.
+        if not settle:
+            period_end = month_end(day)
+        full_month = False
+    else:
+        period_start = date(day.year, day.month, 1)
+        if settle and policy.terminal_service_fee == TerminalServiceFee.PRO_RATA:
+            period_end = day
+            full_month = False
+        else:
+            period_end = month_end(day)
+            full_month = True
+    if period_end < period_start:
+        return state
+    ex_vat, vat, total = service_fee_cents(
+        on=day,
+        period_start=period_start,
+        period_end=period_end,
+        monthly_cap_cents=policy.service_fee_monthly_cents,
+        full_month=full_month,
+        vat_rates=vat_rates,
+        basis=policy.fee_cap_basis,
+        vat_registered=policy.vat_registered,
+    )
+    state = _levy_priced(
+        state,
+        kind="service",
+        on=day,
+        ex_vat_cents=ex_vat,
+        vat_cents=vat,
+        total_cents=total,
+        policy=policy,
+        vat_rate=vat_on(day, vat_rates) if policy.vat_registered else Decimal(0),
+    )
+    return replace(state, service_months_levied=state.service_months_levied + (key,))
+
+
+def _levy_manual(state: State, event: ManualCharge, policy: Policy, vat_rates: tuple[VatRate, ...]) -> State:
+    rate = vat_on(event.on, vat_rates) if policy.vat_registered else Decimal(0)
+    if event.ex_vat_cents is not None and event.vat_cents is not None:
+        if event.ex_vat_cents + event.vat_cents != event.total_cents:
+            raise RuleError("charge", "Manual charge ex-VAT and VAT must sum to the total.")
+        ex_vat, vat, total = event.ex_vat_cents, event.vat_cents, event.total_cents
+    else:
+        ex_vat, vat = split_inclusive(event.total_cents, rate)
+        total = event.total_cents
+    return _levy_priced(
+        state,
+        kind=event.kind,
+        on=event.on,
+        ex_vat_cents=ex_vat,
+        vat_cents=vat,
+        total_cents=total,
+        policy=policy,
+        vat_rate=rate,
+    )
+
+
+def _close_if_cured(state: State, day: date, policy: Policy) -> State:
+    episode = _open_episode(state)
+    if episode is None or not state.in_default or not _cured(state, day):
+        return state
+    counted = min(to_cents(state.unbilled_duplum), _room_cents(state, policy, include_unbilled=False))
+    closed = replace(
+        episode,
+        accrued_cents=episode.accrued_cents + counted,
+        closed_on=day,
+    )
+    return replace(
+        state,
+        episodes=_replace_episode(state, closed),
+        in_default=False,
+        duplum_interest_counted_cents=counted,
+        prior_duplum_accrued_cents=state.prior_duplum_accrued_cents + closed.accrued_cents,
+        unbilled_duplum_episode=episode.episode_no,
+    )
+
+
+def _maybe_finish(
+    state: State,
+    agreement: Agreement,
+    day: date,
+    policy: Policy,
+    vat_rates: tuple[VatRate, ...],
+) -> State:
+    """Settle only when principal, accrued interest, and this month's service fee are paid.
+
+    A payment that clears the principal is not a settlement until the terminal
+    service fee has been levied and collected. Charging that fee is the day-1
+    full-month policy; a one-cent shortfall leaves the agreement open.
+    """
+    if state.status != "open" or state.principal_cents > 0:
+        return state
+    if any(charge.remaining_cents > 0 for charge in state.charges):
+        return state
+    suspense = state.suspense_cents
+    state = replace(state, suspense_cents=0)
+    state = _bill_interest(state, day, policy)
+    state = _levy_service(state, agreement, day, policy, vat_rates, settle=True)
+    if suspense:
+        state = allocate_payment(state, suspense).state
+    cleared = (
+        state.principal_cents == 0
+        and all(charge.remaining_cents == 0 for charge in state.charges)
+        and state.unbilled_ordinary == 0
+        and state.unbilled_duplum == 0
+    )
+    if not cleared:
+        return state
+    episode = _open_episode(state)
+    if episode is not None:
+        closed = replace(episode, closed_on=day)
+        state = replace(
+            state,
+            episodes=_replace_episode(state, closed),
+            prior_duplum_accrued_cents=state.prior_duplum_accrued_cents + closed.accrued_cents,
+        )
+    return replace(
+        state,
+        status="settled",
+        settled_on=day,
+        in_default=False,
+        unbilled_ordinary=Decimal("0"),
+        unbilled_duplum=Decimal("0"),
+    )
+
+
+def _fold_day(
+    state: State,
+    agreement: Agreement,
+    day: date,
+    events: tuple[Event, ...],
+    policy: Policy,
+    repos: tuple[RepoRate, ...],
+    vat_rates: tuple[VatRate, ...],
+    *,
+    settle: bool,
+) -> State:
+    if state.status != "open":
+        return state
+    if _overdue(state, day):
+        state = _open_default(state, day)
+    else:
+        state = replace(state, in_default=False)
+    state = _accrue(state, agreement, day, policy, repos)
+    state = _levy_initiation(state, agreement, day, policy, vat_rates)
+    upfront = tuple(event for event in events if isinstance(event, Payment) and event.purpose == "initiation_upfront")
+    ordinary = tuple(event for event in events if not (isinstance(event, Payment) and event.purpose == "initiation_upfront"))
+    for payment in upfront:
+        state = allocate_payment(state, payment.cents).state
+    if settle or day == month_end(day):
+        state = _bill_interest(state, day, policy)
+    state = _levy_service(state, agreement, day, policy, vat_rates, settle=settle)
+    for event in ordinary:
+        if isinstance(event, ManualCharge):
+            state = _levy_manual(state, event, policy, vat_rates)
+        elif isinstance(event, Payment):
+            state = allocate_payment(state, event.cents).state
+    # Bill a terminal service fee before default is closed, so a settlement on a
+    # default day still consumes in-duplum room. _maybe_finish only acts once
+    # principal and already-billed charges are clear.
+    state = _maybe_finish(state, agreement, day, policy, vat_rates)
+    state = _close_if_cured(state, day, policy)
+    return replace(state, as_of=day)
+
+
+def _events_on(events: tuple[Event, ...], day: date) -> tuple[Event, ...]:
+    return tuple(event for event in events if event.on == day and not isinstance(event, Settlement))
+
+
+def _fold_until(
+    agreement: Agreement,
+    events: tuple[Event, ...],
+    until: date,
+    policy: Policy,
+    repos: tuple[RepoRate, ...],
+    vat_rates: tuple[VatRate, ...],
+    *,
+    settle_on: date | None,
+) -> State:
+    if until < agreement.advance_date:
+        raise RuleError("term", "Cannot fold to a date before the advance.")
+    if agreement.product not in (Product.MICRO, Product.PERSONAL):
+        raise RuleError("product", "Only micro and personal agreements accrue on the loan ledger.")
+    state = _initial(agreement)
+    day = agreement.advance_date
+    while day <= until:
+        state = _fold_day(
+            state,
+            agreement,
+            day,
+            _events_on(events, day),
+            policy,
+            repos,
+            vat_rates,
+            settle=settle_on == day,
+        )
+        if state.status != "open":
+            return state
+        day += timedelta(days=1)
+    return state
+
+
+def _component_totals(state: State) -> tuple[tuple[str, int], ...]:
+    totals: dict[str, int] = {}
+    for charge in state.charges:
+        if charge.remaining_cents:
+            totals[charge.kind] = totals.get(charge.kind, 0) + charge.remaining_cents
+    if state.principal_cents:
+        totals["principal"] = state.principal_cents
+    return tuple(sorted(totals.items()))
+
+
+def quote_settlement(
+    agreement: Agreement,
+    events: tuple[Event, ...] = (),
+    *,
+    as_of: date,
+    delivered_on: date | None = None,
+    policy: Policy | None = None,
+    repos: tuple[RepoRate, ...] = (),
+    vat_rates: tuple[VatRate, ...] = DEFAULT_VAT,
+    holidays: frozenset[date] = frozenset(),
+) -> SettlementQuote:
+    """Section 125(2) amount, as of ``as_of``, made bindable by s 113.
+
+    Day-1 micro and personal agreements are small or intermediate, so the
+    s 125(2)(c) large-agreement early-termination charge is zero. A large
+    agreement is rejected at construction rather than quoted with an invented charge.
+    """
+    policy = policy or Policy()
+    delivered = delivered_on or as_of
+    if delivered < as_of:
+        raise RuleError("quote", "A settlement statement cannot be delivered before its as-of date.")
+    size = agreement_size(agreement.cash_advanced_cents, mortgage=agreement.mortgage)
+    if size == "large":
+        raise RuleError(
+            "early-termination-unlocked",
+            "The s 125(2)(c) three-month charge is not locked. Day-1 agreements must stay below R250,000.",
+        )
+    state = _fold_until(
+        agreement,
+        tuple(event for event in events if event.on <= as_of),
+        as_of,
+        policy,
+        repos,
+        vat_rates,
+        settle_on=as_of,
+    )
+    components = _component_totals(state)
+    interest = sum(amount for kind, amount in components if kind == "interest")
+    fees = sum(amount for kind, amount in components if kind not in ("interest", "principal"))
+    total = payoff_cents(state)
+    return SettlementQuote(
+        as_of=as_of,
+        delivered_on=delivered,
+        valid_until=binding_until(delivered, holidays),
+        principal_cents=state.principal_cents,
+        interest_cents=interest,
+        fee_cents=fees,
+        early_termination_cents=0,
+        total_cents=total,
+        agreement_size=size,
+        components=components,
+    )
+
+
+def execute_settlement(
+    agreement: Agreement,
+    quote: SettlementQuote,
+    payment_cents: int,
+    paid_on: date,
+    events: tuple[Event, ...] = (),
+    *,
+    policy: Policy | None = None,
+    repos: tuple[RepoRate, ...] = (),
+    vat_rates: tuple[VatRate, ...] = DEFAULT_VAT,
+) -> RunResult:
+    """Accept the quoted rand amount inside the s 113 window and stop further accrual.
+
+    A short payment, or a payment after the window, is an ordinary s 126 payment
+    and does not settle the agreement. Inside the window the quoted total does not
+    grow with later interest; the difference from a freshly computed payoff is waived.
+    """
+    policy = policy or Policy()
+    in_window = quote.delivered_on <= paid_on <= quote.valid_until
+    if payment_cents >= quote.total_cents and in_window:
+        naive = quote_settlement(
+            agreement,
+            events,
+            as_of=paid_on,
+            delivered_on=paid_on,
+            policy=policy,
+            repos=repos,
+            vat_rates=vat_rates,
+        )
+        state = _fold_until(
+            agreement,
+            tuple(event for event in events if event.on <= quote.as_of),
+            quote.as_of,
+            policy,
+            repos,
+            vat_rates,
+            settle_on=quote.as_of,
+        )
+        state = allocate_payment(state, quote.total_cents).state
+        surplus = payment_cents - quote.total_cents
+        if state.principal_cents != 0 or any(charge.remaining_cents > 0 for charge in state.charges):
+            raise RuleError(
+                "quote-mismatch",
+                "The quoted total did not clear the as-of balances. Refusing to mark the agreement settled.",
+            )
+        episode = _open_episode(state)
+        if episode is not None:
+            closed = replace(episode, closed_on=paid_on)
+            state = replace(
+                state,
+                episodes=_replace_episode(state, closed),
+                prior_duplum_accrued_cents=state.prior_duplum_accrued_cents + closed.accrued_cents,
+            )
+        waived = max(0, naive.total_cents - quote.total_cents)
+        state = replace(
+            state,
+            status="settled",
+            settled_on=paid_on,
+            as_of=paid_on,
+            in_default=False,
+            suspense_cents=state.suspense_cents + surplus,
+            waived_cents=waived,
+            unbilled_ordinary=Decimal("0"),
+            unbilled_duplum=Decimal("0"),
+        )
+        return RunResult(state)
+    # Not a binding settlement. Fold forward and treat the money as an ordinary payment.
+    ordinary = events + (Payment(paid_on, payment_cents),)
+    state = _fold_until(agreement, ordinary, paid_on, policy, repos, vat_rates, settle_on=None)
+    return RunResult(state)
+
+
+def run(
+    agreement: Agreement,
+    events: tuple[Event, ...] = (),
+    *,
+    until: date,
+    policy: Policy | None = None,
+    repos: tuple[RepoRate, ...] = (),
+    vat_rates: tuple[VatRate, ...] = DEFAULT_VAT,
+    settle_on: date | None = None,
+) -> RunResult:
+    """Fold ``agreement`` from the advance date through ``until`` inclusive."""
+    policy = policy or Policy()
+    if any(isinstance(event, Settlement) for event in events):
+        raise RuleError(
+            "settlement",
+            "Pass a settlement through execute_settlement so the s 113 window is checked explicitly.",
+        )
+    state = _fold_until(agreement, events, until, policy, repos, vat_rates, settle_on=settle_on)
+    return RunResult(state)
+
+
+def charge_remaining(state: State, kind: str) -> int:
+    return sum(charge.remaining_cents for charge in state.charges if charge.kind == kind)
+
+
+def episode_accrued(state: State, episode_no: int = 1) -> int:
+    for episode in state.episodes:
+        if episode.episode_no == episode_no:
+            return episode.accrued_cents
+    raise RuleError("duplum", f"No duplum episode {episode_no}.")
