@@ -80,6 +80,30 @@ Modules called (in order):
 
 Outcome: Flagged only. Balance not reopened. No recovery posted in the LMS.
 
+## 9. Daily calculation batch
+
+The batch runs for one organisation and one recognition date. The recognition date is 00:00 Africa/Johannesburg.
+
+Modules called (in order):
+
+1. Batch status records the start, with the actor and the Johannesburg start timestamp. If the start cannot be recorded, stop. No account is processed.
+2. For each account, in order:
+   1. Ledger.accrue_day
+   2. Ledger.bill_interest and Ledger.levy_service_fee (capitalise due amounts)
+   3. Default check
+3. Batch status records the finish timestamp, the number of accounts processed, the number of accounts that failed, and each failed account identifier and reason.
+4. The audit log records the outcome with the actor, the timestamp, and the outcome.
+
+If the batch does not finish, batch status raises an alert. A later recognition date does not start until that run is resolved by a finished run of the same recognition date, or the unfinished run is explicitly skipped.
+
+A batch that finishes with account failures has completed. Those failures stay on the batch record and in the audit log. Whether they block the next recognition date is not locked (docs/OPEN_ISSUES.md, J5). This flow does not block the next day for account failures alone.
+
+Not part of this flow: Servicing.accept_payment, collection-file generation, and statement generation. Servicing.accept_payment remains in section 1 and is not called here (docs/OPEN_ISSUES.md, J3). The default check is not named as Collections.observe (docs/OPEN_ISSUES.md, J4).
+
+The stored record and the operator query are in docs/batch-status/.
+
+Outcome: operators can read the last status, the last successful run, and the last failed run for the organisation.
+
 ## In-duplum flows
 
 | Flow | Trigger | What must hold |
