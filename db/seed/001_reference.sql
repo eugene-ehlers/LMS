@@ -134,7 +134,8 @@ INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('RETURNED_UNPAID_FLAGGED', 'operational'),
   ('RECOVERY_NOT_POSTED', 'operational'),
   ('REFERENCE_DATA_PUBLISHED', 'operational'),
-  ('SETTLEMENT_QUOTED', 'operational');
+  ('SETTLEMENT_QUOTED', 'operational'),
+  ('SETTLEMENT_READVANCE', 'operational');
 
 -- Table A as substituted by GN 1080, effective 6 May 2016.
 -- Margins are fractions: 0.21 means 21 percentage points over RR.
