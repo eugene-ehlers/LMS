@@ -136,7 +136,8 @@ INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('REFERENCE_DATA_PUBLISHED', 'operational'),
   ('SETTLEMENT_QUOTED', 'operational'),
   ('SETTLEMENT_REJECTED', 'operational'),
-  ('SETTLEMENT_READVANCE', 'operational');
+  ('SETTLEMENT_READVANCE', 'operational'),
+  ('IN_DUPLUM_CEILING', 'operational');
 
 INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('COLLECTION_CAMPAIGN_CHANGED', 'operational')

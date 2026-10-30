@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS batch_runs (
     finished_at TEXT,
     accounts_processed INTEGER NOT NULL,
     accounts_failed INTEGER NOT NULL,
+    accounts_at_ceiling INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL,
     actor_id TEXT NOT NULL,
     batch_failure_reason TEXT,
@@ -46,6 +47,8 @@ CREATE TABLE IF NOT EXISTS batch_runs (
     CHECK (accounts_processed >= 0),
     CHECK (accounts_failed >= 0),
     CHECK (accounts_failed <= accounts_processed),
+    CHECK (accounts_at_ceiling >= 0),
+    CHECK (accounts_at_ceiling <= accounts_processed),
     CHECK (
         (status = 'completed' AND finished_at IS NOT NULL)
         OR (status <> 'completed' AND finished_at IS NULL)
@@ -242,10 +245,10 @@ class BatchStore:
                                 INSERT INTO batch_runs (
                                     id, organisation_id, recognition_date, recognition_at,
                                     started_at, finished_at, accounts_processed,
-                                    accounts_failed, status, actor_id,
+                                    accounts_failed, accounts_at_ceiling, status, actor_id,
                                     batch_failure_reason, skipped_at, skipped_by,
                                     skip_reason, superseded_by_run_id, seq
-                                ) VALUES (?, ?, ?, ?, ?, NULL, 0, 0, ?, ?, NULL, NULL, NULL, NULL, NULL, ?)
+                                ) VALUES (?, ?, ?, ?, ?, NULL, 0, 0, 0, ?, ?, NULL, NULL, NULL, NULL, NULL, ?)
                                 """,
                                 (
                                     created_id,
@@ -303,7 +306,11 @@ class BatchStore:
             return reason, in_progress["id"]
 
     def record_progress(
-        self, run_id: str, accounts_processed: int, accounts_failed: int
+        self,
+        run_id: str,
+        accounts_processed: int,
+        accounts_failed: int,
+        accounts_at_ceiling: int = 0,
     ) -> bool:
         self._progress_writes += 1
         if "fail_progress" in self.faults and self._progress_writes >= 1:
@@ -312,10 +319,16 @@ class BatchStore:
             cursor = self._conn.execute(
                 """
                 UPDATE batch_runs
-                SET accounts_processed = ?, accounts_failed = ?
+                SET accounts_processed = ?, accounts_failed = ?, accounts_at_ceiling = ?
                 WHERE id = ? AND status = ?
                 """,
-                (accounts_processed, accounts_failed, run_id, STATUS_IN_PROGRESS),
+                (
+                    accounts_processed,
+                    accounts_failed,
+                    accounts_at_ceiling,
+                    run_id,
+                    STATUS_IN_PROGRESS,
+                ),
             )
             return cursor.rowcount == 1
 
@@ -329,6 +342,7 @@ class BatchStore:
         accounts_processed: int,
         accounts_failed: int,
         recorded_at: str,
+        accounts_at_ceiling: int = 0,
     ) -> bool:
         if "fail_failure_insert" in self.faults:
             raise PersistenceError("could not record account failure")
@@ -350,10 +364,16 @@ class BatchStore:
             cursor = self._conn.execute(
                 """
                 UPDATE batch_runs
-                SET accounts_processed = ?, accounts_failed = ?
+                SET accounts_processed = ?, accounts_failed = ?, accounts_at_ceiling = ?
                 WHERE id = ? AND status = ?
                 """,
-                (accounts_processed, accounts_failed, run_id, STATUS_IN_PROGRESS),
+                (
+                    accounts_processed,
+                    accounts_failed,
+                    accounts_at_ceiling,
+                    run_id,
+                    STATUS_IN_PROGRESS,
+                ),
             )
             if cursor.rowcount != 1:
                 raise PersistenceError("could not record account failure")
@@ -367,6 +387,7 @@ class BatchStore:
         accounts_failed: int,
         finished_at: str,
         actor_id: str,
+        accounts_at_ceiling: int = 0,
     ) -> BatchRun | None:
         if "fail_finish" in self.faults:
             raise PersistenceError("batch finish could not be recorded")
@@ -386,7 +407,8 @@ class BatchStore:
             cursor = self._conn.execute(
                 """
                 UPDATE batch_runs
-                SET status = ?, finished_at = ?, accounts_processed = ?, accounts_failed = ?
+                SET status = ?, finished_at = ?, accounts_processed = ?,
+                    accounts_failed = ?, accounts_at_ceiling = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
@@ -394,6 +416,7 @@ class BatchStore:
                     finished_at,
                     accounts_processed,
                     accounts_failed,
+                    accounts_at_ceiling,
                     run_id,
                     STATUS_IN_PROGRESS,
                 ),
@@ -415,7 +438,9 @@ class BatchStore:
                 resolved_by=actor_id,
             )
             outcome = outcome_for(STATUS_COMPLETED, accounts_failed)
-            detail = self._finish_detail(run_id, accounts_processed, accounts_failed)
+            detail = self._finish_detail(
+                run_id, accounts_processed, accounts_failed, accounts_at_ceiling
+            )
             self._insert_audit(
                 organisation_id=current["organisation_id"],
                 actor_id=actor_id,
@@ -435,6 +460,7 @@ class BatchStore:
         accounts_failed: int,
         recorded_at: str,
         actor_id: str,
+        accounts_at_ceiling: int = 0,
     ) -> BatchRun | None:
         with self._transaction():
             current = self._conn.execute(
@@ -452,7 +478,7 @@ class BatchStore:
                 """
                 UPDATE batch_runs
                 SET status = ?, batch_failure_reason = ?,
-                    accounts_processed = ?, accounts_failed = ?
+                    accounts_processed = ?, accounts_failed = ?, accounts_at_ceiling = ?
                 WHERE id = ? AND status = ?
                 """,
                 (
@@ -460,6 +486,7 @@ class BatchStore:
                     reason,
                     accounts_processed,
                     accounts_failed,
+                    accounts_at_ceiling,
                     run_id,
                     STATUS_IN_PROGRESS,
                 ),
@@ -720,6 +747,7 @@ class BatchStore:
             finished_at=row["finished_at"],
             accounts_processed=row["accounts_processed"],
             accounts_failed=row["accounts_failed"],
+            accounts_at_ceiling=row["accounts_at_ceiling"],
             status=row["status"],
             outcome=outcome_for(row["status"], row["accounts_failed"]),
             actor_id=row["actor_id"],
@@ -892,12 +920,17 @@ class BatchStore:
             )
 
     def _finish_detail(
-        self, run_id: str, accounts_processed: int, accounts_failed: int
+        self,
+        run_id: str,
+        accounts_processed: int,
+        accounts_failed: int,
+        accounts_at_ceiling: int,
     ) -> str:
         parts = [
             "daily calculation batch finished",
             f"accounts_processed={accounts_processed}",
             f"accounts_failed={accounts_failed}",
+            f"accounts_at_ceiling={accounts_at_ceiling}",
         ]
         rows = self._conn.execute(
             """

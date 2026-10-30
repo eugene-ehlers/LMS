@@ -118,6 +118,9 @@ class Servicing:
     collection_campaigns: CollectionCampaigns | None = None
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.ledger.audit = self.audit
+
     def book(
         self,
         *,

@@ -47,3 +47,16 @@ class DailyCalculation(Protocol):
         recognition_at: datetime,
     ) -> None:
         """Morning default check for one account."""
+
+    def account_hit_in_duplum_ceiling(
+        self,
+        *,
+        organisation_id: str,
+        account_id: str,
+    ) -> bool:
+        """True when this account's open episode has reached the in-duplum ceiling.
+
+        The batch counts a true result. It does not treat the account as failed.
+        A calculation that does not track the ceiling returns false.
+        """
+        return False

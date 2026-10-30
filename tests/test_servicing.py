@@ -8,12 +8,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from lms.ledger.errors import LedgerError
 from lms.servicing.api import dispatch
 from lms.servicing.enigma import EnigmaStub
 from lms.servicing.errors import ServicingError
 from lms.servicing.service import Servicing
-from lms_config.locked import OrganisationSettings
+from lms_config.locked import IN_DUPLUM_CLIP_POSTS, OrganisationSettings
 from lms_config.templates import micro_short_term
 
 JOHANNESBURG = ZoneInfo("Africa/Johannesburg")
@@ -314,8 +313,7 @@ def test_routes_book_and_reject_a_missing_election():
     assert rejected["code"] == "election-unset"
 
 
-def test_clip_is_not_invoked():
+def test_clip_is_on_for_day_1():
     svc = servicing()
-    with pytest.raises(LedgerError) as caught:
-        svc.ledger.clip_in_duplum()
-    assert caught.value.code == "in-duplum-clip-off"
+    assert IN_DUPLUM_CLIP_POSTS is True
+    svc.ledger.clip_in_duplum()
