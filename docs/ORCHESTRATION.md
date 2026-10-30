@@ -4,7 +4,7 @@ Standing reference for the order in which modules are called when an event occur
 All future agents, chats and developers must follow these flows.
 If a flow is contradictory, confusing, incorrect or missing, raise it explicitly so this document can be updated.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Standing instruction for all agents
 
@@ -72,6 +72,8 @@ Modules called (in order):
 
 Outcome: Quote binds for five business days. Early-termination charge is R0 for Day-1.
 
+The settlement route calls those two methods in that order. It refuses the quote when the totals or the valid-until dates differ. `Ledger.quote_settlement` delegates to the calculation engine and does not keep a second formula. Five business days is section 113, through `binding_until`. The caller supplies the holiday set. No holiday calendar is assumed. A missing required election, a missing VAT rate, or a missing NCR number on a short-term or unsecured agreement fails closed. The quote does not post.
+
 ## 8. Returned unpaid after write-off
 
 Modules called (in order):
@@ -121,6 +123,19 @@ Modules called (in order):
 8. The outcome is returned (success with a confirmation, or failure with a specific reason) and written to the audit log.
 
 Outcome: New agreement linked to the original. Original marked restructured. Balance transferred. Contractual instalment stored.
+
+## 11. Settlement receipt
+
+This is not section 2. An ordinary receipt does not pay principal that is not yet due. A short receipt, a surplus, or a receipt outside the quote window is not posted on this path, and it is not turned into an ordinary payment.
+
+Modules called (in order):
+1. Ledger.accrue_day, once for each day from disbursement through the quote as-of date
+2. Ledger.bill_interest, then Ledger.levy_service_fee, on each month-end in that span and on the quote as-of date
+3. Ledger.post_settlement
+
+Outcome: The receipt must equal the quoted amount in cents. Its value date must fall on or between the delivery date and valid-until. Interest is the interest in the quote. Days after the quote as-of date, and before a later receipt inside the window, are not accrued. The service fee in the settlement month is the full monthly fee. The opening month keeps the locked fraction and is not shortened to the settlement day. When the balance is R0 the agreement is marked settled. A receipt that does not match is not allocated.
+
+Capitalise-then-allocate is Decision 1. The value date is 00:00 Africa/Johannesburg. The allocation order is Decision 8, and it includes principal that is not yet due, because this receipt is the section 125 settlement. The early-termination charge stays R0. A booked initiation amount that differs from the statutory figure in the quote fails closed. The difference is not posted. Gaps for this path are F1 to F7 in docs/OPEN_ISSUES.md.
 
 ## In-duplum flows
 

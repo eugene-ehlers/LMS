@@ -8,7 +8,7 @@ Each issue is classified as:
 - **Code change**: existing code must be updated before production.
 - **Database change**: a schema or migration change is required before production.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Dummies (Agent A)
 
@@ -70,12 +70,11 @@ Last updated: 2026-10-28
 
 ## Merged smoke
 
-These rows are the contradictions the seven-path smoke produced. C4 and C6 were hit again and are not repeated here. Existing rows were not closed.
+These rows are the contradictions the seven-path smoke produced. C4 and C6 were hit again and are not repeated here. S1 was closed by the early-settlement path. S2 and S3 remain.
 
 | ID | Issue | Classification | What must change |
 |----|-------|----------------|------------------|
-| S1 | Orchestration section 7 calls Ledger.quote_settlement, then Documents.settlement_quote. Ledger has no quote_settlement. Documents.settlement_quote calls the calculation engine and does not post. | Code change | Add the ledger method the flow names, or correct section 7 so it names the calculation engine. Do not add a second quote formula. |
-| S2 | A settlement quote on 15 May 2026 included initiation of 30 475 cents. The agreement was booked with an initiation fee of 0 cents. The quote builds an engine agreement without that booked amount, and the engine prices the statutory initiation formula. The fee was not posted. | Code change | Pass the booked initiation amount into the quote, or record that a booked zero still means the statutory formula. |
+| S2 | A settlement quote prices the statutory initiation formula, including VAT when the caller supplies a rate. The ledger stores the booked initiation cents and does not add VAT on top. Booking rejects an initiation amount above the ex-VAT cap, so the statutory consumer total cannot be booked through Servicing.book. The 15 May 2026 smoke quote included initiation of 30 475 cents on an agreement booked at 0. On 10 April 2026 the same formula quoted 17 250 cents. A booked zero left the capitalised ledger at 120 467 cents. Booking the ex-VAT cap of 15 000 cents left 135 467 cents. Execute now fails closed with quote-mismatch and does not post the difference. Which figure is the amount owing is still open. | Code change | Pass the booked initiation amount into the quote, or record that the statutory formula, including VAT, is the amount owing and say how that fee is posted when booking stored a lower figure. |
 | S3 | The 1 May interest memo after the R219 receipt was 3.1451612903 rands, on the R1 950 left after the receipt. Sections 1 and 8 treat the day as 00:00 and capitalise before allocating. The receipt path posted before the statement accrued that day. A memo on the R2 000 balance at the start of the day would be 3.2258064516 rands. The memo was not billed. | Rule change | Say which flow wins when a receipt and that day's accrual share a recognition date. |
 
 ## Daily batch status (Agent J)
@@ -113,20 +112,34 @@ These rows are the contradictions the seven-path smoke produced. C4 and C6 were 
 | G10 | A naive `recognised_at` is reported on the response and is not written to the audit log, because Decision 1 gives it no Johannesburg day. | Code change | Keep the failure visible to operators once a timestamp rule for an unusable clock is locked. |
 
 Open points D1 and D3 and open issue C4 apply here and are not repeated. D1: the rate integer is stored and is not a locked wire format. D3: an identity that differs from the original freeze fails closed. C4: an unset residual threshold fails closed and is not filled with R100.
+S1 is closed. `Ledger.quote_settlement` delegates to the calculation engine. `Documents.settlement_quote` calls that method. There is still one quote formula.
+
+## Early settlement (Agent F)
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| F1 | The five-business-day quote window is orchestration section 7 and section 113 (`binding_until`). It is not a numbered paragraph in the locked decisions. | Decide later | Add the window to the locked decisions when that text is next revised. Do not treat this row as a new lock. |
+| F2 | Decision 1 does not say whether interest inside the five-day window runs to the quote as-of date or to a later receipt date. This path keeps the quoted as-of amount and does not accrue the days in between. | Rule change | Say which date is the settlement date for interest. |
+| F3 | A receipt above the quote has no locked home on this path. Decision 4 sends an ordinary surplus to Laybye and consolidates when the Laybye covers the settlement balance. That consolidation is not this receipt. The surplus is refused and not allocated. | Decide later | Lock where a settlement surplus goes, or confirm that only an exact match is a settlement. |
+| F4 | The calculation engine closes an open in-duplum episode when it settles. This path does not. Decision 7 depends on the trigger, and a settlement is not named as a close. | Rule change | Say whether settlement closes an open episode. |
+| F5 | `Documents.settlement_quote` does not take repo rows. The quote route rejects a non-empty repo list. An unsecured execute can still accrue with repos, then fail closed when that accrual does not match the quote. | Code change | Give the quote the same repo rows the accrual uses, or reject repos on execute as well. |
+| F6 | A naive recognition timestamp, and an unknown agreement id, are returned as failures and are not written to the audit log. The log needs an organisation and an aware timestamp. | Code change | Seal those two failures once there is a defined actor and an aware timestamp to attach. |
+| F7 | The calculation engine rounds each interest bill and clears the unbilled remainder. The ledger rounds the cumulative memo. On 1 March to 10 April 2026 the two totals matched (6 667 cents). A one-cent difference fails closed. No balancing journal is posted. | Code change | Use one rounding rule for both books, or record that a one-cent difference stays a refusal. |
+
 
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
-| Decide later | 14 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 23 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
-| Code change | 15 | Update the existing functions, or restore the locked document. |
+| Decide later | 16 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 25 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
+| Code change | 17 | Update the existing functions, or restore the locked document. |
 | Database change | 1 | Add a classification column. |
 
 All agents have completed. All issues are recorded so they can be closed in a single pass before production.
-S1 to S6 under Collection-process removal were found while removing collection-process state. They are not new rules.
-The merged smoke added C7, N6, and its own S1, S2, and S3. It did not close any existing row.
-Collection-process removal and the merged smoke both used S1, S2, and S3. The section heading identifies which gap. No id was renumbered and no row was closed.
+S1 to S6 under Collection-process removal were found while removing collection-process state. They are not new rules. That S1 stays open.
+The merged smoke added C7, N6, and its own S1, S2, and S3. Early settlement closed the merged-smoke S1 by adding Ledger.quote_settlement. The collection-process S1 is a different gap and stays open. S2 and S3 in the merged-smoke section remain. No id was renumbered.
 J1 to J12 are the daily-batch gaps. They are not new rules. J1 records that main's locked file was a stub. This tree already has the restored document through section 28. That row is not closed here.
 G1 to G10 are the restructure gaps. They are not new rules. G1 records that main's locked file was a pointer. This tree already has the restored document. That row is not closed here.
-The restructure flow is orchestration section 10 because section 9 is the daily calculation batch. The steps are unchanged.
+The restructure flow is orchestration section 10. The daily batch is section 9. The settlement receipt is section 11. The steps are unchanged.
+F1 to F7 are the early-settlement gaps. They are not new rules. docs/LOCKED_DECISIONS.md was not edited by that path.
