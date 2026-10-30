@@ -18,7 +18,6 @@ from uuid import uuid4
 
 from lms.calc.calendar import binding_until, month_end
 from lms.calc.interest import nominal_annual_rate, periods_per_year
-from lms.calc.ledger import quote_settlement
 from lms.calc.models import (
     Agreement,
     FeeCapBasis,
@@ -201,7 +200,7 @@ class Documents:
         holidays: frozenset[date],
         vat_rate: Decimal | None = None,
     ) -> StoredQuote:
-        """Section 113 quote from ``quote_settlement``. Day-1 early termination is R0.
+        """Section 113 quote from ``Ledger.quote_settlement``. Day-1 early termination is R0.
 
         ``valid_until`` is the engine's ``binding_until`` result: five business
         days after delivery. This method does not post the settlement.
@@ -214,6 +213,12 @@ class Documents:
             raise DocumentsError("holidays-unset", "Public holidays were not supplied. No calendar is assumed.")
         if record.ledger_loan_id is None or record.disbursement_value_date is None:
             raise DocumentsError("status", "The agreement has not been disbursed.")
+        if vat_rate is None:
+            raise DocumentsError(
+                "vat-rate-unset",
+                "LOCKED_DECISIONS §9 does not store a VAT rate. "
+                "A settlement quote fails closed until the caller supplies one.",
+            )
         cached = self.quotes.get((agreement_id, as_of, delivered_on))
         if cached is not None:
             return cached
@@ -237,7 +242,7 @@ class Documents:
             )
             if vat_rates is not None:
                 kwargs["vat_rates"] = vat_rates
-            quote = quote_settlement(agreement, events, **kwargs)
+            quote = self.ledger.quote_settlement(agreement, events, **kwargs)
         except (RuleError, CalculationInputError) as exc:
             code = getattr(exc, "code", None) or "quote"
             raise DocumentsError(code, str(exc)) from exc

@@ -134,7 +134,8 @@ INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('RETURNED_UNPAID_FLAGGED', 'operational'),
   ('RECOVERY_NOT_POSTED', 'operational'),
   ('REFERENCE_DATA_PUBLISHED', 'operational'),
-  ('SETTLEMENT_QUOTED', 'operational');
+  ('SETTLEMENT_QUOTED', 'operational'),
+  ('SETTLEMENT_REJECTED', 'operational');
 
 INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('COLLECTION_CAMPAIGN_CHANGED', 'operational')
