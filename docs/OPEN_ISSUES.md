@@ -55,13 +55,32 @@ Last updated: 2026-10-28
 | R1 | Decision 21 says "micro" and "Laybye/BNPL". The ledger stores short_term, unsecured, zero_cost, and cpa_layby. pure_hosting is not a column. The map is not locked. A missing pure_hosting value fails closed when a row would require the number. | Rule change | Lock the classification map in Decision 21. Add pure_hosting as a column or as a value that the extract can read. |
 | R2 | The ledger can post a full write-off journal. The Form 39 write-off cell stays empty. | Decide later | Lock whether Form 39 should include write-offs when the real Form 39 layout is confirmed. |
 
+## Restructure (Agent G)
+
+`docs/LOCKED_DECISIONS.md` on this branch does not contain the locked text. It points at `/tmp/locked_updated.md`, which is not in the repository. The restructure path followed the last complete copy (commit `401b3c1`) and section 28 on `cursor/restore-locked-decisions-ccde`. It did not edit the locked file.
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| G1 | `docs/LOCKED_DECISIONS.md` on main is a pointer, not the decisions. | Rule change | Restore the decision text. Pull request 35 proposes that restore. |
+| G2 | Decision 25 does not say whether a restructure agreement receives a new loan number. | Decide later | Lock the loan-number rule. This path does not allocate a loan number. |
+| G3 | Decision 13 requires an in-Act check of the supplied rate. This path stores the rate and does not run that check. | Code change | Run the calculation-engine check when that engine is on this branch. Do not add a new maximum here. |
+| G4 | Decision 23 does not name the role that may restructure. | Rule change | Name the role. This path records the roles presented and does not invent a role name. |
+| G5 | A payment-frequency change alone is not locked as a restructure or as a collection campaign. | Rule change | Lock the classification. This path fails closed and creates no agreement. |
+| G6 | The ledger stores a balance as the sum of entries. This path transfers the outstanding balance it is given. | Code change | Post the transfer as ledger entries when the branches are combined. |
+| G7 | The new agreement's live status token is not locked. | Decide later | Lock the token. This path stores `active`. The original is stored as `restructured`. |
+| G8 | This path freezes elections it is given. It does not read the organisation or product election store. | Code change | Resolve Decision 19 from that store when it is on this branch. Missing values already fail closed. |
+| G9 | Decision 28's five-business-day notice is locked for a collection campaign. It is not locked for a consented restructure. | Decide later | This path requires consent and does not add a notice interval. |
+| G10 | A naive `recognised_at` is reported on the response and is not written to the audit log, because Decision 1 gives it no Johannesburg day. | Code change | Keep the failure visible to operators once a timestamp rule for an unusable clock is locked. |
+
+Open points D1 and D3 and open issue C4 apply here and are not repeated. D1: the rate integer is stored and is not a locked wire format. D3: an identity that differs from the original freeze fails closed. C4: an unset residual threshold fails closed and is not filled with R100.
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
-| Decide later | 9 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 7 | Update docs/LOCKED_DECISIONS.md. |
-| Code change | 3 | Update the existing functions. |
+| Decide later | 11 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 11 | Update docs/LOCKED_DECISIONS.md. |
+| Code change | 7 | Update the existing functions. |
 | Database change | 1 | Add a classification column. |
 
-All agents have completed. All issues are recorded so they can be closed in a single pass before production.
+Agents A to F had completed. Agent G recorded the restructure issues above. All issues are recorded so they can be closed in a single pass before production.

@@ -80,6 +80,24 @@ Modules called (in order):
 
 Outcome: Flagged only. Balance not reopened. No recovery posted in the LMS.
 
+## 9. Restructure requested
+
+A restructure changes the contractual term or the contractual instalment. It is not a collection campaign, an early settlement, or a settlement re-advance.
+
+This flow was missing. The steps below are the restructure instruction and Decisions 13, 16, 19, and 23. No other step is included.
+
+Modules called (in order):
+1. Client consent is checked. The consent flag and the consent date are stored. Missing consent fails closed.
+2. Required elections are checked. A missing election fails closed. The elections that pass are frozen on the new agreement.
+3. Identity fields (name, ID number, service address) are frozen on the new agreement.
+4. The decision engine supplies the new rate, term, and instalment. The LMS stores those values. It does not re-decide concurrent, subsequent, or restructure rules.
+5. A new agreement is created and linked to the original.
+6. The original agreement is marked restructured. Its balance, in integer cents, is transferred to the new agreement.
+7. The new contractual instalment is stored.
+8. The outcome is returned (success with a confirmation, or failure with a specific reason) and written to the audit log.
+
+Outcome: New agreement linked to the original. Original marked restructured. Balance transferred. Contractual instalment stored.
+
 ## In-duplum flows
 
 | Flow | Trigger | What must hold |
