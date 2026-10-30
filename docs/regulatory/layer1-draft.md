@@ -124,5 +124,5 @@ The trailer carries the predecessor (`predecessor_event_id`, `predecessor_row_ha
 | RX41 | The Python ledger does not insert `lms.audit_event`. `Servicing.audit` (`AuditLog`) is the in-process hook this layer reads. A database caller inserts `lms.audit_event`. |
 | RX52 | `ComplianceStore.put` and the SQL check reject a blank NCR number for every organisation. Decision 21 allows a blank number for pure hosting and Laybye/BNPL. A missing row is how those extracts proceed. A stored blank number is not representable. |
 | RX53 | A linked lay-by parent is `short_term` (§4) and requires an NCR number. `cpa_layby` and `zero_cost` do not. Decision 21's word "Laybye" is not defined as the linked parent. |
-| RX54 | Decisions 8 and 19 set the residual write-off default at R100. `resolve_residual_threshold_cents` on this branch still writes 5 000 cents when both levels are null, and its comment still cites R50. The extracts do not write off and do not apply the threshold. |
+| RX54 | Closed for the resolver. `resolve_residual_threshold_cents` fills 10 000 cents when both levels are null. The extracts do not write off and do not apply the threshold. |
 | RX55 | §6 now has two default concepts. The ledger morning check on this branch is still one test. Status codes stay unset. |

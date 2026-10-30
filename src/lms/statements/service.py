@@ -817,10 +817,43 @@ def _engine_agreement(record: AgreementRecord, account: LoanAccount) -> Agreemen
         maturity_date=account.contractual_end,
         agreed_monthly_rate=account.snapshot.base_rate if product == Product.MICRO else None,
         margin_annual=account.snapshot.base_rate if product == Product.PERSONAL else Decimal("0.21"),
-        principal_instalments=tuple((slice_.due_on, slice_.amount_cents) for slice_ in account.slices),
+        principal_instalments=_quote_instalments(record, account),
         campaign_interest_discount=account.snapshot.discount_rate,
         initiation_capitalised=account.snapshot.initiation_capitalised,
+        booked_initiation_ex_vat_cents=record.initiation_fee_cents,
     )
+
+
+def _quote_instalments(record: AgreementRecord, account: LoanAccount) -> tuple[tuple[date, int], ...]:
+    """Principal slices the quote may capitalise onto.
+
+    A capitalised initiation fee is already inside the booked loan value.
+    Those slices are reduced by the booked ex-VAT fee so the quote adds
+    that fee once, with VAT, and does not add it again.
+    """
+    lines = tuple(sorted((slice_.due_on, slice_.amount_cents) for slice_ in account.slices))
+    if not account.snapshot.initiation_capitalised or record.initiation_fee_cents == 0:
+        return lines
+    remaining = record.initiation_fee_cents
+    adjusted: list[tuple[date, int]] = []
+    for index, (due, amount) in enumerate(lines):
+        last = index == len(lines) - 1
+        room = amount if last else max(amount - 1, 0)
+        take = min(remaining, room)
+        if amount - take <= 0:
+            raise DocumentsError(
+                "initiation",
+                "The capitalised initiation fee is already in the loan value, "
+                "and removing it would drop a principal instalment.",
+            )
+        adjusted.append((due, amount - take))
+        remaining -= take
+    if remaining != 0 or sum(amount for _, amount in adjusted) != record.cash_advanced_cents:
+        raise DocumentsError(
+            "initiation",
+            "The loan principal does not equal the cash advanced plus the capitalised initiation fee.",
+        )
+    return tuple(adjusted)
 
 
 def _policy(account: LoanAccount, service_fee_monthly_cents: int) -> Policy:

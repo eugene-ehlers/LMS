@@ -334,38 +334,49 @@ def _fail_closed(smoke: Smoke, servicing: Servicing, collections: Collections) -
         f"book with the elections set: trigger {bare.resolved.in_duplum_trigger!r}, "
         f"residual {bare.resolved.residual_write_off_threshold_cents}"
     )
-    unset = servicing.book(
+    try:
+        servicing.book(
+            organisation_id=ORG,
+            person_id="person-trigger-unset",
+            product=micro_short_term(),
+            settings=_settings(in_duplum_trigger=None, residual_write_off_threshold_cents=None),
+            recognised_at=to_recognition_instant(date(2026, 4, 1)),
+            cash_advanced_cents=CASH,
+            frequency="monthly",
+            schedule=((date(2026, 5, 1), CASH),),
+            initiation_fee_cents=0,
+            quoted_disbursement=date(2026, 4, 1),
+            idempotency_key="book-trigger-unset",
+        )
+        smoke.fail("booking with the in-duplum trigger omitted succeeded")
+    except Exception as exc:
+        code = getattr(exc, "code", type(exc).__name__)
+        smoke.say(f"fail closed, trigger omitted at book: {code}: {exc}")
+        if code != "election-unset":
+            smoke.fail(f"trigger omitted at book raised {code}")
+    residual_only = servicing.book(
         organisation_id=ORG,
-        person_id="person-trigger-unset",
+        person_id="person-residual-default",
         product=micro_short_term(),
-        settings=_settings(in_duplum_trigger=None, residual_write_off_threshold_cents=None),
+        settings=_settings(residual_write_off_threshold_cents=None),
         recognised_at=to_recognition_instant(date(2026, 4, 1)),
         cash_advanced_cents=CASH,
         frequency="monthly",
         schedule=((date(2026, 5, 1), CASH),),
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
-        idempotency_key="book-trigger-unset",
+        idempotency_key="book-residual-default",
     )
     smoke.say(
-        f"book with trigger and residual omitted: status {unset.status}, "
-        f"stored trigger {unset.resolved.in_duplum_trigger!r}, "
-        f"stored residual {unset.resolved.residual_write_off_threshold_cents}"
+        f"book with residual omitted: stored residual {residual_only.resolved.residual_write_off_threshold_cents}"
     )
-    if unset.resolved.in_duplum_trigger is None:
-        smoke.gap(
-            "Decision 19 says an unset in-duplum trigger fails closed. "
-            "Servicing.book stored None and returned the agreement. "
-            "Event: book with in_duplum_trigger omitted."
-        )
-    if unset.resolved.residual_write_off_threshold_cents != RESIDUAL:
-        smoke.gap(
-            "Decision 8 and Decision 19 name a residual default of R100 and also say unset fails closed. "
-            f"resolve stored {unset.resolved.residual_write_off_threshold_cents} cents when both levels were null. "
-            "Event: book with residual_write_off_threshold_cents omitted. Already C4 and C6."
+    if residual_only.resolved.residual_write_off_threshold_cents != 10_000:
+        smoke.fail(
+            "an unset residual did not fill R100. "
+            f"stored {residual_only.resolved.residual_write_off_threshold_cents} cents."
         )
     try:
-        collections.bind(unset.agreement_id, in_duplum_trigger=None, residual_threshold_cents=RESIDUAL)
+        collections.bind(bare.agreement_id, in_duplum_trigger=None, residual_threshold_cents=RESIDUAL)
         smoke.fail("bind with an unset trigger succeeded")
     except CollectionsError as exc:
         smoke.say(f"fail closed, bind without trigger: {exc.code}")
@@ -373,6 +384,8 @@ def _fail_closed(smoke: Smoke, servicing: Servicing, collections: Collections) -
             smoke.fail(f"bind without trigger raised {exc.code}")
     filled = resolve_residual_threshold_cents(None, None)
     smoke.say(f"resolve_residual_threshold_cents(None, None) = {filled}")
+    if filled != 10_000:
+        smoke.fail(f"resolve_residual_threshold_cents(None, None) = {filled}")
     try:
         documents_vat = Documents(servicing, ComplianceStore())
         documents_vat.compliance.put(_compliance())
@@ -1028,11 +1041,11 @@ def _pin(smoke: Smoke) -> None:
         "quote": (
             200_000,
             14_839,
-            44_275,
+            13_800,
             0,
-            259_114,
+            228_639,
             "2026-05-22",
-            (("initiation", 30_475), ("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
+            (("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
         ),
         "collections": (200_000, 200_000, 196_900, 0, 0, True, 196_900),
         "write_off": (

@@ -36,7 +36,7 @@ from lms.calc.models import (
     VatRate,
     agreement_size,
 )
-from lms.calc.money import RuleError, cents_to_rands, split_inclusive, to_cents
+from lms.calc.money import RuleError, add_vat, cents_to_rands, split_inclusive, to_cents
 
 DEFAULT_VAT: tuple[VatRate, ...] = (VatRate(date(2018, 4, 1), Decimal("0.15")),)
 
@@ -425,6 +425,19 @@ def _priced_initiation(
     policy: Policy,
     vat_rates: tuple[VatRate, ...],
 ) -> tuple[int, int, int]:
+    """Price initiation for accrual and for a settlement quote.
+
+    A booked amount is the agreement's ex-VAT initiation fee. VAT is added
+    on that amount, including when the provider election would otherwise
+    drop VAT, because the client remains accountable for the VAT portion.
+    None keeps the statutory cap for callers that are not quoting a booked fee.
+    """
+    booked = agreement.booked_initiation_ex_vat_cents
+    if booked is not None:
+        rate = vat_on(day, vat_rates)
+        if agreement.campaign_initiation_discount_cents:
+            return apply_ex_vat_discount(booked, rate, agreement.campaign_initiation_discount_cents)
+        return add_vat(booked, rate)
     ex_vat, vat, total = initiation_fee(
         agreement.cash_advanced_cents,
         on=day,

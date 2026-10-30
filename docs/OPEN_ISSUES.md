@@ -8,7 +8,7 @@ Each issue is classified as:
 - **Code change**: existing code must be updated before production.
 - **Database change**: a schema or migration change is required before production.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Dummies (Agent A)
 
@@ -36,10 +36,10 @@ Last updated: 2026-10-28
 | C1 | Fall-away choice and trigger are stored on the campaign and also as an organisation election with a product override. The lock does not say which value applies when they differ. | Rule change | Add a sentence to Decision 3 or Decision 19 that names the precedence (campaign value wins, or organisation value wins). |
 | C2 | The lock does not say which campaign applies when more than one period contains the recognition date. Intake stores nothing. | Rule change | Lock the rule (most recent campaign, or fail closed) in Decision 3. |
 | C3 | The lock does not say whether a qualifying loan keeps the decision-engine rate or uses the campaign net. Both are stored. | Rule change | Lock the rule in Decision 3 or Decision 13. |
-| C4 | Decision 8 names a residual default of R100. Decision 19 says an unset election fails closed and also names that default. A null threshold is left unset and resolve fails. | Rule change | Decide whether R100 is a platform default that fills when unset, or whether unset always fails closed. Update Decision 8 or Decision 19. |
+| C4 | Decision 8 names a residual default of R100. Decision 19 says an unset election fails closed and also names that default. A null threshold is left unset and resolve fails. | Closed | Decision 19 now says the platform default is R100 and an unset organisation or product value fills R100. |
 | C5 | campaign_rate still rejects a discount above the base. | Code change | Update campaign_rate to floor the net at 0 % instead of rejecting the pair. |
-| C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Code change | Update the function to fail closed or to fill R100, depending on the resolution of C4. |
-| C7 | Decision 19 says an unset in-duplum trigger fails closed. Servicing.book stores None and returns the agreement. Collections.bind then fails with trigger-unset. | Rule change | Say whether booking itself must reject a missing trigger, or only a collections call that uses it. |
+| C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Closed | The function fills R100 (10 000 cents) when both levels are null. A stored value, including zero, still wins. |
+| C7 | Decision 19 says an unset in-duplum trigger fails closed. Servicing.book stores None and returns the agreement. Collections.bind then fails with trigger-unset. | Closed | Decision 19 says booking fails closed if the trigger is unset. Servicing.book refuses a missing trigger. |
 
 ## Payment rails (Agent C)
 
@@ -64,16 +64,23 @@ These rows are the contradictions the seven-path smoke produced. C4 and C6 were 
 | ID | Issue | Classification | What must change |
 |----|-------|----------------|------------------|
 | S1 | Orchestration section 7 calls Ledger.quote_settlement, then Documents.settlement_quote. Ledger has no quote_settlement. Documents.settlement_quote calls the calculation engine and does not post. | Code change | Add the ledger method the flow names, or correct section 7 so it names the calculation engine. Do not add a second quote formula. |
-| S2 | A settlement quote on 15 May 2026 included initiation of 30 475 cents. The agreement was booked with an initiation fee of 0 cents. The quote builds an engine agreement without that booked amount, and the engine prices the statutory initiation formula. The fee was not posted. | Code change | Pass the booked initiation amount into the quote, or record that a booked zero still means the statutory formula. |
+| S2 | A settlement quote on 15 May 2026 included initiation of 30 475 cents. The agreement was booked with an initiation fee of 0 cents. The quote builds an engine agreement without that booked amount, and the engine prices the statutory initiation formula. The fee was not posted. | Closed | The quote uses the booked initiation fee. A capitalised fee is already in the loan value and is not added again. A fee that is not capitalised is added for the outstanding portion, with VAT. |
 | S3 | The 1 May interest memo after the R219 receipt was 3.1451612903 rands, on the R1 950 left after the receipt. Sections 1 and 8 treat the day as 00:00 and capitalise before allocating. The receipt path posted before the statement accrued that day. A memo on the R2 000 balance at the start of the day would be 3.2258064516 rands. The memo was not billed. | Rule change | Say which flow wins when a receipt and that day's accrual share a recognition date. |
+
+## Rate or fee change
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| H2 | Section 104(2) for a non-campaign change is not its own locked section. Decision 28 states the five-business-day sentence inside collection campaigns. | Closed | Decision 29 says a non-campaign rate or fee change also requires a written notice of at least five business days before it takes effect (section 104(2)). |
+| H3 | When a temporary reduction ends, resuming the original rate could be read as an increase. The brief requires the resume and does not take a second notice. | Closed | Decision 29 stores a temporary reduction as a concession or discount that goes to zero when the period ends. The original contractual rate and fees stay effective. Resuming them does not require a second notice. An interest-rate change does not change the contractual instalment. Collection campaigns on this tree already store the reduction separately and leave the contractual rate, fees, and instalment in place. |
 
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
 | Decide later | 8 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 10 | Update docs/LOCKED_DECISIONS.md. |
-| Code change | 6 | Update the existing functions. |
+| Rule change | 8 | Update docs/LOCKED_DECISIONS.md. |
+| Code change | 4 | Update the existing functions. |
 | Database change | 1 | Add a classification column. |
 
-The merged smoke added C7, N6, S1, S2, and S3. It did not close any existing row.
+C4, C6, C7, S2, H2, and H3 are closed. S1 and S3 stay open. Closed rows are not in the counts.
