@@ -532,6 +532,25 @@ class Ledger:
             leftover -= take
         return taken + additional_taken
 
+    def contractual_periodic_rate(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+        repos: tuple[RepoRate, ...] = (),
+    ) -> Decimal:
+        """Periodic rate ``accrue_day`` would use. Does not post.
+
+        Day count and the interest base stay on the existing path. A caller
+        that passes this rate back as ``periodic_rate_override`` does not
+        change the accrual method.
+        """
+        account = self._loan(organisation_id, loan_id)
+        day = value_date(recognised_at)
+        rate, _weight, _divisor = self._rate_and_divisor(account, day, repos)
+        return rate
+
     def accrue_day(
         self,
         *,
@@ -541,6 +560,7 @@ class Ledger:
         interest_cap_present: bool,
         repos: tuple[RepoRate, ...] = (),
         repo_annual: Decimal | None = None,
+        periodic_rate_override: Decimal | None = None,
     ) -> Accrual:
         account = self._loan(organisation_id, loan_id)
         day = value_date(recognised_at)
@@ -562,9 +582,19 @@ class Ledger:
             )
         base, principal, hold = self._interest_base(account)
         rate, weight, divisor = self._rate_and_divisor(account, day, repos)
+        if periodic_rate_override is not None:
+            if periodic_rate_override < 0:
+                raise LedgerError("rate", "A periodic rate cannot be negative.")
+            if periodic_rate_override > rate:
+                raise LedgerError(
+                    "rate-increase",
+                    "A collection-campaign rate cannot exceed the contractual rate.",
+                )
+            rate = periodic_rate_override
         if classification in _ZERO_PRICE:
             day_rands = daily_interest_rands(0, Decimal(0), 1, weight=1)
             weight = 1
+            rate = Decimal(0)
         else:
             day_rands = daily_interest_rands(base, rate, divisor, weight=weight)
         transaction = self._post(
@@ -990,6 +1020,7 @@ class Ledger:
         due_on: date,
         instalment_cents: int,
         recognised_at: datetime,
+        instalment_skipped: bool = False,
     ) -> bool:
         """Run the configuration layer's morning check.
 
@@ -998,6 +1029,10 @@ class Ledger:
         is not locked.
         """
         account = self._loan(organisation_id, loan_id)
+        if instalment_skipped:
+            # A payment holiday skips this instalment. It does not flag default
+            # and it does not close an open in-duplum episode.
+            return False
         payments = [
             transaction
             for transaction in self.store.transactions_for(organisation_id, loan_id)
