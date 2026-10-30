@@ -8,7 +8,7 @@ Each issue is classified as:
 - **Code change**: existing code must be updated before production.
 - **Database change**: a schema or migration change is required before production.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Dummies (Agent A)
 
@@ -35,9 +35,7 @@ Last updated: 2026-10-28
 | C1 | Fall-away choice and trigger are stored on the campaign and also as an organisation election with a product override. The lock does not say which value applies when they differ. | Rule change | Add a sentence to Decision 3 or Decision 19 that names the precedence (campaign value wins, or organisation value wins). |
 | C2 | The lock does not say which campaign applies when more than one period contains the recognition date. Intake stores nothing. | Rule change | Lock the rule (most recent campaign, or fail closed) in Decision 3. |
 | C3 | The lock does not say whether a qualifying loan keeps the decision-engine rate or uses the campaign net. Both are stored. | Rule change | Lock the rule in Decision 3 or Decision 13. |
-| C4 | Decision 8 names a residual default of R100. Decision 19 says an unset election fails closed and also names that default. A null threshold is left unset and resolve fails. | Rule change | Decide whether R100 is a platform default that fills when unset, or whether unset always fails closed. Update Decision 8 or Decision 19. |
 | C5 | campaign_rate still rejects a discount above the base. | Code change | Update campaign_rate to floor the net at 0 % instead of rejecting the pair. |
-| C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Code change | Update the function to fail closed or to fill R100, depending on the resolution of C4. |
 
 ## Payment rails (Agent C)
 
@@ -57,13 +55,11 @@ Last updated: 2026-10-28
 
 ## Rate or fee change (Agent H)
 
-`docs/LOCKED_DECISIONS.md` on this branch still ends at section 21. On `main` the file is a placeholder that points at `/tmp/locked_updated.md`, which is not present. The text followed here is the restored document through section 28 (commit `325acc6` on `cursor/restore-locked-decisions-ccde`). That file was not edited.
+`docs/LOCKED_DECISIONS.md` on this branch now ends at section 22. On `main` the file is a placeholder that points at `/tmp/locked_updated.md`, which is not present. Section 28 collection-campaign text is not on this branch. H1 records that.
 
 | ID | Issue | Classification | What must change |
 |----|-------|----------------|------------------|
-| H1 | Main's locked-decisions file is a placeholder. This branch's copy ends at section 21. | Rule change | Restore `docs/LOCKED_DECISIONS.md` from the section 28 text. Do not treat the placeholder as the rule. |
-| H2 | Section 104(2) for a non-campaign change is not its own locked section. Decision 28 states the five-business-day sentence inside collection campaigns. The orchestration list had no rate-or-fee flow. | Rule change | Add a locked section for the non-campaign path, or say that Decision 28's notice sentence also covers it. |
-| H3 | When the change ends, the original rate and fees resume. That is an increase relative to the reduced values. Section 104(1) prohibits a unilateral increase. The brief requires the resume. No second notice is taken. | Rule change | Lock whether the resume needs its own section 104(2) notice or an agreement. |
+| H1 | Main's locked-decisions file is a placeholder. This branch's copy ends at section 22. It does not include the section 28 collection-campaign text. | Rule change | Restore the section 28 text if that campaign lock is required on this branch. Do not treat the placeholder on main as the rule. |
 | H4 | Decision 11 option B says "issue the section 104 notice" and does not say subsection (2) or (3). Section 104(3) is a notice no later than 30 business days after a variable-rate change. | Rule change | Lock which subsection Decision 11 uses. This module does not implement section 104(3) or a repo-rate fall. |
 | H5 | The brief does not say whether the end date is inside the new values. | Decide later | This code treats `end_date` as the last recognition date of the new values. The original rate and fees resume on the next recognition date. |
 | H6 | "Time of payment" has no locked wire format. Section 104(2)(c) is the frequency or time for payment of a credit fee or charge. | Decide later | This code stores `fee_payment_time` as a Johannesburg date and `fee_payment_frequency` as a locked frequency. It does not write the loan's `payment_frequency`. The whole overlay, including frequency and payment time, stops after the end date. |
@@ -75,13 +71,24 @@ Last updated: 2026-10-28
 | H12 | Decision 3 fall-away is the origination discount. This overlay is not passed through that flag. | Rule change | Lock whether a non-campaign reduction falls away on default. This code ends it only on the end date. |
 | H13 | A timestamp without a zone cannot be sealed. Decision 1 requires the zone so the Johannesburg day is known. | Decide later | The failure is returned and is not written. |
 
+## Closed
+
+| ID | Resolution |
+| --- | --- |
+| C4 | Closed. Decision 19: the residual write-off threshold has a platform default of R100. An unset organisation or product value fills R100. Decision 8 names that same default. |
+| C6 | Closed. `resolve_residual_threshold_cents` fills 10 000 cents when both levels are null. Zero remains a stored choice. |
+| C7 | Closed. Decision 19: booking fails closed if the in-duplum trigger is unset. `Servicing.book` and `Ledger.book` refuse a missing trigger. |
+| S2 | Closed. The settlement quote uses the booked initiation fee. A capitalised fee is already in the loan value and is not added again. A fee that is not capitalised is added, including the outstanding portion that is not yet due. VAT is included. The client remains accountable for the VAT portion. |
+| H2 | Closed. Decision 22: a non-campaign rate or fee change also requires a written notice of at least five business days before it takes effect (section 104(2)). |
+| H3 | Closed. Decision 22: a temporary reduction is a concession or discount that goes to zero when the period ends. The original contractual rate and fees remain effective. Resuming the original rate does not require a second notice. An interest-rate change does not reduce the contractual instalment. |
+
 ## Summary
 
 | Classification | Count | Action before production |
-|----------------|-------|--------------------------|
-| Decide later | 17 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 12 | Update docs/LOCKED_DECISIONS.md. |
-| Code change | 3 | Update the existing functions. |
+| --- | --- | --- |
+| Decide later | 16 | Lock the rule or confirm the external contract when the case becomes real. |
+| Rule change | 10 | Update docs/LOCKED_DECISIONS.md. |
+| Code change | 2 | Update the existing functions. |
 | Database change | 1 | Add a classification column. |
 
-The counts include the Agent H rows above. The earlier rows are unchanged.
+The counts are the open rows above. C4, C6, C7, S2, H2, and H3 are closed.

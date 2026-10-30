@@ -33,7 +33,12 @@ from lms.servicing.enigma import EnigmaStub
 from lms.servicing.errors import ServicingError
 from lms_config.calendar import value_date, value_instant
 from lms_config.exceptions import CalculationInputError
-from lms_config.locked import OrganisationSettings, ResolvedCreditSettings, resolve_customer_settings
+from lms_config.locked import (
+    OrganisationSettings,
+    ResolvedCreditSettings,
+    require_booking_in_duplum_trigger,
+    resolve_customer_settings,
+)
 from lms_config.validate import SHORT_TERM, UNSECURED, ProductTerms, validate_terms
 
 _CREDIT = {SHORT_TERM, UNSECURED}
@@ -600,7 +605,9 @@ class Servicing:
     def _resolve(self, settings: OrganisationSettings, product: ProductTerms) -> ResolvedCreditSettings:
         try:
             validate_terms(product)
-            return resolve_customer_settings(settings, product)
+            resolved = resolve_customer_settings(settings, product)
+            require_booking_in_duplum_trigger(resolved.in_duplum_trigger)
+            return resolved
         except CalculationInputError as exc:
             raise ServicingError("election-unset", str(exc)) from exc
 
@@ -650,6 +657,7 @@ class Servicing:
                 principal_instalments=schedule,
                 campaign_interest_discount=resolved.discount_rate,
                 initiation_capitalised=product.initiation_capitalised,
+                booked_initiation_ex_vat_cents=initiation_fee_cents,
             )
             policy = _policy(resolved, _service_fee_cents(product))
             if engine_product == Product.PERSONAL and not repos:

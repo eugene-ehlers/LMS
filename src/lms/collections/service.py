@@ -275,7 +275,7 @@ class Collections:
 
         Considered only after the last schedule date, only when the schedule
         was paid exactly, only when no episode is open, and only when the
-        outstanding position is within the client's threshold (R50 when unset).
+        outstanding position is within the client's threshold (R100 when unset).
         """
         case = self._case(agreement_id)
         record = self.servicing._agreement(agreement_id)

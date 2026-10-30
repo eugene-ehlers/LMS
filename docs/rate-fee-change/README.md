@@ -8,7 +8,7 @@ The notice document is not produced here. It is generated outside the LMS or by 
 
 Amounts are integer cents. A rate is a periodic decimal, not a cent amount. The recognition date is 00:00 Africa/Johannesburg.
 
-The original contractual rate and fees stay on the loan and are copied for disclosure. Accrual uses the new values from the effective date. When an end date is set, the original rate and fees resume on the next recognition date.
+The original contractual rate and fees stay on the loan and are copied for disclosure. A temporary reduction is a concession. Accrual uses it from the effective date through the end date. After the end date the concession is zero, and the original rate and fees resume on the next recognition date without a second notice. The contractual instalment is not reduced.
 
 Staff action: `lms.rate_fee_change.write`. Enigma grants it. The LMS does not store the role.
 

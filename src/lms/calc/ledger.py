@@ -36,7 +36,7 @@ from lms.calc.models import (
     VatRate,
     agreement_size,
 )
-from lms.calc.money import RuleError, cents_to_rands, split_inclusive, to_cents
+from lms.calc.money import RuleError, add_vat, cents_to_rands, split_inclusive, to_cents
 
 DEFAULT_VAT: tuple[VatRate, ...] = (VatRate(date(2018, 4, 1), Decimal("0.15")),)
 
@@ -425,6 +425,11 @@ def _priced_initiation(
     policy: Policy,
     vat_rates: tuple[VatRate, ...],
 ) -> tuple[int, int, int]:
+    if agreement.booked_initiation_ex_vat_cents is not None:
+        # The settlement quote uses the booked ex-VAT fee, not the statutory cap.
+        # VAT is added. The client remains accountable for that VAT.
+        rate = vat_on(day, vat_rates) if policy.vat_registered else Decimal(0)
+        return add_vat(agreement.booked_initiation_ex_vat_cents, rate)
     ex_vat, vat, total = initiation_fee(
         agreement.cash_advanced_cents,
         on=day,
@@ -455,6 +460,10 @@ def _capitalise_initiation(
     """
     if state.initiation_levied or day != agreement.advance_date or not agreement.initiation_capitalised:
         return state
+    if agreement.booked_initiation_ex_vat_cents is not None:
+        # The capitalised fee is already part of the loan value. Do not add it again.
+        # quote_settlement adds the VAT portion, which is not inside that value.
+        return replace(state, initiation_levied=True)
     _ex_vat, _vat, total = _priced_initiation(agreement, day, policy, vat_rates)
     if total <= 0:
         return replace(state, initiation_levied=True)
@@ -814,6 +823,15 @@ def quote_settlement(
     interest = sum(amount for kind, amount in components if kind == "interest")
     fees = sum(amount for kind, amount in components if kind not in ("interest", "principal"))
     total = payoff_cents(state)
+    if agreement.booked_initiation_ex_vat_cents is not None and agreement.initiation_capitalised:
+        rate = vat_on(as_of, vat_rates) if policy.vat_registered else Decimal(0)
+        vat = add_vat(agreement.booked_initiation_ex_vat_cents, rate)[1]
+        if vat:
+            totals = dict(components)
+            totals["initiation"] = totals.get("initiation", 0) + vat
+            components = tuple(sorted(totals.items()))
+            fees += vat
+            total += vat
     return SettlementQuote(
         as_of=as_of,
         delivered_on=delivered,
