@@ -27,6 +27,7 @@ Last updated: 2026-10-28
 | N3 | "One month" between successive Day-1 statements has no day count or calendar boundary. | Rule change | Lock the calendar boundary (calendar month, or 30 days from previous statement) in Decision 12. |
 | N4 | A stored statement has no section 21 classification and no pure-hosting flag. A blank NCR number fails closed. | Database change | Add a classification column (short_term, unsecured, pure_hosting, zero_cost, cpa_laybye) to the statement or agreement so the NCR exemption can be applied. |
 | N5 | NCR character format, call-centre role name, Enigma page URLs, and machine action for the push are not locked. | Decide later | Lock each when the real Enigma and push provider are integrated. Current code fails closed on missing values. |
+| N6 | Orchestration section 6 calls Notifications.push after Documents.issue_statement when the consumer is registered. This tree has no notifications module, and issue_statement does not push. | Code change | Bring the statement-ready push onto this tree and call it after a statement is issued. The push carries no collection content. |
 
 ## Campaigns and elections (Agent B)
 
@@ -38,6 +39,7 @@ Last updated: 2026-10-28
 | C4 | Decision 8 names a residual default of R100. Decision 19 says an unset election fails closed and also names that default. A null threshold is left unset and resolve fails. | Rule change | Decide whether R100 is a platform default that fills when unset, or whether unset always fails closed. Update Decision 8 or Decision 19. |
 | C5 | campaign_rate still rejects a discount above the base. | Code change | Update campaign_rate to floor the net at 0 % instead of rejecting the pair. |
 | C6 | resolve_residual_threshold_cents still fills R50 (5 000 cents) when both levels are null. | Code change | Update the function to fail closed or to fill R100, depending on the resolution of C4. |
+| C7 | Decision 19 says an unset in-duplum trigger fails closed. Servicing.book stores None and returns the agreement. Collections.bind then fails with trigger-unset. | Rule change | Say whether booking itself must reject a missing trigger, or only a collections call that uses it. |
 
 ## Payment rails (Agent C)
 
@@ -66,14 +68,26 @@ Last updated: 2026-10-28
 | S5 | On main, docs/LOCKED_DECISIONS.md is the one-line stub written by f75d1be and ecffee7. The collection-campaign text named in the f75d1be message was never stored. This branch still has the full document through section 27. | Code change | Restore the locked document. Do not reconstruct the missing collection-campaign section from the commit message. |
 | S6 | Collections.receive still posts a receipt through Servicing.accept_payment without capitalising due amounts. Payment-rail intake capitalises first. This removal does not change Collections.receive. | Code change | Decide whether Collections.receive is still a receipt path. If it is, capitalise before accept_payment, using the existing ledger calls. |
 
+## Merged smoke
+
+These rows are the contradictions the seven-path smoke produced. C4 and C6 were hit again and are not repeated here. Existing rows were not closed.
+
+| ID | Issue | Classification | What must change |
+|----|-------|----------------|------------------|
+| S1 | Orchestration section 7 calls Ledger.quote_settlement, then Documents.settlement_quote. Ledger has no quote_settlement. Documents.settlement_quote calls the calculation engine and does not post. | Code change | Add the ledger method the flow names, or correct section 7 so it names the calculation engine. Do not add a second quote formula. |
+| S2 | A settlement quote on 15 May 2026 included initiation of 30 475 cents. The agreement was booked with an initiation fee of 0 cents. The quote builds an engine agreement without that booked amount, and the engine prices the statutory initiation formula. The fee was not posted. | Code change | Pass the booked initiation amount into the quote, or record that a booked zero still means the statutory formula. |
+| S3 | The 1 May interest memo after the R219 receipt was 3.1451612903 rands, on the R1 950 left after the receipt. Sections 1 and 8 treat the day as 00:00 and capitalise before allocating. The receipt path posted before the statement accrued that day. A memo on the R2 000 balance at the start of the day would be 3.2258064516 rands. The memo was not billed. | Rule change | Say which flow wins when a receipt and that day's accrual share a recognition date. |
+
 ## Summary
 
 | Classification | Count | Action before production |
 |----------------|-------|--------------------------|
 | Decide later | 8 | Lock the rule or confirm the external contract when the case becomes real. |
-| Rule change | 11 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
-| Code change | 6 | Update the existing functions, or restore the locked document. |
+| Rule change | 13 | Update docs/LOCKED_DECISIONS.md or docs/ORCHESTRATION.md. |
+| Code change | 9 | Update the existing functions, or restore the locked document. |
 | Database change | 1 | Add a classification column. |
 
 All agents have completed. All issues are recorded so they can be closed in a single pass before production.
-S1 to S6 were found while removing collection-process state. They are not new rules.
+S1 to S6 under Collection-process removal were found while removing collection-process state. They are not new rules.
+The merged smoke added C7, N6, and its own S1, S2, and S3. It did not close any existing row.
+Collection-process removal and the merged smoke both used S1, S2, and S3. The section heading identifies which gap. No id was renumbered and no row was closed.
