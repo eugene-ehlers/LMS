@@ -387,8 +387,8 @@ def test_flag_date_payment_is_visible_to_the_morning_check():
     ) is True
 
 
-def test_in_duplum_clip_stays_off():
-    assert IN_DUPLUM_CLIP_POSTS is False
+def test_in_duplum_clip_is_on_for_day_1():
+    assert IN_DUPLUM_CLIP_POSTS is True
 
 
 def test_missing_reference_data_fails_the_posting():

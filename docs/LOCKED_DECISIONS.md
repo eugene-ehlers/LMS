@@ -113,7 +113,12 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A payment during the default reduces what is owed but does not reset the counter for that episode.
 - A cure closes the episode only when the client has chosen collections-default as the in-duplum trigger. If the client has chosen contractual breach, the ceiling remains fixed.
 - A new default starts a fresh episode with a new ceiling based on the unpaid principal at the start of the new default (when collections-default trigger is selected).
-- Three section 103(5) edges not decided by Nedbank remain unnamed and unsigned; the clip stays off until counsel lists and confirms them. No implementation assumption is made.
+- Three section 103(5) edges not decided by Nedbank remain unnamed and unsigned. No implementation assumption is made about those edges.
+- The in-duplum clip is on for Day-1.
+- When charges that accrue during a default episode equal the ceiling, the system raises a flag, records a warning, and stops levying further charges until the episode is closed.
+- Payments during the episode reduce the balance but do not restart charges.
+- A cure closes the episode (when the collections-default trigger is selected). A later default opens a new episode with a new ceiling.
+- This reading follows Nedbank v NCR [2011] ZASCA 35 and NCR guidance. It will be adjusted if counsel names a different reading.
 - This is not an absolute single-lifetime ceiling when the collections-default trigger is selected.
 - Aligned with section 103(5) and Nedbank v NCR [2011] ZASCA 35, subject to the client-selected trigger above.
 

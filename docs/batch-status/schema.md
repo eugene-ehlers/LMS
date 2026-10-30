@@ -18,6 +18,7 @@ Stored in `batch_runs`. Returned on the status query as `last_status`, `last_suc
 | `finished_at` | When the run finished. Null when the run did not finish. |
 | `accounts_processed` | Accounts whose attempt was recorded. |
 | `accounts_failed` | How many of those attempts failed. |
+| `accounts_at_ceiling` | How many of those accounts had reached the in-duplum ceiling. Reaching the ceiling is not an account failure. |
 | `status` | `in_progress`, `completed`, `incomplete`, or `skipped`. |
 | `outcome` | `success` when completed and `accounts_failed` is 0. `failed` when completed and `accounts_failed` is greater than 0. Otherwise the same as `status`. |
 | `actor_id` | Person who started the run. |
