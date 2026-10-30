@@ -137,7 +137,8 @@ INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('SETTLEMENT_QUOTED', 'operational');
 
 INSERT INTO lms.ref_audit_event_type (code, category) VALUES
-  ('COLLECTION_CAMPAIGN_CHANGED', 'operational')
+  ('COLLECTION_CAMPAIGN_CHANGED', 'operational'),
+  ('RATE_FEE_CHANGE', 'operational')
 ON CONFLICT (code) DO NOTHING;
 
 -- Table A as substituted by GN 1080, effective 6 May 2016.

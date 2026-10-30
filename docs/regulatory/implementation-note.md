@@ -58,7 +58,7 @@ Raised in `docs/LOCKED_DECISIONS.md` under "Open gaps (not decisions)" and in th
 | RX37 | `AuditLog` hashes are not the SQL `::text` canonical. `read_lms_audit_event` does not reimplement that canonical. |
 | RX39 | Ledger organisation ids are text. `lms.audit_event.organisation_id` is uuid. The query does not cast one to the other in Python. |
 | RX41 | No Python path inserts `lms.audit_event`. `Servicing.audit` remains `AuditLog`. |
-| Residual threshold | Decisions 8 and 19 say R100. This branch's `lms_config.locked` still resolves a null threshold to 5 000 cents. The extracts do not write off. |
+| Residual threshold | Decision 19 fills a null threshold with R100 (10 000 cents). The extracts do not write off. |
 
 ## Tests
 

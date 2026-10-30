@@ -1,7 +1,7 @@
-"""Pins for the five Layer 1 gaps. Amounts stay in integer cents.
+"""Pins for the Layer 1 gaps. Amounts stay in integer cents.
 
-Two readings are still not chosen. An unset in-duplum trigger does not fail
-booking. A Laybye remainder is not run through the partial-prepayment election.
+Booking fails closed when the in-duplum trigger is unset. A Laybye remainder
+is still not run through the partial-prepayment election.
 """
 
 from __future__ import annotations
@@ -90,19 +90,34 @@ def test_booked_elections_fail_closed_only_when_used():
     )
     assert chosen.in_duplum_trigger == "contractual_breach"
     servicing = Servicing(enigma=EnigmaStub())
+    with pytest.raises(ServicingError) as missing_book:
+        servicing.book(
+            organisation_id="org-a",
+            person_id="person-a",
+            product=micro_short_term(),
+            settings=settings(),
+            recognised_at=at(date(2026, 4, 1), 8),
+            cash_advanced_cents=100_000,
+            frequency="monthly",
+            schedule=((DUE, 100_000),),
+            initiation_fee_cents=0,
+            idempotency_key="book-no-trigger",
+        )
+    assert missing_book.value.code == "trigger-unset"
+    assert servicing.agreements == {}
     record = servicing.book(
         organisation_id="org-a",
         person_id="person-a",
         product=micro_short_term(),
-        settings=settings(),
+        settings=settings(in_duplum_trigger="collections_default"),
         recognised_at=at(date(2026, 4, 1), 8),
         cash_advanced_cents=100_000,
         frequency="monthly",
         schedule=((DUE, 100_000),),
         initiation_fee_cents=0,
-        idempotency_key="book-no-trigger",
+        idempotency_key="book-with-trigger",
     )
-    assert record.resolved.in_duplum_trigger is None
+    assert record.resolved.in_duplum_trigger == "collections_default"
     collections_bind = Collections(servicing)
     with pytest.raises(CollectionsError) as missing:
         collections_bind.bind(record.agreement_id, in_duplum_trigger=None)
@@ -254,7 +269,7 @@ def test_a_loan_without_a_laybye_still_rejects_a_true_overpayment():
         organisation_id="org-a",
         person_id="person-a",
         product=micro_short_term(),
-        settings=settings(),
+        settings=settings(in_duplum_trigger="collections_default"),
         recognised_at=at(date(2026, 4, 1), 8),
         cash_advanced_cents=100_000,
         frequency="monthly",

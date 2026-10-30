@@ -15,6 +15,7 @@ from lms.calc.fees import (
     service_fee_cents,
     vat_on,
 )
+from lms.calc.money import add_vat
 from lms.calc.interest import accrual_weight, campaign_terms, daily_interest_rands, divisor_days
 from lms.calc.models import (
     Agreement,
@@ -425,6 +426,12 @@ def _priced_initiation(
     policy: Policy,
     vat_rates: tuple[VatRate, ...],
 ) -> tuple[int, int, int]:
+    booked = agreement.booked_initiation_ex_vat_cents
+    if booked is not None:
+        if booked < 0:
+            raise RuleError("initiation", "The booked initiation fee cannot be negative.")
+        rate = vat_on(day, vat_rates) if policy.vat_registered else Decimal(0)
+        return add_vat(booked, rate)
     ex_vat, vat, total = initiation_fee(
         agreement.cash_advanced_cents,
         on=day,
@@ -474,6 +481,8 @@ def _levy_initiation(state: State, agreement: Agreement, day: date, policy: Poli
     if state.initiation_levied or day != agreement.advance_date or agreement.initiation_capitalised:
         return state
     ex_vat, vat, total = _priced_initiation(agreement, day, policy, vat_rates)
+    if total <= 0:
+        return replace(state, initiation_levied=True)
     # A deferred initiation fee is unpaid from the advance date, so s 126 allocates
     # it before principal, but it is not a default until the first principal due date.
     # Paying it upfront makes it due, and paid, on the advance date.

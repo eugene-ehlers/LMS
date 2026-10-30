@@ -25,7 +25,7 @@ Before implementing any batch job, UI action, or external call:
 
 ## 2. User-interface actions
 
-- Every UI action that changes data (book, payment, election edit, campaign apply, write-off, statement issue) must return:
+- Every UI action that changes data (book, payment, election edit, campaign apply, rate or fee change, write-off, statement issue) must return:
   - Success, with a confirmation the user can continue, or
   - Failure, with a reason the user can act on.
 - The reason must be specific (for example "missing election: residual threshold" or "Enigma timeout"). A generic "error" is not sufficient.
@@ -42,6 +42,7 @@ Before implementing any batch job, UI action, or external call:
 
 - Every reported success or failure is written to the audit log with the actor, the timestamp, and the outcome.
 - Operators can query the last status of any batch or UI action by account or by organisation.
+- A rate or fee change writes `RATE_FEE_CHANGE`. The last row can be read by organisation and, when a loan id is supplied, by account.
 
 ## How to raise a gap
 

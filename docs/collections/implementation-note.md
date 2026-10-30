@@ -11,7 +11,7 @@ resolve_in_duplum_trigger(organisation: str | None, product: str | None = None) 
 resolve_residual_threshold_cents(organisation: int | None, product: int | None = None) -> int
 ```
 
-`product` wins when it is not `None`. An unset trigger raises `CalculationInputError`. A null residual at both levels returns 5 000 cents.
+`product` wins when it is not `None`. An unset trigger raises `CalculationInputError`. A null residual at both levels returns 10 000 cents.
 
 Ledger:
 
@@ -63,13 +63,13 @@ The full list, with the lock section each one conflicts with, is in `docs/collec
 
 - Leniency and the meaning of "not received on day X" are not split by decision 6. This code applies leniency to collections default only, and uses the full-payment threshold for both tests.
 - The residual "no open episode" gate is the implementation request. Decision 8 does not state it.
-- Decision 19 fails closed on unset elections. Decision 8 sets the residual default at R50. The resolver follows R50. The trigger fails closed.
+- Decision 19 fails closed on unset elections. The residual write-off threshold is the exception: both levels null fills R100 (10 000 cents). The trigger fails closed.
 - The ceiling is the principal at the moment the episode is opened, not reconstructed for a check that runs after a later receipt.
 - A system-error correction does not restore the discount and does not rebuild a ceiling for a breach that remains.
 - Partial write-off order, prescription period, exit from review, and the write-off action id are not locked. Partial write-off is refused. No clock and no refund are posted. The action string is a caller argument.
 - `Servicing.accept_payment` does not hold a prescription receipt. `Collections.receive` does.
 - `Ledger.flag_default` still closes an episode from the old single morning check. Collections does not call it. Servicing still does.
-- The two elections are stored on `OrganisationSettings` (and an optional product override) and copied by `resolve_customer_settings` onto the agreement. `bind` still copies them onto the collections case. `bind` before disbursement returns a view with no episode. A failed bind does not store the case. A second bind after a successful copy is `elections-frozen`. The ledger snapshot type is unchanged. An unset trigger does not fail `Servicing.book`; `bind` and `resolve_in_duplum_trigger` fail closed. Whether booking itself must reject a missing trigger is not settled.
+- The two elections are stored on `OrganisationSettings` (and an optional product override) and copied by `resolve_customer_settings` onto the agreement. `bind` still copies them onto the collections case. `bind` before disbursement returns a view with no episode. A failed bind does not store the case. A second bind after a successful copy is `elections-frozen`. The ledger snapshot type is unchanged. An unset trigger fails `Servicing.book` with `trigger-unset`. `bind` and `resolve_in_duplum_trigger` fail closed as well.
 
 ## Test results
 
@@ -86,7 +86,7 @@ Pinned:
 - `contractual_breach` keeps one ceiling after cure and after a second missed instalment.
 - `collections_default` closes on cure and opens a second episode at the new principal.
 - An unset trigger fails closed on bind, on observe, and in `resolve_in_duplum_trigger`. A product override wins.
-- The residual threshold defaults to 5 000 cents. Nothing is written off until `propose_residual_write_off`. R50.00 posts. R50.01 does not, and no journal is written.
+- The residual threshold defaults to 10 000 cents. Nothing is written off until `propose_residual_write_off`. R100.00 posts. R100.01 does not, and no journal is written.
 - An open episode refuses the residual command.
 - Prescription review stores the new receipt as `unapplied`. No payment and no refund are posted. An unset mode fails closed.
 - A larger write-off over the ceiling, or without a mandate, or while Enigma times out, posts nothing. An authorised amount equal to the outstanding position posts one balanced journal.

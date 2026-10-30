@@ -77,6 +77,7 @@ ELECTIONS = {
     "vat_on_rand_maxima": "exclusive",
     "late_disbursement": "keep_instalment",
     "partial_prepayment": "shorten_term",
+    "in_duplum_trigger": "contractual_breach",
 }
 
 # §19 stores these on the organisation. The short-term template does not
@@ -486,6 +487,7 @@ def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
     svc = Servicing(enigma=CountingStub())
     with pytest.raises(ServicingError) as caught:

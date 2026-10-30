@@ -807,20 +807,51 @@ def _service_fee_cents(record: AgreementRecord) -> int:
 
 def _engine_agreement(record: AgreementRecord, account: LoanAccount) -> Agreement:
     product = Product.MICRO if account.snapshot.classification == "short_term" else Product.PERSONAL
+    booked = record.initiation_fee_cents
+    capitalised = account.snapshot.initiation_capitalised
+    slices = [(slice_.due_on, slice_.amount_cents) for slice_ in account.slices]
+    cash = record.cash_advanced_cents
+    total = sum(amount for _, amount in slices)
+    if capitalised and booked and total == cash + booked:
+        slices = _drop_capitalised_initiation(slices, booked)
+    elif capitalised and booked and total != cash:
+        raise DocumentsError(
+            "initiation-principal",
+            "A capitalised initiation fee is already part of the loan value. "
+            "The principal slices do not show that fee once, so the quote was not built.",
+        )
     return Agreement(
         product=product,
         credit_provider_org_id=record.organisation_id,
         consumer_party_id=record.person_id,
         product_enrolment_id=record.enrolment_id,
-        cash_advanced_cents=record.cash_advanced_cents,
+        cash_advanced_cents=cash,
         advance_date=account.disbursement_value_date,
         maturity_date=account.contractual_end,
         agreed_monthly_rate=account.snapshot.base_rate if product == Product.MICRO else None,
         margin_annual=account.snapshot.base_rate if product == Product.PERSONAL else Decimal("0.21"),
-        principal_instalments=tuple((slice_.due_on, slice_.amount_cents) for slice_ in account.slices),
+        principal_instalments=tuple(slices),
         campaign_interest_discount=account.snapshot.discount_rate,
-        initiation_capitalised=account.snapshot.initiation_capitalised,
+        initiation_capitalised=capitalised,
+        booked_initiation_ex_vat_cents=booked,
     )
+
+
+def _drop_capitalised_initiation(
+    slices: list[tuple[date, int]],
+    booked_ex_vat_cents: int,
+) -> list[tuple[date, int]]:
+    """Remove the booked fee from principal so the quote can add it once, with VAT."""
+    index = min(range(len(slices)), key=lambda item: slices[item][0])
+    due_on, amount = slices[index]
+    if amount <= booked_ex_vat_cents:
+        raise DocumentsError(
+            "initiation-principal",
+            "A capitalised initiation fee is already part of the loan value. "
+            "The earliest principal slice is not large enough to hold it once, so the quote was not built.",
+        )
+    slices[index] = (due_on, amount - booked_ex_vat_cents)
+    return slices
 
 
 def _policy(account: LoanAccount, service_fee_monthly_cents: int) -> Policy:
