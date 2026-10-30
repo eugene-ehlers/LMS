@@ -94,6 +94,7 @@ _REVERSIBLE = {
     "interest_bill",
     "charge",
     "service_fee",
+    "settlement",
 }
 _ZERO_PRICE = {ZERO_COST, CPA_LAYBY}
 
@@ -970,6 +971,171 @@ class Ledger:
         if laybye_tx is not None:
             return laybye_tx
         raise LedgerError("payment", "A receipt must be positive.")
+
+    def quote_settlement(
+        self,
+        agreement,
+        events=(),
+        *,
+        as_of: date,
+        delivered_on: date | None = None,
+        policy=None,
+        repos: tuple[RepoRate, ...] = (),
+        vat_rates: tuple[VatRate, ...] | None = None,
+        holidays: frozenset[date] = frozenset(),
+    ):
+        """Section 125 amount from the calculation engine.
+
+        Day-1 early termination is R0. The engine rejects a large agreement
+        rather than pricing the unlocked section 125(2)(c) charge. This
+        method does not keep a second formula.
+        """
+        from lms.calc.ledger import quote_settlement as engine_quote_settlement
+
+        kwargs = {}
+        if vat_rates is not None:
+            kwargs["vat_rates"] = vat_rates
+        return engine_quote_settlement(
+            agreement,
+            events,
+            as_of=as_of,
+            delivered_on=delivered_on,
+            policy=policy,
+            repos=repos,
+            holidays=holidays,
+            **kwargs,
+        )
+
+    def post_settlement(
+        self,
+        *,
+        organisation_id: str,
+        loan_id: str,
+        cents: int,
+        recognised_at: datetime,
+    ) -> Transaction:
+        """Allocate a settlement receipt in section 126 order.
+
+        Interest, then fees, then every remaining principal slice. Paying
+        principal that is not yet due is section 125, not the section 13
+        prepayment election. A remainder is not posted.
+        """
+        if type(cents) is not int or cents <= 0:
+            raise LedgerError("cents", "A settlement receipt must be a positive integer number of cents.")
+        account = self._loan(organisation_id, loan_id)
+        day = value_date(recognised_at)
+        open_charges = [charge for charge in account.charges if charge.remaining_cents > 0]
+        additional = [charge for charge in open_charges if charge.bucket == "additional_monthly"]
+        named = [charge for charge in open_charges if charge.bucket != "additional_monthly"]
+        interest_due = sum(charge.remaining_cents for charge in named if charge.bucket == "interest")
+        named_fees = sum(charge.remaining_cents for charge in named if charge.bucket != "interest")
+        additional_due = sum(charge.remaining_cents for charge in additional)
+        if (
+            additional_due
+            and named_fees
+            and cents > interest_due
+            and cents < interest_due + named_fees + additional_due
+        ):
+            raise LedgerError(
+                "additional-fee-order-unset",
+                "LOCKED_DECISIONS §8 orders the named fee buckets. It does not place "
+                "the further monthly fee among them, so a short payment that would "
+                "have to choose fails closed.",
+            )
+        state = self._state(account, named, day)
+        if additional_due:
+            first = allocate_payment(
+                state,
+                min(cents, interest_due + named_fees),
+                as_of=day,
+                settle=False,
+                apply_prepayment=False,
+            )
+        else:
+            first = allocate_payment(
+                state,
+                cents,
+                as_of=day,
+                settle=True,
+                apply_prepayment=False,
+            )
+        if first.suspense_cents:
+            raise LedgerError(
+                "overpayment-unset",
+                "A settlement receipt above the amount owing has no locked home. "
+                "The receipt is not split onto a Laybye.",
+            )
+        leftover = cents - first.interest_cents - first.fee_cents - first.principal_cents
+        additional_taken: list[tuple[DueCharge, int]] = []
+        for charge in sorted(additional, key=lambda item: (item.due_on, item.sequence)):
+            if leftover == 0:
+                break
+            take = min(charge.remaining_cents, leftover)
+            if take:
+                additional_taken.append((charge, take))
+                leftover -= take
+        second = None
+        if additional_due:
+            second = allocate_payment(
+                first.state,
+                leftover,
+                as_of=day,
+                settle=True,
+                apply_prepayment=False,
+            )
+            if second.suspense_cents:
+                raise LedgerError(
+                    "overpayment-unset",
+                    "A settlement receipt above the amount owing has no locked home. "
+                    "The receipt is not split onto a Laybye.",
+                )
+        final = (second or first).state
+        unpaid_additional = additional_due - sum(taken for _, taken in additional_taken)
+        if (
+            any(slice_.remaining_cents for slice_ in final.principal_slices)
+            or any(charge.remaining_cents for charge in final.charges)
+            or unpaid_additional
+        ):
+            raise LedgerError(
+                "settlement-balance",
+                "The receipt does not bring the balance to R0. The agreement is not settled.",
+            )
+        principal_taken = first.principal_cents + (second.principal_cents if second else 0)
+        self._guard_capitalised_reduction(account, principal_taken)
+        effects: list[Effect] = []
+        credits: dict[str, int] = {}
+        original = {charge.charge_id: charge.remaining_cents for charge in self._charges_of(named)}
+        for charge in final.charges:
+            taken = original.get(charge.charge_id, 0) - charge.remaining_cents
+            if taken:
+                bucket = next(item.bucket for item in named if item.charge_id == charge.charge_id)
+                credits[bucket] = credits.get(bucket, 0) + taken
+                effects.append(Effect("decrease_charge", cents=taken, charge_id=charge.charge_id))
+        for charge, taken in additional_taken:
+            credits[charge.bucket] = credits.get(charge.bucket, 0) + taken
+            effects.append(Effect("decrease_charge", cents=taken, charge_id=charge.charge_id))
+        original_slices = {slice_.sequence: slice_.remaining_cents for slice_ in account.slices}
+        for slice_ in final.principal_slices:
+            taken = original_slices.get(slice_.sequence, 0) - slice_.remaining_cents
+            if taken:
+                credits["principal"] = credits.get("principal", 0) + taken
+                effects.append(Effect("decrease_slice", cents=taken, sequence=slice_.sequence))
+        if sum(credits.values()) != cents:
+            raise LedgerError("unbalanced", "The settlement receipt was not fully posted to a bucket.")
+        entries = [Entry("cash", None, cents, 0)]
+        for bucket, amount in credits.items():
+            code = "principal" if bucket == "principal" else f"{bucket}_receivable"
+            entries.append(Entry(code, bucket, 0, amount))
+        transaction = self._post(
+            account,
+            kind="settlement",
+            recognised_at=recognised_at,
+            entries=tuple(entries),
+            effects=tuple(effects),
+            amount_cents=cents,
+        )
+        self._assert_consistent(account)
+        return transaction
 
     def reverse(
         self,
