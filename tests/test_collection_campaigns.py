@@ -961,7 +961,7 @@ def test_rest_of_term_overlaps_a_later_campaign_on_the_same_loan():
 
 
 def test_migration_stores_cents_notice_and_the_original_contract():
-    sql = (ROOT / "db" / "migrations" / "0008_collection_campaigns.sql").read_text()
+    sql = (ROOT / "db" / "migrations" / "0009_collection_campaigns.sql").read_text()
     assert "CREATE TABLE lms.collection_campaign" in sql
     assert "notice_business_days integer NOT NULL CHECK (notice_business_days = 5)" in sql
     assert "reduction_cents bigint NOT NULL CHECK (reduction_cents >= 0)" in sql

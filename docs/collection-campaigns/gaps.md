@@ -2,6 +2,8 @@
 
 These points are not settled by section 28 or by the other locked decisions. The implementation does not treat them as locked rules. Where a command would have to choose, it fails closed.
 
+On this branch, sections 1 to 27 are the Layer 2 locked file. Section 28 is the collection-campaign text, appended because the merge otherwise dropped it. The collection-campaign branch's section 21 was not used: it omits the compulsory NCR number and the all-zeros test number that section 21 on this branch already locks.
+
 ## Decision 3 is a different campaign
 
 On this branch, Decision 3 says the origination discount falls away on the default flag date and does not return. Section 28 says a collection campaign applies for the campaign period or the rest of the term, and that the original rate resumes when a dated campaign ends. It does not say the collection reduction falls away on default.
