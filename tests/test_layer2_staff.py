@@ -316,8 +316,7 @@ def test_elections_fail_closed_and_product_override_wins():
         headers(),
     )
     assert missing[0] == 422
-    # The Layer 0 resolver still fills R50. This layer does not use that fill.
-    assert resolve_residual_threshold_cents(None, None) == 5_000
+    assert resolve_residual_threshold_cents(None, None) == 10_000
 
     assert dispatch(office, "PUT", f"/v1/staff/organisations/{ORG}/elections", elections(), headers())[0] == 200
     resolved = dispatch(office, "POST", f"/v1/staff/organisations/{ORG}/elections/resolve", {}, headers())

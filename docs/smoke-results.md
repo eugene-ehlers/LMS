@@ -22,12 +22,12 @@ The decision engine, debit-order rail, and Enigma dummies were called. Servicing
 | Probe | Result |
 |-------|--------|
 | Book with every election null | `election-unset`: leniency_days is not set |
-| Book with the in-duplum trigger and residual omitted | Agreement returned. Stored trigger `None`. Stored residual 5 000 cents |
+| Book with the in-duplum trigger omitted | `trigger-unset`. No agreement stored |
 | `Collections.bind` with trigger null | `trigger-unset`. No case stored |
-| `resolve_residual_threshold_cents(None, None)` | 5 000 |
+| `resolve_residual_threshold_cents(None, None)` | 10 000 |
 | April statement with no VAT rate | `vat-rate-unset` |
 
-The 5 000 cent fill is C4 and C6. The successful book with a null trigger is C7.
+The 10 000 cent fill is Decision 19. Booking with a null trigger is refused.
 
 ## Normal lifecycle
 
@@ -83,13 +83,13 @@ R2 000 disbursed 1 April 2026, final instalment 1 June 2026. Quote as of 15 May 
 | Principal | 200 000 |
 | Interest | 14 839 |
 | Service | 13 800 |
-| Initiation | 30 475 |
+| Initiation | 0 |
 | Early termination | 0 |
-| Total | 259 114 |
+| Total | 228 639 |
 
 14 839 cents is April's 10 000 plus 1–15 May (4 839). Service of 13 800 cents is two full months: the April fraction from 1 April to 1 June is above one and is capped, and the May settlement month is the full fee, not 15/31. Early termination is 0.
 
-The initiation component is not the booked fee. See S2. Ledger has no `quote_settlement`. See S1.
+The agreement was booked with an initiation fee of 0 cents. The quote uses that booked amount. A capitalised fee would already be in the loan value. VAT on a booked fee is included. Ledger has no `quote_settlement`. See S1.
 
 ## Collections default and in-duplum
 
@@ -122,4 +122,4 @@ The schedule, the contractual end (1 June 2026), and the stored rate (0.05) were
 
 ## Migration prefix
 
-The merged tree had both `0008_collection_campaigns.sql` and `0008_layer2_staff.sql`. The staff file was renamed to `0009_layer2_staff.sql`. The SQL body was not changed. Prefixes `0001` through `0009` are unique. `tests/test_layer1_gaps.py::test_migration_prefixes_apply_in_one_order` checks that.
+The merged tree had both `0008_collection_campaigns.sql` and `0008_layer2_staff.sql`. The staff file was renamed to `0009_layer2_staff.sql`. The rate or fee change migration is `0010_rate_fee_change.sql`. Prefixes `0001` through `0010` are unique. `tests/test_layer1_gaps.py::test_migration_prefixes_apply_in_one_order` checks that.

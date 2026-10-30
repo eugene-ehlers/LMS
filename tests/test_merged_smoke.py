@@ -31,6 +31,7 @@ from lms.ports.decision_engine import Application, Approval, ConsumerIdentity, P
 from lms.ports.debit_order_rail import CollectionInstruction, CollectionSuccess
 from lms.recognition import to_recognition_instant
 from lms.servicing.enigma import EnigmaStub
+from lms.servicing.errors import ServicingError
 from lms.servicing.service import Servicing
 from lms.statements.service import Documents
 from lms_config.compliance import ComplianceStore, ProviderCompliance
@@ -334,38 +335,33 @@ def _fail_closed(smoke: Smoke, servicing: Servicing, collections: Collections) -
         f"book with the elections set: trigger {bare.resolved.in_duplum_trigger!r}, "
         f"residual {bare.resolved.residual_write_off_threshold_cents}"
     )
-    unset = servicing.book(
-        organisation_id=ORG,
-        person_id="person-trigger-unset",
-        product=micro_short_term(),
-        settings=_settings(in_duplum_trigger=None, residual_write_off_threshold_cents=None),
-        recognised_at=to_recognition_instant(date(2026, 4, 1)),
-        cash_advanced_cents=CASH,
-        frequency="monthly",
-        schedule=((date(2026, 5, 1), CASH),),
-        initiation_fee_cents=0,
-        quoted_disbursement=date(2026, 4, 1),
-        idempotency_key="book-trigger-unset",
-    )
-    smoke.say(
-        f"book with trigger and residual omitted: status {unset.status}, "
-        f"stored trigger {unset.resolved.in_duplum_trigger!r}, "
-        f"stored residual {unset.resolved.residual_write_off_threshold_cents}"
-    )
-    if unset.resolved.in_duplum_trigger is None:
-        smoke.gap(
-            "Decision 19 says an unset in-duplum trigger fails closed. "
-            "Servicing.book stored None and returned the agreement. "
-            "Event: book with in_duplum_trigger omitted."
+    try:
+        servicing.book(
+            organisation_id=ORG,
+            person_id="person-trigger-unset",
+            product=micro_short_term(),
+            settings=_settings(in_duplum_trigger=None, residual_write_off_threshold_cents=None),
+            recognised_at=to_recognition_instant(date(2026, 4, 1)),
+            cash_advanced_cents=CASH,
+            frequency="monthly",
+            schedule=((date(2026, 5, 1), CASH),),
+            initiation_fee_cents=0,
+            quoted_disbursement=date(2026, 4, 1),
+            idempotency_key="book-trigger-unset",
         )
-    if unset.resolved.residual_write_off_threshold_cents != RESIDUAL:
+        smoke.fail("book with the in-duplum trigger omitted succeeded")
+    except ServicingError as exc:
+        smoke.say(f"fail closed, trigger omitted at book: {exc.code}")
+        if exc.code != "trigger-unset":
+            smoke.fail(f"book without a trigger raised {exc.code}")
+    filled_residual = resolve_residual_threshold_cents(None, None)
+    if filled_residual != RESIDUAL:
         smoke.gap(
-            "Decision 8 and Decision 19 name a residual default of R100 and also say unset fails closed. "
-            f"resolve stored {unset.resolved.residual_write_off_threshold_cents} cents when both levels were null. "
-            "Event: book with residual_write_off_threshold_cents omitted. Already C4 and C6."
+            "Decision 19 fills an unset residual write-off threshold with R100. "
+            f"resolve stored {filled_residual} cents. Event: both levels null."
         )
     try:
-        collections.bind(unset.agreement_id, in_duplum_trigger=None, residual_threshold_cents=RESIDUAL)
+        collections.bind(bare.agreement_id, in_duplum_trigger=None, residual_threshold_cents=RESIDUAL)
         smoke.fail("bind with an unset trigger succeeded")
     except CollectionsError as exc:
         smoke.say(f"fail closed, bind without trigger: {exc.code}")
@@ -1028,11 +1024,11 @@ def _pin(smoke: Smoke) -> None:
         "quote": (
             200_000,
             14_839,
-            44_275,
+            13_800,
             0,
-            259_114,
+            228_639,
             "2026-05-22",
-            (("initiation", 30_475), ("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
+            (("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
         ),
         "collections": (200_000, 200_000, 196_900, 0, 0, True, 196_900),
         "write_off": (

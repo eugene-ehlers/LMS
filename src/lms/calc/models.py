@@ -201,6 +201,10 @@ class Agreement:
     # caller's statement that this product may capitalise. The engine does not
     # keep a section 102 product list.
     initiation_capitalised: bool = False
+    # Booked initiation fee in ex-VAT cents. None keeps the statutory formula
+    # for a calculator example. A settlement quote passes the booked amount,
+    # including zero. VAT is added on that amount.
+    booked_initiation_ex_vat_cents: int | None = None
 
     def __post_init__(self) -> None:
         if not self.credit_provider_org_id or not self.consumer_party_id:

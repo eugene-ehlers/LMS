@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from lms.calc.calendar import binding_until, is_business_day
+from lms.calc.ledger import quote_settlement
+from lms.calc.models import Agreement, Policy, Product, RepoFallChoice, VatRate
 from lms.servicing.enigma import EnigmaStub
 from lms.servicing.service import Servicing
 from lms.statements.errors import DocumentsError
@@ -38,6 +40,7 @@ def settings() -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
 
 
@@ -331,3 +334,60 @@ def test_settlement_quote_is_zero_early_termination_and_binds_for_five_business_
         vat_rate=Decimal("0.15"),
     )
     assert again == quote
+    assert all(kind != "initiation" for kind, _amount in quote.components)
+
+
+def test_settlement_quote_adds_the_booked_initiation_fee_with_vat_before_it_is_due():
+    docs, svc, _store = documents()
+    record = svc.book(
+        organisation_id="org-a",
+        person_id="person-init",
+        product=micro_short_term(),
+        settings=settings(),
+        recognised_at=at(1, 8),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((DUE, 100_000),),
+        initiation_fee_cents=10_000,
+        idempotency_key="book-init",
+    )
+    svc.disburse(record.agreement_id, recognised_at=at(1, 10))
+    quote = docs.settlement_quote(
+        agreement_id=record.agreement_id,
+        as_of=date(2026, 3, 15),
+        delivered_on=date(2026, 3, 15),
+        request_on=date(2026, 3, 15),
+        holidays=frozenset(),
+        vat_rate=Decimal("0.15"),
+    )
+    initiation = sum(amount for kind, amount in quote.components if kind == "initiation")
+    assert initiation == 11_500
+    assert quote.principal_cents == 100_000
+
+
+def test_capitalised_booked_initiation_is_in_the_loan_value_once_with_vat():
+    agreement = Agreement(
+        product=Product.MICRO,
+        credit_provider_org_id="org-a",
+        consumer_party_id="person-a",
+        product_enrolment_id="enrolment-a",
+        cash_advanced_cents=100_000,
+        advance_date=date(2026, 3, 1),
+        maturity_date=date(2026, 6, 15),
+        agreed_monthly_rate=Decimal("0"),
+        principal_instalments=((date(2026, 6, 15), 100_000),),
+        initiation_capitalised=True,
+        booked_initiation_ex_vat_cents=10_000,
+    )
+    quote = quote_settlement(
+        agreement,
+        as_of=date(2026, 3, 1),
+        policy=Policy(
+            leniency_days=0,
+            full_payment_threshold_percent=Decimal("100"),
+            repo_fall=RepoFallChoice.CONTRACT_RATE_CONTINUES,
+        ),
+        vat_rates=(VatRate(date(2026, 3, 1), Decimal("0.15")),),
+    )
+    assert quote.principal_cents == 111_500
+    assert all(kind != "initiation" for kind, _amount in quote.components)

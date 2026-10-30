@@ -543,8 +543,8 @@ class Ledger:
         """Periodic rate ``accrue_day`` would use. Does not post.
 
         Day count and the interest base stay on the existing path. A caller
-        that passes this rate back as ``periodic_rate_override`` does not
-        change the accrual method.
+        that passes this rate back as ``periodic_rate_override`` replaces only
+        the rate value.
         """
         account = self._loan(organisation_id, loan_id)
         day = value_date(recognised_at)
@@ -584,11 +584,11 @@ class Ledger:
         rate, weight, divisor = self._rate_and_divisor(account, day, repos)
         if periodic_rate_override is not None:
             if periodic_rate_override < 0:
-                raise LedgerError("rate", "A periodic rate cannot be negative.")
+                raise LedgerError("rate-negative", "A periodic rate cannot be negative.")
             if periodic_rate_override > rate:
                 raise LedgerError(
                     "rate-increase",
-                    "A collection-campaign rate cannot exceed the contractual rate.",
+                    "Section 104(1) prohibits a unilateral increase of the interest rate.",
                 )
             rate = periodic_rate_override
         if classification in _ZERO_PRICE:

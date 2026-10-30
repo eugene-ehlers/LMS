@@ -23,8 +23,11 @@ from lms.calc.models import Agreement, FeeCapBasis, Policy, Product, RepoRate
 from lms.calc.money import RuleError
 from lms.laybye.errors import LaybyeError
 from lms.laybye.service import grant_loan, prepare_pair, receive_pre_disbursement
+from lms.collection_campaigns.errors import CollectionCampaignError
 from lms.collection_campaigns.service import CollectionCampaigns
 from lms.ledger.errors import LedgerError
+from lms.rate_fee_change.errors import RateFeeChangeError
+from lms.rate_fee_change.service import RateFeeChanges
 from lms.ledger.models import LoanAccount
 from lms.ledger.service import Ledger, _day_count, _prepayment, _repo_fall
 from lms.regulatory.audit import AuditLog
@@ -32,7 +35,12 @@ from lms.servicing.enigma import EnigmaStub
 from lms.servicing.errors import ServicingError
 from lms_config.calendar import value_date, value_instant
 from lms_config.exceptions import CalculationInputError
-from lms_config.locked import OrganisationSettings, ResolvedCreditSettings, resolve_customer_settings
+from lms_config.locked import (
+    OrganisationSettings,
+    ResolvedCreditSettings,
+    resolve_customer_settings,
+    resolve_in_duplum_trigger,
+)
 from lms_config.validate import SHORT_TERM, UNSECURED, ProductTerms, validate_terms
 
 _CREDIT = {SHORT_TERM, UNSECURED}
@@ -105,6 +113,7 @@ class Servicing:
     statements: dict[tuple[str, str, date, date], IssuedStatement] = field(default_factory=dict)
     audit: AuditLog = field(default_factory=AuditLog)
     collection_campaigns: CollectionCampaigns | None = None
+    rate_fee_changes: RateFeeChanges | None = None
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
 
     def book(
@@ -142,6 +151,13 @@ class Servicing:
             return self.agreements[replay]
         identity = self.enigma.check(organisation_id, person_id, "agreement.book")
         resolved = self._resolve(settings, product)
+        try:
+            resolve_in_duplum_trigger(settings.in_duplum_trigger, product.in_duplum_trigger)
+        except CalculationInputError as exc:
+            raise ServicingError(
+                "trigger-unset",
+                "Booking fails closed when the in-duplum trigger is unset. " + str(exc),
+            ) from exc
         self._engine_validate(
             organisation_id=organisation_id,
             person_id=person_id,
@@ -771,6 +787,78 @@ class Servicing:
         self._audit_payment(payment, transaction, laybye_id)
         self._refresh_status(agreement)
 
+    def _rate_in_force(self, organisation_id: str, loan_id: str, recognised_at: datetime) -> Decimal | None:
+        """Contractual rate, less one concession when a single overlay covers the day.
+
+        Two overlays that both name a rate have no locked precedence, so the day fails closed.
+        """
+        campaign = None
+        concession = None
+        if self.collection_campaigns is not None:
+            campaign = self.collection_campaigns.periodic_rate_override(
+                organisation_id,
+                loan_id,
+                recognised_at,
+            )
+        if self.rate_fee_changes is not None:
+            concession = self.rate_fee_changes.periodic_rate_override(
+                organisation_id=organisation_id,
+                loan_id=loan_id,
+                recognised_at=recognised_at,
+            )
+        if campaign is not None and concession is not None:
+            raise ServicingError(
+                "overlay-overlap",
+                "A collection campaign and a rate concession both cover this recognition date. "
+                "No precedence is locked, so the day was not accrued.",
+            )
+        if concession is not None:
+            return concession
+        return campaign
+
+    def _service_fee_in_force(
+        self,
+        organisation_id: str,
+        loan_id: str,
+        recognised_at: datetime,
+        monthly_cents: int,
+        vat_rate: Decimal,
+        due_on: date,
+    ) -> tuple[int, date]:
+        """Contractual service fee, less one concession, and the due date that fee uses."""
+        campaign_amount = monthly_cents
+        concession_amount = monthly_cents
+        if self.collection_campaigns is not None:
+            campaign_amount = self.collection_campaigns.service_fee_for_levy(
+                organisation_id=organisation_id,
+                loan_id=loan_id,
+                recognised_at=recognised_at,
+                monthly_cents=monthly_cents,
+                vat_rate=vat_rate,
+            )
+        if self.rate_fee_changes is not None:
+            concession_amount = self.rate_fee_changes.service_fee_for_levy(
+                organisation_id=organisation_id,
+                loan_id=loan_id,
+                recognised_at=recognised_at,
+                monthly_cents=monthly_cents,
+            )
+            due_on = self.rate_fee_changes.fee_due_on(
+                organisation_id=organisation_id,
+                loan_id=loan_id,
+                recognised_at=recognised_at,
+                contractual_due_on=due_on,
+            )
+        if campaign_amount != monthly_cents and concession_amount != monthly_cents:
+            raise ServicingError(
+                "overlay-overlap",
+                "A collection campaign and a fee concession both reduce the service fee on this "
+                "recognition date. No precedence is locked, so the fee was not levied.",
+            )
+        if concession_amount != monthly_cents:
+            return concession_amount, due_on
+        return campaign_amount, due_on
+
     def _accrue_and_bill(
         self,
         record: AgreementRecord,
@@ -786,13 +874,7 @@ class Servicing:
             return
         day = start
         while day <= end:
-            override = None
-            if self.collection_campaigns is not None:
-                override = self.collection_campaigns.periodic_rate_override(
-                    record.organisation_id,
-                    account.loan_id,
-                    value_instant(day),
-                )
+            override = self._rate_in_force(record.organisation_id, account.loan_id, value_instant(day))
             try:
                 self.ledger.accrue_day(
                     organisation_id=record.organisation_id,
@@ -801,8 +883,8 @@ class Servicing:
                     interest_cap_present=interest_cap_present,
                     periodic_rate_override=override,
                 )
-            except LedgerError as exc:
-                if exc.code not in {"already-accrued", "outside-term"}:
+            except (LedgerError, RateFeeChangeError, CollectionCampaignError) as exc:
+                if getattr(exc, "code", "") not in {"already-accrued", "outside-term"}:
                     raise _from_downstream(exc) from exc
             day += timedelta(days=1)
         try:
@@ -834,29 +916,29 @@ class Servicing:
                 and levy_day.month == account.disbursement_value_date.month
                 and first_due > account.disbursement_value_date
             )
-            amount = monthly
-            if self.collection_campaigns is not None:
-                amount = self.collection_campaigns.service_fee_for_levy(
-                    organisation_id=record.organisation_id,
-                    loan_id=account.loan_id,
-                    recognised_at=value_instant(levy_day),
-                    monthly_cents=monthly,
-                    vat_rate=vat_rate,
-                )
+            due_on = first_due if opening else levy_day
+            amount, due_on = self._service_fee_in_force(
+                record.organisation_id,
+                account.loan_id,
+                value_instant(levy_day),
+                monthly,
+                vat_rate,
+                due_on,
+            )
             try:
                 self.ledger.levy_service_fee(
                     organisation_id=record.organisation_id,
                     loan_id=account.loan_id,
                     recognised_at=value_instant(levy_day),
                     monthly_cents=amount,
-                    due_on=first_due if opening else levy_day,
+                    due_on=due_on,
                     interest_cap_present=interest_cap_present,
                     vat_rate=vat_rate,
                     opening=opening,
                     first_due=first_due if opening else None,
                 )
-            except LedgerError as exc:
-                if exc.code != "service-fee-once":
+            except (LedgerError, RateFeeChangeError, CollectionCampaignError) as exc:
+                if getattr(exc, "code", "") != "service-fee-once":
                     raise _from_downstream(exc) from exc
             if month_cursor.month == 12:
                 month_cursor = date(month_cursor.year + 1, 1, 1)

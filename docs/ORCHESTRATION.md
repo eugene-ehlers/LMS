@@ -80,6 +80,20 @@ Modules called (in order):
 
 Outcome: Flagged only. Balance not reopened. No recovery posted in the LMS.
 
+## 9. Rate or fee change (section 104)
+
+This is not a collection campaign, not a restructure, and not an early settlement.
+The notice document is not produced here. It is generated outside the LMS or by a later document layer. The LMS stores the section 104(2) notice date.
+
+Modules called (in order):
+1. RateFeeChange.apply, or RateFeeChange.end
+2. Ledger.accrue_day, using the contractual rate less any concession in force that day
+3. Ledger.levy_service_fee or Ledger.levy_charge, using the contractual fee less any concession in force that day
+
+Outcome: Success with a confirmation, or failure with a specific reason. Both are written to the audit log. The contractual term and the contractual instalment amount are not changed. The original contractual rate and fees stay in force. A temporary reduction is a concession. When the period ends the concession is zero, so the contractual rate and fees continue. That does not take a second notice.
+
+A missing notice date, or fewer than five business days between the notice date and the effective date, fails closed and stores nothing. Amounts are integer cents. The recognition date is 00:00 Africa/Johannesburg.
+
 ## In-duplum flows
 
 | Flow | Trigger | What must hold |
