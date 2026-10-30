@@ -34,6 +34,7 @@ def settings(**overrides) -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -292,6 +293,7 @@ def test_routes_book_and_reject_a_missing_election():
             "vat_on_rand_maxima": "exclusive",
             "late_disbursement": "keep_instalment",
             "partial_prepayment": "shorten_term",
+            "in_duplum_trigger": "contractual_breach",
         },
     }
     status, payload = dispatch(svc, "POST", "/v1/agreements", body, {"Idempotency-Key": "http-1"})

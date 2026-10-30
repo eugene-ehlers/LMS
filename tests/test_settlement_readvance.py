@@ -94,6 +94,7 @@ def _book(servicing: Servicing, *, due: date, booked_at: str, disbursed_at: str,
                 "vat_on_rand_maxima": "exclusive",
                 "late_disbursement": "keep_instalment",
                 "partial_prepayment": "shorten_term",
+                "in_duplum_trigger": "contractual_breach",
             },
         },
         {"Idempotency-Key": key},
@@ -319,6 +320,31 @@ def test_three_percent_rate_is_stored_and_the_settings_rate_is_ignored():
     assert account.snapshot.base_rate == Decimal("0.03")
 
 
+def test_omitted_residual_fills_r100():
+    command, servicing, _series = _world()
+    agreement_id = _book(
+        servicing,
+        due=date(2026, 5, 1),
+        booked_at="2026-04-01T09:15:00+02:00",
+        disbursed_at="2026-04-01T11:00:00+02:00",
+    )
+    settings = _settings()
+    del settings["residual_write_off_threshold_cents"]
+    full_fee = _fee(fraction=None)[2]
+    receipt = _interest([(30, 30), (1, 31)]) + full_fee + full_fee + CASH
+    body = _body(
+        agreement_id,
+        receipt,
+        "2026-05-01T08:00:00+02:00",
+        settings=settings,
+        new_loan=_new_loan(application_number="app-r100"),
+    )
+    status, result = _post(command, body, key="residual-default")
+    assert status == 200, result
+    new = servicing.agreements[result["new_agreement_id"]]
+    assert new.resolved.residual_write_off_threshold_cents == 10_000
+
+
 def test_missing_election_or_ncr_number_fails_closed():
     command, servicing, _series = _world()
     agreement_id = _book(
@@ -333,11 +359,6 @@ def test_missing_election_or_ncr_number_fails_closed():
     status, result = _post(command, _body(agreement_id, 1, recognised, settings=missing), key="duplum")
     assert result["code"] == "election-unset"
     assert result["message"] == "missing election: in-duplum trigger"
-    residual = _settings()
-    del residual["residual_write_off_threshold_cents"]
-    status, result = _post(command, _body(agreement_id, 1, recognised, settings=residual), key="residual")
-    assert status == 422
-    assert result["message"] == "missing election: residual write-off threshold"
     fall = _settings()
     del fall["campaign_fall_away_choice"]
     status, result = _post(command, _body(agreement_id, 1, recognised, settings=fall), key="fall")

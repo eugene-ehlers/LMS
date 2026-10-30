@@ -59,6 +59,7 @@ def _org(**overrides) -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="adjust_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -305,6 +306,12 @@ def test_unset_elections_fail_closed_and_the_product_override_wins():
     assert inclusive.vat_on_rand_maxima == "inclusive"
     assert inclusive.late_disbursement == "keep_instalment"
     assert inclusive.partial_prepayment == "shorten_term"
+    with pytest.raises(CalculationInputError, match="in_duplum_trigger"):
+        _resolved(product, in_duplum_trigger=None)
+    filled = _resolved(product)
+    assert filled.in_duplum_trigger == "contractual_breach"
+    assert filled.residual_write_off_threshold_cents == 10_000
+    assert _resolved(product, residual_write_off_threshold_cents=0).residual_write_off_threshold_cents == 0
     inherited = replace(
         product,
         instruments=(

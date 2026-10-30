@@ -820,6 +820,7 @@ def _engine_agreement(record: AgreementRecord, account: LoanAccount) -> Agreemen
         principal_instalments=tuple((slice_.due_on, slice_.amount_cents) for slice_ in account.slices),
         campaign_interest_discount=account.snapshot.discount_rate,
         initiation_capitalised=account.snapshot.initiation_capitalised,
+        booked_initiation_cents=record.initiation_fee_cents,
     )
 
 

@@ -4,7 +4,7 @@ Single source of truth for all decisions that have been researched and locked.
 All future agents, chats and developers must follow these rules.
 Do not re-open a locked decision without an explicit change request.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Standing instruction for all agents
 
@@ -122,7 +122,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Capitalisation and payment allocation need not occur on the same calendar day. Capitalisation may be month-end; payment may be on the client's payday. Each is processed on its own recognition date.
 - Fees and interest charged may never exceed NCA limits.
 - If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment.
-- Small residual write-off threshold is client-configurable. Default value is R100. It is not automatic.
+- Small residual write-off threshold is client-configurable. Default value is R100. It is not automatic. An unset organisation or product value fills R100.
 - If the client does not pay exactly the contractual instalment, the difference becomes part of arrears. Normal arrears, in-duplum and collections rules then apply. The client either continues paying until the loan is fully repaid, or the outstanding amount is written off.
 - Write-off can be manual. If automated, the external formula is the mandate.
 - A write-off can never be more or less than the outstanding balance. All receipts must be allocated before the write-off. If the balance does not reduce to R0 it is not a write-off.
@@ -156,6 +156,10 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Option B: accrue at the lower of contract rate and current statutory maximum, and issue the section 104 notice.
 - Choice stored per organisation or per product.
 - No platform default; fails closed until the provider chooses.
+- A non-campaign rate or fee change also requires a written notice of at least five business days before it takes effect (section 104(2)).
+- A temporary reduction is stored as a concession or discount that goes to zero when the period ends.
+- The original contractual rate and fees remain effective and are not changed.
+- Resuming the original rate does not require a second notice.
 
 ## 12. Statements and documents
 
@@ -176,6 +180,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Quote date and disbursement date may differ. The contractual instalment accepted by the client is binding.
 - The contractual instalment must be stored on the agreement.
 - Any change to the contractual instalment made by the LMS requires client consent.
+- An interest-rate change does not automatically reduce the contractual instalment. The instalment remains stable unless a reduced-payment process is followed.
 - A restructure changes the contract and therefore changes the instalment.
 - Arrears are added to the amount due. The contractual instalment itself remains the same; the amount due is larger because it includes arrears.
 - If an instalment is missed, the loan remains open even after the contractual term has passed.
@@ -244,10 +249,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Interest on deferred initiation fee
   - Repo-rate fall choice
   - In-duplum trigger (contractual_breach / collections_default)
-  - Residual write-off threshold (default R100)
+  - Residual write-off threshold (platform default R100). An unset organisation or product value fills R100.
   - Campaign discount fall-away choice (falls_away_on_default / does_not_fall_away)
   - Campaign fall-away trigger (contractual_breach / collections_default)
-- Unset values fail closed.
+- Unset values fail closed. The residual write-off threshold is the exception named above: when both the organisation and the product are unset, the platform default of R100 is filled.
+- Booking fails closed if the in-duplum trigger is unset.
 - Campaign fall-away choice and trigger are stored per campaign.
 - Role names for edits must be descriptive and follow best practice (for example lms.elections.write, lms.campaign.write).
 
@@ -326,5 +332,4 @@ The payment-rail layer found these points unset. Nothing in this section is a de
 - Section 25 does not fix the loan-number character pattern. The Bankserv user reference allows 14 characters for the mandate or agreement number. Section 13 requires the contractual instalment to be stored; the agreement stores a principal schedule. The debit-order loan line reads the section 6 amount still outstanding on that due date and does not invent unbilled interest.
 - The published Bankserv collections layout does not define a DebiCheck record, and it does not state the hash-total algorithm beyond a 12-digit field. Consumer homing-account details and the bank’s 10-character abbreviated user name are not LMS fields in this document. A credit-life premium receipt has no insurer hand-off here.
 - Whether interest that accrues on a payment date is itself due that day, or only on an instalment due date, is not settled beyond “capitalise due amounts, then allocate”.
-- Section 8 and section 19 say the residual write-off threshold default is R100, and section 19 also says an unset election fails closed. `resolve_residual_threshold_cents` still returns 5 000 cents when both levels are null. This layer does not call that resolver and does not choose between those readings.
 - Settlement re-advance has no module order in the orchestration note. The route, the settlement-month fee, and the points this command does not decide are recorded in `docs/settlement-readvance/`. That note is not a rule.

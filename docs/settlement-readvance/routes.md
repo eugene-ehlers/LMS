@@ -10,7 +10,7 @@ The command settles one disbursed agreement and books the loan the decision engi
 
 `organisation_id`, `agreement_id`, `actor_id`, `recognised_at`, `receipt_cents`, `interest_cap_present`, and `settings` are required. `vat_rate` is a decimal string and is required when a service fee is levied. `product_elections` is optional. A product value that is present wins over the organisation value. The campaign fall-away choice and its trigger move together: when the product sets the choice, the trigger is the product's trigger.
 
-`settings` and, where supplied, `product_elections` must name every election this path freezes. An unset value fails closed. The residual write-off threshold is not filled with R100 or with the R50 figure `resolve_residual_threshold_cents` returns. Zero is a stored choice. `interest_cap_present` must be a boolean. `false` fails when a posting needs a cap row.
+`settings` and, where supplied, `product_elections` must name every election this path freezes. An unset value fails closed. An omitted residual write-off threshold is left null. `resolve_residual_threshold_cents` then fills the platform default of R100 (10 000 cents). Zero is a stored choice. An unset in-duplum trigger fails closed at booking. `interest_cap_present` must be a boolean. `false` fails when a posting needs a cap row.
 
 `new_loan` is required:
 

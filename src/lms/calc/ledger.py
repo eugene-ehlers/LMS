@@ -36,7 +36,7 @@ from lms.calc.models import (
     VatRate,
     agreement_size,
 )
-from lms.calc.money import RuleError, cents_to_rands, split_inclusive, to_cents
+from lms.calc.money import RuleError, add_vat, cents_to_rands, split_inclusive, to_cents
 
 DEFAULT_VAT: tuple[VatRate, ...] = (VatRate(date(2018, 4, 1), Decimal("0.15")),)
 
@@ -425,6 +425,14 @@ def _priced_initiation(
     policy: Policy,
     vat_rates: tuple[VatRate, ...],
 ) -> tuple[int, int, int]:
+    if agreement.booked_initiation_cents is not None:
+        rate = vat_on(day, vat_rates) if policy.vat_registered else Decimal(0)
+        ex_vat, vat, total = add_vat(agreement.booked_initiation_cents, rate)
+        if agreement.campaign_initiation_discount_cents:
+            ex_vat, vat, total = apply_ex_vat_discount(
+                ex_vat, rate, agreement.campaign_initiation_discount_cents
+            )
+        return ex_vat, vat, total
     ex_vat, vat, total = initiation_fee(
         agreement.cash_advanced_cents,
         on=day,
@@ -455,6 +463,26 @@ def _capitalise_initiation(
     """
     if state.initiation_levied or day != agreement.advance_date or not agreement.initiation_capitalised:
         return state
+    if agreement.booked_initiation_cents is not None:
+        # The ex-VAT fee is already in the loan principal. Do not add it again.
+        # VAT is still included in the settlement value.
+        _ex_vat, vat, _total = _priced_initiation(agreement, day, policy, vat_rates)
+        if vat:
+            due = day if agreement.initiation_paid_upfront else min(
+                slice_.due_on for slice_ in state.principal_slices
+            )
+            state = _levy_priced(
+                state,
+                kind="initiation",
+                on=day,
+                ex_vat_cents=0,
+                vat_cents=vat,
+                total_cents=vat,
+                policy=policy,
+                vat_rate=vat_on(day, vat_rates) if policy.vat_registered else Decimal(0),
+                due_on=due,
+            )
+        return replace(state, initiation_levied=True)
     _ex_vat, _vat, total = _priced_initiation(agreement, day, policy, vat_rates)
     if total <= 0:
         return replace(state, initiation_levied=True)

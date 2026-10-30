@@ -77,6 +77,7 @@ ELECTIONS = {
     "vat_on_rand_maxima": "exclusive",
     "late_disbursement": "keep_instalment",
     "partial_prepayment": "shorten_term",
+    "in_duplum_trigger": "contractual_breach",
 }
 
 # §19 stores these on the organisation. The short-term template does not
@@ -89,6 +90,7 @@ ORGANISATION_ELECTIONS = (
     "vat_on_rand_maxima",
     "late_disbursement",
     "partial_prepayment",
+    "in_duplum_trigger",
 )
 
 
@@ -282,6 +284,8 @@ def _book_disburse(svc: Servicing, stub: CountingStub) -> tuple[dict, dict]:
     assert resolved.vat_on_rand_maxima == "exclusive"
     assert resolved.late_disbursement == "keep_instalment"
     assert resolved.partial_prepayment == "shorten_term"
+    assert resolved.in_duplum_trigger == "contractual_breach"
+    assert resolved.residual_write_off_threshold_cents == 10_000
     assert booked["annual_equivalent_rate"] == "0.60"
     assert record.initiation_fee_cents == 0
     assert record.product.initiation_capitalised is False
@@ -486,6 +490,7 @@ def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="contractual_breach",
     )
     svc = Servicing(enigma=CountingStub())
     with pytest.raises(ServicingError) as caught:
