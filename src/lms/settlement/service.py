@@ -1629,7 +1629,7 @@ def _months(start: date, end: date):
             month += 1
 
 
-def _readvance_readvance_service_fee_cents(agreement: AgreementRecord) -> int:
+def _readvance_service_fee_cents(agreement: AgreementRecord) -> int:
     for instrument in agreement.product.instruments:
         for fee in instrument.fees:
             if fee.code == "service":
