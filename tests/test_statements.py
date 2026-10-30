@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from lms.calc.calendar import binding_until, is_business_day
+from lms.calc.ledger import quote_settlement
+from lms.calc.models import Agreement, DayCount, Policy, Product, RepoFallChoice
 from lms.servicing.enigma import EnigmaStub
 from lms.servicing.service import Servicing
 from lms.statements.errors import DocumentsError
@@ -38,6 +40,7 @@ def settings() -> OrganisationSettings:
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="collections_default",
     )
 
 
@@ -321,6 +324,7 @@ def test_settlement_quote_is_zero_early_termination_and_binds_for_five_business_
         if is_business_day(counted, holidays):
             left -= 1
     assert quote.valid_until == counted
+    assert sum(amount for kind, amount in quote.components if kind == "initiation") == 0
     assert svc.ledger.store.statement_keys(record.organisation_id, record.person_id) == ()
     again = docs.settlement_quote(
         agreement_id=record.agreement_id,
@@ -331,3 +335,109 @@ def test_settlement_quote_is_zero_early_termination_and_binds_for_five_business_
         vat_rate=Decimal("0.15"),
     )
     assert again == quote
+
+
+def test_settlement_quote_adds_the_outstanding_booked_initiation_fee_with_vat():
+    docs, svc, _store = documents()
+    record = svc.book(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        settings=settings(),
+        recognised_at=at(1, 8),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((DUE, 100_000),),
+        initiation_fee_cents=10_000,
+        idempotency_key="book-initiation",
+    )
+    record = svc.disburse(record.agreement_id, recognised_at=at(1, 10))
+    quote = docs.settlement_quote(
+        agreement_id=record.agreement_id,
+        as_of=date(2026, 3, 15),
+        delivered_on=date(2026, 3, 15),
+        request_on=date(2026, 3, 15),
+        holidays=frozenset(),
+        vat_rate=Decimal("0.15"),
+    )
+    initiation = sum(amount for kind, amount in quote.components if kind == "initiation")
+    assert initiation == 11_500
+    assert quote.principal_cents == 100_000
+    assert quote.total_cents == quote.principal_cents + quote.interest_cents + quote.fee_cents
+
+
+def test_capitalised_booked_initiation_is_in_the_loan_value_once_with_vat():
+    advance = date(2026, 3, 1)
+    maturity = date(2026, 6, 15)
+    common = dict(
+        product=Product.MICRO,
+        credit_provider_org_id="org-a",
+        consumer_party_id="person-a",
+        product_enrolment_id="enrol-1",
+        cash_advanced_cents=100_000,
+        advance_date=advance,
+        maturity_date=maturity,
+        agreed_monthly_rate=Decimal("0.05"),
+        principal_instalments=((maturity, 100_000),),
+    )
+    policy = Policy(
+        leniency_days=0,
+        full_payment_threshold_percent=Decimal("100"),
+        repo_fall=RepoFallChoice.CONTRACT_RATE_CONTINUES,
+        day_count=DayCount.ACTUAL,
+        service_fee_monthly_cents=0,
+    )
+    capitalised = quote_settlement(
+        Agreement(**common, initiation_capitalised=True, booked_initiation_ex_vat_cents=10_000),
+        as_of=advance,
+        delivered_on=advance,
+        policy=policy,
+        holidays=frozenset(),
+    )
+    assert capitalised.principal_cents == 111_500
+    assert sum(amount for kind, amount in capitalised.components if kind == "initiation") == 0
+    deferred = quote_settlement(
+        Agreement(**common, initiation_capitalised=False, booked_initiation_ex_vat_cents=10_000),
+        as_of=advance,
+        delivered_on=advance,
+        policy=policy,
+        holidays=frozenset(),
+    )
+    assert deferred.principal_cents == 100_000
+    assert sum(amount for kind, amount in deferred.components if kind == "initiation") == 11_500
+    zero = quote_settlement(
+        Agreement(**common, initiation_capitalised=False, booked_initiation_ex_vat_cents=0),
+        as_of=advance,
+        delivered_on=advance,
+        policy=policy,
+        holidays=frozenset(),
+    )
+    assert zero.principal_cents == 100_000
+    assert sum(amount for kind, amount in zero.components if kind == "initiation") == 0
+
+
+def test_quote_removes_a_capitalised_fee_before_adding_it_once():
+    from dataclasses import replace
+
+    from lms.ledger.service import Ledger
+    from lms.statements.service import _quote_instalments
+    from lms_config.templates import micro_short_term
+
+    ledger = Ledger()
+    product = replace(micro_short_term(), initiation_capitalised=True)
+    account = ledger.book(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=product,
+        organisation=settings(),
+        recognised_at=at(1, 8),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((DUE, 115_000),),
+        identity_name="Ada Borrower",
+        identity_number="8001015800085",
+        service_address="1 Main Road, Cape Town",
+        initiation_fee_cents=15_000,
+    )
+    record = type("Record", (), {"initiation_fee_cents": 15_000, "cash_advanced_cents": 100_000})()
+    assert _quote_instalments(record, account) == ((DUE, 100_000),)

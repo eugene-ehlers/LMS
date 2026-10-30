@@ -201,6 +201,10 @@ class Agreement:
     # caller's statement that this product may capitalise. The engine does not
     # keep a section 102 product list.
     initiation_capitalised: bool = False
+    # None prices the statutory initiation cap. An integer, including zero, is
+    # the booked ex-VAT initiation fee. A settlement quote always sets it.
+    # VAT is added on that amount. The statutory formula is not used.
+    booked_initiation_ex_vat_cents: int | None = None
 
     def __post_init__(self) -> None:
         if not self.credit_provider_org_id or not self.consumer_party_id:
@@ -241,6 +245,12 @@ class Agreement:
             raise RuleError("campaign", "Campaign interest discount cannot be negative.")
         if self.campaign_initiation_discount_cents < 0 or self.campaign_service_discount_cents < 0:
             raise RuleError("campaign", "Campaign fee discount cannot be negative.")
+        booked = self.booked_initiation_ex_vat_cents
+        if booked is not None and (type(booked) is not int or booked < 0):
+            raise RuleError(
+                "initiation",
+                "The booked initiation fee must be a non-negative integer number of cents.",
+            )
 
     def _validate_micro(self) -> None:
         # Reg 39(2): short-term is a cash disbursement of at most R8,000, repayable within 6 months,

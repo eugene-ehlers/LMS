@@ -44,6 +44,7 @@ def settings(**overrides):
         vat_on_rand_maxima="exclusive",
         late_disbursement="keep_instalment",
         partial_prepayment="shorten_term",
+        in_duplum_trigger="collections_default",
     )
     values.update(overrides)
     return OrganisationSettings(**values)
@@ -185,13 +186,14 @@ def test_unset_in_duplum_trigger_fails_closed():
     assert resolve_in_duplum_trigger("contractual_breach", "collections_default") == "collections_default"
 
 
-def test_residual_write_off_threshold_defaults_to_r50_and_is_not_automatic():
-    assert resolve_residual_threshold_cents(None) == RESIDUAL_WRITE_OFF_DEFAULT_CENTS == 5_000
+def test_residual_write_off_threshold_defaults_to_r100_and_is_not_automatic():
+    assert resolve_residual_threshold_cents(None) == RESIDUAL_WRITE_OFF_DEFAULT_CENTS == 10_000
     assert resolve_residual_threshold_cents(4_000, None) == 4_000
     assert resolve_residual_threshold_cents(None, 2_500) == 2_500
+    assert resolve_residual_threshold_cents(0, None) == 0
 
     collections, servicing, record, _stub = opened("collections_default", residual_threshold_cents=None)
-    assert collections.view(record.agreement_id).residual_threshold_cents == 5_000
+    assert collections.view(record.agreement_id).residual_threshold_cents == 10_000
     pay(servicing, record, 60_000, date(2026, 3, 2), key="exact-first", due=FIRST)
     pay(servicing, record, 40_000, date(2026, 3, 2), key="exact-second", due=SECOND)
     loan = servicing.ledger.store.get("org-a", record.ledger_loan_id)
@@ -231,7 +233,7 @@ def test_residual_write_off_threshold_defaults_to_r50_and_is_not_automatic():
         organisation_id="org-a",
         loan_id=other_loan.loan_id,
         bucket="additional_monthly",
-        cents=5_001,
+        cents=10_001,
         due_on=date(2026, 6, 16),
         recognised_at=at(date(2026, 6, 16), 9),
         interest_cap_present=True,
