@@ -4,7 +4,7 @@ Standing reference for the order in which modules are called when an event occur
 All future agents, chats and developers must follow these flows.
 If a flow is contradictory, confusing, incorrect or missing, raise it explicitly so this document can be updated.
 
-Last updated: 2026-10-28
+Last updated: 2026-10-30
 
 ## Standing instruction for all agents
 
@@ -72,6 +72,8 @@ Modules called (in order):
 
 Outcome: Quote binds for five business days. Early-termination charge is R0 for Day-1.
 
+The settlement route calls those two methods in that order. It refuses the quote when the totals or the valid-until dates differ. `Ledger.quote_settlement` delegates to the calculation engine and does not keep a second formula. Five business days is section 113, through `binding_until`. The caller supplies the holiday set. No holiday calendar is assumed. A missing required election, a missing VAT rate, or a missing NCR number on a short-term or unsecured agreement fails closed. The quote does not post.
+
 ## 8. Returned unpaid after write-off
 
 Modules called (in order):
@@ -79,6 +81,61 @@ Modules called (in order):
 2. Flag write_off_approval_required
 
 Outcome: Flagged only. Balance not reopened. No recovery posted in the LMS.
+
+## 9. Daily calculation batch
+
+The batch runs for one organisation and one recognition date. The recognition date is 00:00 Africa/Johannesburg.
+
+Modules called (in order):
+
+1. Batch status records the start, with the actor and the Johannesburg start timestamp. If the start cannot be recorded, stop. No account is processed.
+2. For each account, in order:
+   1. Ledger.accrue_day
+   2. Ledger.bill_interest and Ledger.levy_service_fee (capitalise due amounts)
+   3. Default check
+3. Batch status records the finish timestamp, the number of accounts processed, the number of accounts that failed, and each failed account identifier and reason.
+4. The audit log records the outcome with the actor, the timestamp, and the outcome.
+
+If the batch does not finish, batch status raises an alert. A later recognition date does not start until that run is resolved by a finished run of the same recognition date, or the unfinished run is explicitly skipped.
+
+A batch that finishes with account failures has completed. Those failures stay on the batch record and in the audit log. Whether they block the next recognition date is not locked (docs/OPEN_ISSUES.md, J5). This flow does not block the next day for account failures alone.
+
+Not part of this flow: Servicing.accept_payment, collection-file generation, and statement generation. Servicing.accept_payment remains in section 1 and is not called here (docs/OPEN_ISSUES.md, J3). The default check is not named as Collections.observe (docs/OPEN_ISSUES.md, J4).
+
+The stored record and the operator query are in docs/batch-status/.
+
+Outcome: operators can read the last status, the last successful run, and the last failed run for the organisation.
+
+## 10. Restructure requested
+
+A restructure changes the contractual term or the contractual instalment. It is not a collection campaign, an early settlement, or a settlement re-advance.
+
+This flow was missing. The steps below are the restructure instruction and Decisions 13, 16, 19, and 23. No other step is included.
+
+Modules called (in order):
+1. Client consent is checked. The consent flag and the consent date are stored. Missing consent fails closed.
+2. Required elections are checked. A missing election fails closed. The elections that pass are frozen on the new agreement.
+3. Identity fields (name, ID number, service address) are frozen on the new agreement.
+4. The decision engine supplies the new rate, term, and instalment. The LMS stores those values. It does not re-decide concurrent, subsequent, or restructure rules.
+5. A new agreement is created and linked to the original.
+6. The original agreement is marked restructured. Its balance, in integer cents, is transferred to the new agreement.
+7. The new contractual instalment is stored.
+8. The outcome is returned (success with a confirmation, or failure with a specific reason) and written to the audit log.
+
+Outcome: New agreement linked to the original. Original marked restructured. Balance transferred. Contractual instalment stored.
+
+## 11. Settlement receipt
+
+This is not section 2. An ordinary receipt does not pay principal that is not yet due. A short receipt, a surplus, or a receipt outside the quote window is not posted on this path, and it is not turned into an ordinary payment.
+
+Modules called (in order):
+1. Ledger.accrue_day, once for each day from disbursement through the quote as-of date
+2. Ledger.bill_interest, then Ledger.levy_service_fee, on each month-end in that span and on the quote as-of date
+3. Ledger.post_settlement
+
+Outcome: The receipt must equal the quoted amount in cents. Its value date must fall on or between the delivery date and valid-until. Interest is the interest in the quote. Days after the quote as-of date, and before a later receipt inside the window, are not accrued. The service fee in the settlement month is the full monthly fee. The opening month keeps the locked fraction and is not shortened to the settlement day. When the balance is R0 the agreement is marked settled. A receipt that does not match is not allocated.
+
+Capitalise-then-allocate is Decision 1. The value date is 00:00 Africa/Johannesburg. The allocation order is Decision 8, and it includes principal that is not yet due, because this receipt is the section 125 settlement. The early-termination charge stays R0. The quote uses the booked initiation fee. A capitalised fee is already part of the loan value and is not added again. A fee that is not capitalised has its outstanding portion added. VAT is included, and the client remains accountable for that portion. Execute posts that VAT when the ledger charge does not yet hold it, then allocates the quoted amount. Gaps for this path are F1 to F7 in docs/OPEN_ISSUES.md.
 
 ## In-duplum flows
 
