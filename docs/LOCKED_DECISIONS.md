@@ -4,7 +4,7 @@ Single source of truth for all decisions that have been researched and locked.
 All future agents, chats and developers must follow these rules.
 Do not re-open a locked decision without an explicit change request.
 
-Last updated: 2026-10-30
+Last updated: 2026-10-31
 
 ## Standing instruction for all agents
 
@@ -21,7 +21,9 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Reversals use the same value date the system originally recognised.
 - A payment received on a flag date is treated as 00:00 on that day and is visible to the morning default check.
 - When two events are both recognised at 00:00 on the same calendar day, process them in the order they were recognised by the system (stable sort by receipt sequence).
-- On any calendar day, capitalisation of accrued interest and fees and allocation of payments recognised that day are treated as simultaneous at 00:00. The order is: accrue and capitalise the day's due amounts first, then allocate payments recognised that day.
+- On any calendar day, capitalisation of accrued interest and fees and allocation of payments recognised that day are treated as simultaneous at 00:00. The order is: accrue and capitalise the day's due amounts first, then allocate payments recognised that day, then run the morning default check.
+- A receipt recognised on the flag date is visible to that morning default check.
+- Interest that has accrued up to the due date is due on that date. It is capitalised before the receipt is allocated.
 - The payment rail must capitalise due amounts before allocating.
 
 ## 2. Initiation fee treatment
@@ -63,6 +65,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - Parent/child relationship required. Contracts must treat the pair as one loan (not as security that would make the loan secured).
 - Once a loan is granted, the default allocation is: all payments go to the loan first (section 126 order). Any excess then goes to the Laybye account.
+- After due section 126 amounts, the remainder goes to the Laybye.
+- The partial-prepayment election applies only to a remainder that is not sent to a linked Laybye.
 - Interest is calculated on the net balance (loan principal minus Laybye hold). The hold reduces only the interest base; principal remains gross for in-duplum and settlement.
 - Only one monthly service fee (levied on the parent).
 - Client can consolidate or settle when Laybye ≥ settlement balance.
@@ -103,6 +107,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Prefer keeping the contractual instalment the same during the loan term.
 - Interest continues to be calculated daily on the outstanding balance. Leniency does not pause or reduce interest.
 - A payment received on the flag date is treated as 00:00 on that day and is seen by the morning check.
+- A receipt counts only toward the due date it is attributed to.
+- If section 126 applies part of the receipt to an earlier due amount, that part does not count toward a later due date.
 - A system-error correction of a contractual breach restores the campaign discount and clears the in-duplum ceiling as if the breach never occurred.
 
 ## 7. In-duplum base and episodes
@@ -112,6 +118,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Charges that cause the default do not count toward the cap; only charges that accrue during the default episode.
 - A payment during the default reduces what is owed but does not reset the counter for that episode.
 - A cure closes the episode only when the client has chosen collections-default as the in-duplum trigger. If the client has chosen contractual breach, the ceiling remains fixed.
+- A settlement closes any open in-duplum episode. The flag is cleared.
 - A new default starts a fresh episode with a new ceiling based on the unpaid principal at the start of the new default (when collections-default trigger is selected).
 - Three section 103(5) edges not decided by Nedbank remain unnamed and unsigned. No implementation assumption is made about those edges.
 - The in-duplum clip is on for Day-1.
@@ -128,6 +135,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Only due or unpaid amounts are allocated.
 - When multiple fee buckets are all already due, order is: collection costs, default administration, credit insurance, service fee, initiation fee (earliest due date first within each bucket).
 - On any calendar day, accrued interest and fees that become due that day are capitalised at 00:00 before payments recognised that day are allocated.
+- Interest that has accrued up to the due date is due on that date. It is capitalised before the receipt is allocated.
 - Capitalisation and payment allocation need not occur on the same calendar day. Capitalisation may be month-end; payment may be on the client's payday. Each is processed on its own recognition date.
 - Fees and interest charged may never exceed NCA limits.
 - If the client pays the contractual instalment exactly as per the contract, the loan will either be repaid earlier or a small residual may be written off after the last instalment.
@@ -192,6 +200,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - (a) adjust the instalment based on actual disbursement date and remaining term, or
   - (b) keep the original instalment and either settle early or write off a small residual at contractual end.
 - After a partial prepayment the provider chooses whether to shorten the term or drop the instalment.
+- The partial-prepayment election applies only to a remainder that is not sent to a linked Laybye.
 - Prefer keeping the contractual instalment the same during the loan term.
 - Additional fees outside interest, initiation, monthly service fee and credit life (for example certain collection costs) should be added as a further monthly fee (fixed or variable), not capitalised into the amortisation schedule.
 - A loan restructuring capability exists so that other costs can be added during the term by creating a new instalment, pricing and term when required.
@@ -352,7 +361,7 @@ The payment-rail layer found these points unset. Nothing in this section is a de
 - Section 19 does not name an automated-collections election. The configuration catalogue already has `debit_orders_enabled` (“Submit debit orders”). A missing row fails closed. The lock does not say that flag is the section 4 automation switch.
 - Section 25 does not fix the loan-number character pattern. The Bankserv user reference allows 14 characters for the mandate or agreement number. Section 13 requires the contractual instalment to be stored; the agreement stores a principal schedule. The debit-order loan line reads the section 6 amount still outstanding on that due date and does not invent unbilled interest.
 - The published Bankserv collections layout does not define a DebiCheck record, and it does not state the hash-total algorithm beyond a 12-digit field. Consumer homing-account details and the bank’s 10-character abbreviated user name are not LMS fields in this document. A credit-life premium receipt has no insurer hand-off here.
-- Whether interest that accrues on a payment date is itself due that day, or only on an instalment due date, is not settled beyond “capitalise due amounts, then allocate”.
+- Interest that has accrued up to the due date is due on that date and is capitalised before the receipt is allocated. Sections 1 and 8. The earlier note that this was unsettled is superseded.
 - Decision 19 fills an unset residual write-off threshold with R100. A stored value, including zero, is kept. The earlier payment-rail note that the resolver returned 5 000 cents, and that the two readings were unsettled, is superseded.
 - Settlement re-advance has no module order in the orchestration note. The route, the settlement-month fee, and the points this command does not decide are recorded in `docs/settlement-readvance/`. That note is not a rule.
 
