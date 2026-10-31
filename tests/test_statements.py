@@ -96,6 +96,27 @@ def issue(docs: Documents, record, **overrides):
     return docs.issue_statement(**payload)
 
 
+def test_statement_ready_push_follows_registration_and_does_not_issue_twice():
+    docs, svc, _store = documents()
+    record = book_and_disburse(svc)
+    period = (record.organisation_id, record.person_id, date(2026, 3, 1), date(2026, 3, 31))
+    assert docs.statement_issued(*period) is False
+    issued = issue(docs, record)
+    assert docs.statement_issued(*period) is True
+    assert len(svc.notifications.pushes) == 1
+    note = svc.notifications.pushes[0]
+    assert note.message == "Your statement is available."
+    assert note.statement_id == issued.statement_id
+    assert "balance" not in note.message.lower()
+    again = issue(docs, record)
+    assert again.statement_id == issued.statement_id
+    assert len(svc.notifications.pushes) == 1
+    svc.enigma.registered = False
+    april = issue(docs, record, period_start=date(2026, 4, 1), period_end=date(2026, 4, 30))
+    assert april.statement_id != issued.statement_id
+    assert len(svc.notifications.pushes) == 1
+
+
 def test_missing_vat_rate_posts_nothing():
     docs, svc, _store = documents()
     record = book_and_disburse(svc)

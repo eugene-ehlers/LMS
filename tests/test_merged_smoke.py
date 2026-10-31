@@ -476,6 +476,8 @@ def _normal(smoke, servicing, documents, engine, rail, payments, identity) -> No
         idempotency_key="pay-normal",
         agreement_id=record.agreement_id,
         attributed_due_on=due,
+        interest_cap_present=True,
+        vat_rate=VAT,
     )
     loan_tx = servicing.ledger.store.get_transaction(ORG, payment.ledger_transaction_id)
     smoke.say(f"normal 1 May credits: {_credits(loan_tx)}")
@@ -520,11 +522,12 @@ def _normal(smoke, servicing, documents, engine, rail, payments, identity) -> No
             "A memo on the R2 000 balance that existed at the start of 1 May would be 3.2258064516 rands. "
             "The memo was not billed. Event: R219 receipt on 1 May, then the 1 May statement."
         )
-    smoke.gap(
-        "Orchestration section 6 calls Notifications.push after Documents.issue_statement. "
-        "This tree has no notifications module, and issue_statement does not push. "
-        "Event: normal lifecycle April and 1 May statements."
-    )
+    if not servicing.notifications.pushes:
+        smoke.gap(
+            "Orchestration section 6 calls Notifications.push after Documents.issue_statement. "
+            "This tree has no notifications module, and issue_statement does not push. "
+            "Event: normal lifecycle April and 1 May statements."
+        )
 
 
 def _open_period(smoke, servicing, documents, engine, identity) -> None:
@@ -802,6 +805,8 @@ def _collections_default(smoke, servicing, documents, collections, engine, rail,
         idempotency_key="pay-default",
         agreement_id=record.agreement_id,
         attributed_due_on=due,
+        interest_cap_present=True,
+        vat_rate=VAT,
     )
     later = collections.observe(record.agreement_id, recognised_at=to_recognition_instant(pay_on))
     principal_after = servicing.ledger.bucket_balance(account, "principal")
@@ -872,6 +877,8 @@ def _write_off(smoke, servicing, documents, collections, engine, identity) -> No
         idempotency_key="pay-writeoff",
         agreement_id=record.agreement_id,
         attributed_due_on=due,
+        interest_cap_present=True,
+        vat_rate=VAT,
     )
     before = {
         bucket: servicing.ledger.bucket_balance(account, bucket)
@@ -1017,8 +1024,8 @@ def _pin(smoke: Smoke) -> None:
     """The cents this run produced. A later change has to show up here."""
     expected = {
         "normal_april_interest": 10_000,
-        "normal_credits": [("interest", 10_000), ("service", 6_900), ("principal", 5_000)],
-        "normal_may_memo": "3.1451612903",
+        "normal_credits": [("interest", 10_323), ("service", 11_577)],
+        "normal_may_memo": "3.2258064516",
         "open_fees": [
             ("service", date(2026, 4, 30), 3_200, 480, 3_680),
             ("service", date(2026, 5, 31), 6_000, 900, 6_900),
@@ -1044,13 +1051,8 @@ def _pin(smoke: Smoke) -> None:
             "2026-05-22",
             (("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
         ),
-        "collections": (200_000, 200_000, 196_900, 0, 0, True, 196_900),
-        "write_off": (
-            "posted",
-            7_400,
-            {"principal": 0, "interest": 0, "service": 0, "initiation": 0},
-            True,
-        ),
+        "collections": (200_000, 200_000, 200_000, 0, 4_123, True, 204_123),
+        "write_off": ("refused", "residual-above-threshold", 14_316),
         "campaign": ("2026-05-04", "2026-05-10", "0.03", "1.9354838710", "0.05", "3.2258064516"),
     }
     for key, value in expected.items():

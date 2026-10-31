@@ -47,6 +47,7 @@ RUN_KEYS = {
     "finished_at",
     "accounts_processed",
     "accounts_failed",
+    "accounts_at_ceiling",
     "status",
     "outcome",
     "actor_id",
@@ -161,6 +162,7 @@ def test_successful_batch_records_johannesburg_times_counts_and_audit(tmp_path: 
         assert finished.finished_at == "2026-10-28T00:15:02.000000+02:00"
         assert finished.accounts_processed == 2
         assert finished.accounts_failed == 0
+        assert finished.accounts_at_ceiling == 0
         assert finished.failures == ()
         assert finished.actor_id == "person-1"
         assert finished.alert is None
@@ -772,3 +774,57 @@ def test_query_route(tmp_path: Path) -> None:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+class _ListedLoan:
+    def __init__(self, loan_id: str) -> None:
+        self.loan_id = loan_id
+
+
+class _LedgerList:
+    def __init__(self, loan_ids: tuple[str, ...]) -> None:
+        self.store = self
+        self.loan_ids = loan_ids
+
+    def accounts_for(self, organisation_id: str) -> tuple[_ListedLoan, ...]:
+        assert organisation_id == "org-1"
+        return tuple(_ListedLoan(loan_id) for loan_id in self.loan_ids)
+
+
+def test_unset_account_list_comes_from_the_ledger(tmp_path: Path) -> None:
+    calculation = ScriptedCalculation()
+    store = BatchStore(str(tmp_path / "batch.sqlite"))
+    clock = AdvancingClock(datetime(2026, 10, 27, 22, 15, 1, tzinfo=timezone.utc))
+    service = BatchService(store, calculation, clock, ledger=_LedgerList(("loan-a", "loan-b")))
+    try:
+        finished = service.run_batch(
+            organisation_id="org-1",
+            actor_id="person-1",
+            recognition_date="2026-10-28",
+            account_ids=None,
+        )
+        assert finished.accounts_processed == 2
+        assert [call[1] for call in calculation.calls] == [
+            "loan-a",
+            "loan-a",
+            "loan-a",
+            "loan-b",
+            "loan-b",
+            "loan-b",
+        ]
+    finally:
+        store.close()
+
+
+def test_missing_ledger_account_list_fails_closed(tmp_path: Path) -> None:
+    store, service = service_for(tmp_path / "batch.sqlite", ScriptedCalculation())
+    try:
+        with pytest.raises(InvalidBatchRequest, match="the ledger cannot supply the account list"):
+            service.run_batch(
+                organisation_id="org-1",
+                actor_id="person-1",
+                recognition_date="2026-10-28",
+                account_ids=None,
+            )
+    finally:
+        store.close()

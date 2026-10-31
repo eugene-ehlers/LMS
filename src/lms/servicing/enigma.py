@@ -29,6 +29,7 @@ class EnigmaStub:
         self.id_number = "8001015800085"
         self.service_address = "1 Main Road, Cape Town"
         self.enrolment_id = "enr-1"
+        self.registered = True
 
     def check(self, organisation_id: str, person_id: str, mandate: str) -> EnigmaIdentity:
         if not organisation_id or not person_id or not mandate:
@@ -68,3 +69,40 @@ class EnigmaStub:
             self.service_address,
             self.enrolment_id,
         )
+
+    def consumer_registered(self, organisation_id: str, person_id: str) -> bool:
+        """Whether the consumer is registered. No email or mobile is returned.
+
+        Decision 27 sends the statement-ready push only when the consumer is
+        registered. The real Enigma registration read is still open (N2). This
+        dummy answers without contact details and fails closed on the same
+        Enigma faults as ``check``. ``registered`` is that answer. It is not
+        an email or a mobile number.
+        """
+        if not organisation_id or not person_id:
+            raise ServicingError(
+                "enigma-ambiguous",
+                "LOCKED_DECISIONS §15: an Enigma check without an organisation or person is ambiguous.",
+            )
+        if self.mode == "timeout":
+            raise ServicingError(
+                "enigma-timeout",
+                "LOCKED_DECISIONS §15: Enigma timed out. The call fails closed.",
+                status=503,
+            )
+        if self.mode == "ambiguous":
+            raise ServicingError(
+                "enigma-ambiguous",
+                "LOCKED_DECISIONS §15: Enigma status is ambiguous. The call fails closed.",
+            )
+        if self.mode == "suspended":
+            raise ServicingError(
+                "enigma-suspended",
+                "LOCKED_DECISIONS §15: the enrolment is suspended. The call fails closed.",
+            )
+        if self.mode != "active":
+            raise ServicingError(
+                "enigma-ambiguous",
+                "LOCKED_DECISIONS §15: Enigma did not return a clear active enrolment.",
+            )
+        return bool(self.registered)

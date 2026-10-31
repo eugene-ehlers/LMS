@@ -74,6 +74,30 @@ def opened(trigger: str = "collections_default", **overrides):
     return collections, servicing, record, stub
 
 
+_CHARGE_BUCKETS = (
+    "interest",
+    "initiation",
+    "service",
+    "credit_insurance",
+    "default_administration",
+    "collection_costs",
+    "additional_monthly",
+)
+
+
+def pay_slice(servicing: Servicing, record, principal_cents: int, on: date, *, key: str, due: date = FIRST):
+    """Pay the charges capitalised on ``on``, then this principal slice."""
+    servicing._capitalise_due_amounts(
+        record,
+        on,
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
+    )
+    loan = servicing.ledger.store.get("org-a", record.ledger_loan_id)
+    charges = sum(servicing.ledger.bucket_balance(loan, bucket) for bucket in _CHARGE_BUCKETS)
+    return pay(servicing, record, charges + principal_cents, on, key=key, due=due)
+
+
 def pay(servicing: Servicing, record, cents: int, on: date, *, key: str, due: date = FIRST):
     return servicing.accept_payment(
         organisation_id="org-a",
@@ -83,6 +107,8 @@ def pay(servicing: Servicing, record, cents: int, on: date, *, key: str, due: da
         idempotency_key=key,
         agreement_id=record.agreement_id,
         attributed_due_on=due,
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
     )
 
 
@@ -103,7 +129,7 @@ def test_contractual_breach_cannot_be_rectified_after_the_day_has_passed():
     )
     assert accrual.value_date == date(2026, 6, 16)
 
-    payment = pay(servicing, record, 60_000, date(2026, 6, 16), key="late")
+    payment = pay_slice(servicing, record, 60_000, date(2026, 6, 16), key="late")
     assert payment.status == "allocated"
     still = collections.observe(record.agreement_id, recognised_at=at(date(2026, 6, 17), 8))
     assert still.contractual_breaches == (FIRST,)
@@ -119,7 +145,7 @@ def test_contractual_breach_cannot_be_rectified_after_the_day_has_passed():
 
 def test_a_receipt_on_the_due_date_does_not_become_a_contractual_breach():
     collections, _servicing, record, _stub = opened("contractual_breach")
-    pay(_servicing, record, 60_000, FIRST, key="on-the-day")
+    pay_slice(_servicing, record, 60_000, FIRST, key="on-the-day")
     viewed = collections.observe(record.agreement_id, recognised_at=at(date(2026, 6, 16), 8))
     assert viewed.contractual_breaches == ()
     assert viewed.open_episode_ceiling is None
@@ -132,7 +158,7 @@ def test_collections_default_can_be_cured_by_paying_the_arrears():
     assert flagged.open_episode_ceiling == 100_000
     assert flagged.contractual_breaches == (FIRST,)
 
-    pay(servicing, record, 60_000, date(2026, 6, 20), key="cure")
+    pay_slice(servicing, record, 60_000, date(2026, 6, 20), key="cure")
     cured = collections.observe(record.agreement_id, recognised_at=at(date(2026, 6, 20), 16))
     assert cured.collections_default is False
     assert cured.open_episode_ceiling is None
@@ -146,7 +172,7 @@ def test_contractual_breach_trigger_fixes_the_ceiling():
     assert opened_view.open_episode_ceiling == 100_000
     assert opened_view.episode_count == 1
 
-    pay(servicing, record, 60_000, date(2026, 6, 20), key="pay-down")
+    pay_slice(servicing, record, 60_000, date(2026, 6, 20), key="pay-down")
     held = collections.observe(record.agreement_id, recognised_at=at(date(2026, 6, 20), 16))
     assert held.open_episode_ceiling == 100_000
     assert held.episode_count == 1
@@ -160,7 +186,7 @@ def test_contractual_breach_trigger_fixes_the_ceiling():
 def test_collections_default_trigger_can_stop_and_start_again():
     collections, servicing, record, _stub = opened("collections_default")
     collections.observe(record.agreement_id, recognised_at=at(date(2026, 6, 16), 8))
-    pay(servicing, record, 60_000, date(2026, 6, 20), key="cure")
+    pay_slice(servicing, record, 60_000, date(2026, 6, 20), key="cure")
     cured = collections.observe(record.agreement_id, recognised_at=at(date(2026, 6, 20), 16))
     assert cured.open_episode_ceiling is None
 
@@ -371,47 +397,55 @@ def test_provision_and_prescription_have_no_platform_formula():
         amount_cents=1_500,
     )
     assert stored.provision_cents == 1_500
-    with pytest.raises(CollectionsError) as missing_formula:
+    with pytest.raises(CollectionsError) as missing_instruction:
         manual.open_prescription_review(manual_record.agreement_id, recognised_at=at(date(2026, 4, 2)))
-    assert missing_formula.value.code == "prescription-formula-unset"
+    assert missing_instruction.value.code == "prescription-instruction-unset"
 
 
-def test_formulas_are_not_given_promise_to_pay_or_contactability():
+def test_formulas_run_outside_and_are_not_given_promise_to_pay_or_contactability():
     collections, _servicing, record, _stub = opened(
         "collections_default",
         provision_mode="formula",
         prescription_mode="formula",
     )
-    seen: list[set[str]] = []
-
-    def provision_formula(facts):
-        seen.append(set(facts.__dataclass_fields__))
-        return facts.arrears_cents
-
+    with pytest.raises(CollectionsError) as provision_formula:
+        collections.record_provision(
+            record.agreement_id,
+            recognised_at=at(date(2026, 6, 16)),
+            formula=lambda facts: facts.arrears_cents,
+        )
+    assert provision_formula.value.code == "provision-formula-outside"
     stored = collections.record_provision(
         record.agreement_id,
         recognised_at=at(date(2026, 6, 16)),
-        formula=provision_formula,
+        amount_cents=60_000,
     )
     assert stored.provision_cents == 60_000
-    assert seen == [{"arrears_cents", "recency_days", "months_on_book", "as_of"}]
 
-    def prescription_formula(facts):
-        seen.append(set(facts.__dataclass_fields__))
-        return facts.months_on_book >= 0
-
+    with pytest.raises(CollectionsError) as prescription_formula:
+        collections.open_prescription_review(
+            record.agreement_id,
+            recognised_at=at(date(2026, 6, 16)),
+            formula=lambda facts: facts.months_on_book >= 0,
+        )
+    assert prescription_formula.value.code == "prescription-formula-outside"
+    declined = collections.open_prescription_review(
+        record.agreement_id,
+        recognised_at=at(date(2026, 6, 16)),
+        instructed=False,
+    )
+    assert declined.prescription_review is False
     review = collections.open_prescription_review(
         record.agreement_id,
         recognised_at=at(date(2026, 6, 16)),
-        formula=prescription_formula,
+        instructed=True,
     )
     assert review.prescription_review is True
-    assert seen[1] == seen[0]
     with pytest.raises(TypeError):
         collections.record_provision(
             record.agreement_id,
             recognised_at=at(date(2026, 6, 16)),
-            formula=provision_formula,
+            amount_cents=1,
             promise_to_pay="2026-06-20",
             contactability="2",
         )
@@ -419,7 +453,7 @@ def test_formulas_are_not_given_promise_to_pay_or_contactability():
         collections.open_prescription_review(
             record.agreement_id,
             recognised_at=at(date(2026, 6, 16)),
-            formula=prescription_formula,
+            instructed=True,
             promise_to_pay="kept",
             contactability="score",
         )

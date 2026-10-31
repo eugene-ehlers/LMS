@@ -161,8 +161,7 @@ def test_campaign_discount_falls_away_on_default_and_zero_rate_still_calculates(
     assert campaign_rate(
         Decimal("0.05"), Decimal("0.02"), in_default=False, discount_fallen_away=True
     ) == Decimal("0.05")
-    with pytest.raises(CalculationInputError):
-        campaign_rate(Decimal("0.05"), Decimal("0.06"), in_default=False)
+    assert campaign_rate(Decimal("0.05"), Decimal("0.06"), in_default=False) == Decimal(0)
 
     loan = micro_short_term().instruments[0]
     campaign = ProductTerms(
@@ -387,8 +386,8 @@ def test_flag_date_payment_is_visible_to_the_morning_check():
     ) is True
 
 
-def test_in_duplum_clip_stays_off():
-    assert IN_DUPLUM_CLIP_POSTS is False
+def test_in_duplum_clip_is_on_for_day_1():
+    assert IN_DUPLUM_CLIP_POSTS is True
 
 
 def test_missing_reference_data_fails_the_posting():

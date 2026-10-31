@@ -461,6 +461,8 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
             idempotency_key="pay-may",
             agreement_id=record.agreement_id,
             attributed_due_on=DUE,
+            interest_cap_present=True,
+            vat_rate=VAT_RATE,
         ),
     )
     if payment is None:
@@ -476,11 +478,10 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     _expect(
         problems,
         credited == [
-            ("interest", NET_APRIL_INTEREST_CENTS),
-            ("service", SERVICE_FEE_CENTS),
-            ("principal", PRINCIPAL_FROM_RECEIPT_CENTS),
+            ("interest", NET_APRIL_INTEREST_CENTS + 290),
+            ("service", RECEIPT_CENTS - (NET_APRIL_INTEREST_CENTS + 290)),
         ],
-        "the R219 receipt should pay due interest, then the service fee, then principal. "
+        "the R219 receipt should pay the interest and service fee capitalised before it. "
         f"Credits were {credited}.",
     )
     _expect(
@@ -635,6 +636,8 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
             idempotency_key="pay-cure",
             agreement_id=record.agreement_id,
             attributed_due_on=DUE,
+            interest_cap_present=True,
+            vat_rate=VAT_RATE,
         ),
     )
     if cure_payment is None:

@@ -18,7 +18,6 @@ from lms.dummies.decision_engine import DecisionEngineDummy
 from lms.dummies.fixtures import FIXED_INSTALMENT_CENTS
 from lms.dummies.enigma import EnigmaDummy
 from lms.errors import EnigmaFailClosed
-from lms.ledger.errors import LedgerError
 from lms.ledger.service import Ledger
 from lms.ports.decision_engine import Application, Approval, ConsumerIdentity, PaymentFrequency
 from lms.ports.enigma import freeze_booking_identity
@@ -597,10 +596,8 @@ def test_posted_interest_is_reported_and_the_in_duplum_clip_stays_off():
     )
     posted = ledger.bucket_balance(loan, "interest", as_of=date(2026, 3, 3))
     assert posted > 0
-    assert IN_DUPLUM_CLIP_POSTS is False
-    with pytest.raises(LedgerError) as clipped:
-        ledger.clip_in_duplum()
-    assert clipped.value.code == "in-duplum-clip-off"
+    assert IN_DUPLUM_CLIP_POSTS is True
+    ledger.clip_in_duplum()
     store = ComplianceStore()
     store.put(compliance_row())
     calls: list[str] = []

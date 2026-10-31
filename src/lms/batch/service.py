@@ -33,6 +33,7 @@ from lms.batch.timekeeping import JOHANNESBURG, format_jhb, parse_recognition_da
 class _Progress:
     processed: int = 0
     failed: int = 0
+    at_ceiling: int = 0
 
 
 class SystemClock:
@@ -46,10 +47,12 @@ class BatchService:
         store: BatchStore,
         calculation: DailyCalculation | None,
         clock: object | None = None,
+        ledger: object | None = None,
     ) -> None:
         self._store = store
         self._calculation = calculation
         self._clock = clock if clock is not None else SystemClock()
+        self._ledger = ledger
 
     def run_batch(
         self,
@@ -64,7 +67,11 @@ class BatchService:
             organisation_id = _require_token(organisation_id, "organisation_id")
             actor_id = _require_token(actor_id, "actor_id")
             recognition_day, recognition_at = parse_recognition_date(recognition_date)
-            accounts = _require_accounts(account_ids)
+            accounts = (
+                self._accounts_from_ledger(organisation_id)
+                if account_ids is None
+                else _require_accounts(account_ids)
+            )
         except ValueError as exc:
             self._refuse_if_possible(
                 organisation_id=organisation_id,
@@ -110,6 +117,24 @@ class BatchService:
             raise
         except Exception as exc:
             self._fail_incomplete(run, exc, progress)
+
+    def _accounts_from_ledger(self, organisation_id: str) -> list[str]:
+        ledger = self._ledger
+        store = getattr(ledger, "store", None)
+        accounts_for = getattr(store, "accounts_for", None)
+        if not callable(accounts_for):
+            raise ValueError("the ledger cannot supply the account list")
+        try:
+            found = accounts_for(organisation_id)
+        except Exception as exc:
+            raise ValueError("the ledger cannot supply the account list") from exc
+        identifiers: list[str] = []
+        for account in found:
+            loan_id = getattr(account, "loan_id", None)
+            if not isinstance(loan_id, str) or loan_id.strip() == "":
+                raise ValueError("the ledger cannot supply the account list")
+            identifiers.append(loan_id)
+        return identifiers
 
     def skip_run(
         self,
@@ -180,6 +205,12 @@ class BatchService:
                 )
                 if failure is not None:
                     break
+            if _account_hit_ceiling(
+                calculation,
+                organisation_id=run.organisation_id,
+                account_id=account_id,
+            ):
+                progress.at_ceiling += 1
             if failure is not None:
                 try:
                     recorded = self._store.record_account_failure(
@@ -189,6 +220,7 @@ class BatchService:
                         reason=failure.reason,
                         accounts_processed=progress.processed + 1,
                         accounts_failed=progress.failed + 1,
+                        accounts_at_ceiling=progress.at_ceiling,
                         recorded_at=self._timestamp(),
                     )
                 except PersistenceError as exc:
@@ -203,7 +235,10 @@ class BatchService:
             else:
                 try:
                     updated = self._store.record_progress(
-                        run.id, progress.processed + 1, progress.failed
+                        run.id,
+                        progress.processed + 1,
+                        progress.failed,
+                        progress.at_ceiling,
                     )
                 except PersistenceError as exc:
                     raise BatchError(
@@ -218,6 +253,7 @@ class BatchService:
                 run_id=run.id,
                 accounts_processed=progress.processed,
                 accounts_failed=progress.failed,
+                accounts_at_ceiling=progress.at_ceiling,
                 finished_at=self._timestamp(),
                 actor_id=run.actor_id,
             )
@@ -244,6 +280,7 @@ class BatchService:
                 reason=reason,
                 accounts_processed=progress.processed,
                 accounts_failed=progress.failed,
+                accounts_at_ceiling=progress.at_ceiling,
                 recorded_at=recorded_at,
                 actor_id=run.actor_id,
             )
@@ -366,6 +403,13 @@ def _run_step(
             recorded_at="",
         )
     return None
+
+
+def _account_hit_ceiling(calculation: object, *, organisation_id: str, account_id: str) -> bool:
+    method = getattr(calculation, "account_hit_in_duplum_ceiling", None)
+    if method is None:
+        return False
+    return bool(method(organisation_id=organisation_id, account_id=account_id))
 
 
 def _with_step(step: str, reason: str) -> str:

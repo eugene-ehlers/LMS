@@ -1,8 +1,7 @@
 """Decision 19 elections frozen onto a restructured agreement.
 
-Unset values fail closed. The residual threshold is not filled. Decision 8
-names R100 and Decision 19 says an unset election fails closed. This module
-does not choose between those sentences (open issue C4).
+Unset values fail closed. Decision 19 fills an unset residual write-off
+threshold with R100. A stored value, including zero, is kept.
 """
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from lms.restructure.money import require_cents
+from lms_config.locked import resolve_residual_threshold_cents
 
 
 VAT = frozenset({"exclusive", "inclusive"})
@@ -69,7 +69,11 @@ def freeze_elections(raw: object) -> FrozenElections:
         raise ElectionError("missing election: vat_on_rand_maxima")
     values: dict[str, object] = {}
     for field in REQUIRED_FIELDS:
-        if field not in raw or raw[field] is None:
+        if field == "residual_write_off_threshold_cents":
+            if field not in raw or raw[field] is None:
+                values[field] = None
+                continue
+        elif field not in raw or raw[field] is None:
             raise ElectionError(f"missing election: {field}")
         values[field] = raw[field]
     for field, allowed in _CHOICES.items():
@@ -77,13 +81,15 @@ def freeze_elections(raw: object) -> FrozenElections:
         if not isinstance(value, str) or value not in allowed:
             choices = " or ".join(sorted(allowed))
             raise ElectionError(f"invalid election: {field}. Expected {choices}")
-    try:
-        residual = require_cents(
-            values["residual_write_off_threshold_cents"],
-            "residual_write_off_threshold_cents",
-        )
-    except ValueError as exc:
-        raise ElectionError(str(exc)) from exc
+    raw_residual = values["residual_write_off_threshold_cents"]
+    if raw_residual is None:
+        residual = resolve_residual_threshold_cents(None)
+    else:
+        try:
+            residual = require_cents(raw_residual, "residual_write_off_threshold_cents")
+        except ValueError as exc:
+            raise ElectionError(str(exc)) from exc
+        residual = resolve_residual_threshold_cents(residual)
     choice = values["campaign_fall_away_choice"]
     if "campaign_fall_away_trigger" not in raw or raw["campaign_fall_away_trigger"] is None:
         trigger: str | None = None

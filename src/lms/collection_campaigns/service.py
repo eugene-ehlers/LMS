@@ -33,7 +33,6 @@ from lms.ledger.models import LoanAccount
 from lms.ledger.service import Ledger
 from lms.regulatory.audit import AuditLog
 from lms_config.calendar import add_business_days, public_holidays, value_date
-from lms_config.exceptions import CalculationInputError
 from lms_config.locked import campaign_rate
 
 _FEE_TYPES = frozenset(FEE_TYPES)
@@ -864,17 +863,10 @@ def _reduced_rate(contractual: Decimal, reduction: Decimal) -> Decimal:
 
     ``discount_fallen_away`` stays false. That flag belongs to the origination
     discount already reflected in ``contractual``. Passing it here would drop
-    the collection reduction. A reduction above the contractual rate is refused
-    by ``campaign_rate``; this function does not floor it.
+    the collection reduction. Decision 3 floors a reduction above the
+    contractual rate at 0 %.
     """
-    try:
-        return campaign_rate(contractual, reduction)
-    except CalculationInputError as exc:
-        raise CollectionCampaignError(
-            "rate-above-contract",
-            "The collection-campaign reduction is above the contractual rate on this "
-            "recognition date. campaign_rate refuses that pair. The net is not floored here.",
-        ) from exc
+    return campaign_rate(contractual, reduction)
 
 
 def _durations(

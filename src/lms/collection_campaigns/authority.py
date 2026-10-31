@@ -41,6 +41,12 @@ def authorise(access: AccessPort, *, organisation_id: str, actor_id: str) -> str
                 "enrolment-suspended",
                 "LOCKED_DECISIONS §15: the enrolment is suspended. The collection campaign was not changed.",
             ) from exc
+        if code == "mandate-denied":
+            raise CollectionCampaignError(
+                "mandate-denied",
+                str(exc) or "The Enigma enrolment does not include the required role.",
+                status=403,
+            ) from exc
         raise CollectionCampaignError(
             "authority-ambiguous",
             "LOCKED_DECISIONS §15: Enigma status is ambiguous. The collection campaign was not changed.",

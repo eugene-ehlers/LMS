@@ -27,6 +27,7 @@ from lms.collection_campaigns.service import CollectionCampaigns
 from lms.ledger.errors import LedgerError
 from lms.ledger.models import LoanAccount
 from lms.ledger.service import Ledger, _day_count, _prepayment, _repo_fall
+from lms.notifications.service import Notifications
 from lms.regulatory.audit import AuditLog
 from lms.servicing.enigma import EnigmaStub
 from lms.servicing.errors import ServicingError
@@ -115,8 +116,12 @@ class Servicing:
     payments: dict[str, PaymentRecord] = field(default_factory=dict)
     statements: dict[tuple[str, str, date, date], IssuedStatement] = field(default_factory=dict)
     audit: AuditLog = field(default_factory=AuditLog)
+    notifications: Notifications = field(default_factory=Notifications)
     collection_campaigns: CollectionCampaigns | None = None
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.ledger.audit = self.audit
 
     def book(
         self,
@@ -416,8 +421,16 @@ class Servicing:
         agreement_id: str | None = None,
         attributed_due_on: date | None = None,
         settle: bool = False,
+        interest_cap_present: bool | None = None,
+        vat_rate: Decimal | None = None,
+        capitalise: bool = True,
     ) -> PaymentRecord:
-        """POST /v1/payments. Unmatched receipts stay out of the loan ledger."""
+        """POST /v1/payments. Unmatched receipts stay out of the loan ledger.
+
+        A matched receipt capitalises due amounts before section 126 allocation.
+        Decisions 1, 8, and 26. ``capitalise`` is false when the caller already
+        did that for this value date.
+        """
         fingerprint = _fingerprint(
             {
                 "organisation_id": organisation_id,
@@ -427,6 +440,9 @@ class Servicing:
                 "agreement_id": agreement_id,
                 "attributed_due_on": attributed_due_on.isoformat() if attributed_due_on else None,
                 "settle": settle,
+                "interest_cap_present": interest_cap_present,
+                "vat_rate": None if vat_rate is None else str(vat_rate),
+                "capitalise": capitalise,
             }
         )
         replay = self._replay("payment", organisation_id, idempotency_key, fingerprint)
@@ -449,7 +465,15 @@ class Servicing:
             self.payments[record.payment_id] = record
             self._remember("payment", organisation_id, idempotency_key, fingerprint, record.payment_id)
             return record
-        self._allocate(record, matched, attributed_due_on, settle=settle)
+        self._allocate(
+            record,
+            matched,
+            attributed_due_on,
+            settle=settle,
+            interest_cap_present=interest_cap_present,
+            vat_rate=vat_rate,
+            capitalise=capitalise,
+        )
         self.payments[record.payment_id] = record
         self._remember("payment", organisation_id, idempotency_key, fingerprint, record.payment_id)
         return record
@@ -473,7 +497,7 @@ class Servicing:
                 "unmatched",
                 "The agreement was not found for this organisation and person. The receipt stays unapplied.",
             )
-        self._allocate(payment, matched, attributed_due_on)
+        self._allocate(payment, matched, attributed_due_on, capitalise=True)
         return payment
 
     def reverse_payment(self, payment_id: str, *, recognised_at: datetime) -> PaymentRecord:
@@ -604,6 +628,15 @@ class Servicing:
             pdf_stub=payload,
         )
         self.statements[key] = issued
+        registered = self.enigma.consumer_registered(organisation_id, person_id)
+        self.notifications.push(
+            organisation_id=organisation_id,
+            person_id=person_id,
+            statement_id=issued.statement_id,
+            period_start=period_start,
+            period_end=period_end,
+            registered=registered,
+        )
         self._audit(
             organisation_id=organisation_id,
             occurred_at=value_instant(period_end),
@@ -774,6 +807,9 @@ class Servicing:
         agreement: AgreementRecord,
         attributed_due_on: date | None,
         settle: bool = False,
+        interest_cap_present: bool | None = None,
+        vat_rate: Decimal | None = None,
+        capitalise: bool = True,
     ) -> None:
         if agreement.status not in _ALLOCATABLE or agreement.ledger_loan_id is None:
             raise ServicingError("status", f"Cannot allocate to an agreement in {agreement.status}.")
@@ -782,6 +818,13 @@ class Servicing:
                 "due-date-attribution-unset",
                 "LOCKED_DECISIONS §6 compares the amount received for a due date. "
                 "Section 8 does not attribute a receipt, so a matched payment without a due date fails closed.",
+            )
+        if capitalise:
+            self._capitalise_due_amounts(
+                agreement,
+                payment.value_date,
+                interest_cap_present=interest_cap_present,
+                vat_rate=vat_rate,
             )
         try:
             transaction = self.ledger.post_payment(
@@ -815,6 +858,144 @@ class Servicing:
         self._audit_payment(payment, transaction, laybye_id)
         self._refresh_status(agreement)
 
+    def _capitalise_due_amounts(
+        self,
+        agreement: AgreementRecord,
+        recognition: date,
+        *,
+        interest_cap_present: bool | None,
+        vat_rate: Decimal | None,
+    ) -> None:
+        """Accrue through the receipt date, then bill amounts that are due.
+
+        The payment rail already does this before it allocates. A direct
+        receipt uses the same order: Decisions 1, 8, and 26. Nothing is
+        billed when no instalment is due on or before the recognition date.
+        """
+        if agreement.ledger_loan_id is None:
+            return
+        due_dates = sorted(due for due, _amount in agreement.schedule if due <= recognition)
+        if not due_dates:
+            return
+        account = self._loan(agreement)
+        if account.disbursement_value_date is None:
+            return
+        end = min(recognition, account.contractual_end)
+        if self._accrual_pending(agreement, account, end) and interest_cap_present is not True:
+            raise ServicingError(
+                "election-unset",
+                "Interest capitalisation needs interest_cap_present. It is not assumed.",
+            )
+        if interest_cap_present is True:
+            day = account.disbursement_value_date
+            while day <= end:
+                override = None
+                if self.collection_campaigns is not None:
+                    override = self.collection_campaigns.periodic_rate_override(
+                        agreement.organisation_id,
+                        account.loan_id,
+                        value_instant(day),
+                    )
+                try:
+                    self.ledger.accrue_day(
+                        organisation_id=agreement.organisation_id,
+                        loan_id=account.loan_id,
+                        recognised_at=value_instant(day),
+                        interest_cap_present=True,
+                        periodic_rate_override=override,
+                    )
+                except LedgerError as exc:
+                    if exc.code not in {"already-accrued", "outside-term"}:
+                        raise _from_downstream(exc) from exc
+                day += timedelta(days=1)
+        try:
+            self.ledger.bill_interest(
+                organisation_id=agreement.organisation_id,
+                loan_id=account.loan_id,
+                recognised_at=value_instant(due_dates[-1]),
+            )
+        except LedgerError as exc:
+            raise _from_downstream(exc) from exc
+        self._levy_due_service_fees(
+            agreement,
+            account,
+            recognition,
+            vat_rate=vat_rate,
+            interest_cap_present=interest_cap_present,
+        )
+
+    def _accrual_pending(self, agreement: AgreementRecord, account: LoanAccount, end: date) -> bool:
+        if account.disbursement_value_date is None or account.disbursement_value_date > end:
+            return False
+        accrued = {
+            transaction.value_date
+            for transaction in self.ledger.store.transactions_for(agreement.organisation_id, account.loan_id)
+            if transaction.kind == "interest_accrual"
+        }
+        day = account.disbursement_value_date
+        while day <= end:
+            if day not in accrued:
+                return True
+            day += timedelta(days=1)
+        return False
+
+    def _levy_due_service_fees(
+        self,
+        agreement: AgreementRecord,
+        account: LoanAccount,
+        recognition: date,
+        *,
+        vat_rate: Decimal | None,
+        interest_cap_present: bool | None,
+    ) -> None:
+        monthly = _service_fee_cents(agreement.product)
+        if monthly == 0 or account.disbursement_value_date is None:
+            return
+        first_due = min(due for due, _amount in agreement.schedule)
+        disbursement = account.disbursement_value_date
+        planned: list[tuple[datetime, date, bool, date | None]] = []
+        if recognition >= first_due and (disbursement.year, disbursement.month) not in account.service_months:
+            planned.append((value_instant(disbursement), first_due, True, first_due))
+        seen: set[tuple[int, int]] = set()
+        for due, _amount in sorted(agreement.schedule):
+            if due > recognition:
+                continue
+            month = (due.year, due.month)
+            if month == (disbursement.year, disbursement.month) or month in seen:
+                continue
+            seen.add(month)
+            if month in account.service_months:
+                continue
+            planned.append((value_instant(due), due, False, None))
+        if not planned:
+            return
+        if interest_cap_present is not True:
+            raise ServicingError(
+                "election-unset",
+                "Interest capitalisation needs interest_cap_present. It is not assumed.",
+            )
+        if vat_rate is None:
+            raise ServicingError(
+                "vat-rate-unset",
+                "LOCKED_DECISIONS §9: the LMS calculates VAT. No rate was supplied, and none is assumed.",
+            )
+        for recognised_at, due_on, opening, first in planned:
+            try:
+                self.ledger.levy_service_fee(
+                    organisation_id=agreement.organisation_id,
+                    loan_id=account.loan_id,
+                    recognised_at=recognised_at,
+                    monthly_cents=monthly,
+                    due_on=due_on,
+                    interest_cap_present=True,
+                    vat_rate=vat_rate,
+                    opening=opening,
+                    first_due=first,
+                )
+            except LedgerError as exc:
+                if exc.code != "service-fee-once":
+                    raise _from_downstream(exc) from exc
+
     def _accrue_and_bill(
         self,
         record: AgreementRecord,
@@ -828,6 +1009,12 @@ class Servicing:
         end = min(period_end, account.contractual_end)
         if start > end:
             return
+        monthly = _service_fee_cents(record.product)
+        if monthly and vat_rate is None:
+            raise ServicingError(
+                "vat-rate-unset",
+                "LOCKED_DECISIONS §9 does not store a VAT rate. The statement fails closed until the caller supplies one.",
+            )
         day = start
         while day <= end:
             override = None
@@ -857,14 +1044,8 @@ class Servicing:
             )
         except LedgerError as exc:
             raise _from_downstream(exc) from exc
-        monthly = _service_fee_cents(record.product)
         if monthly == 0:
             return
-        if vat_rate is None:
-            raise ServicingError(
-                "vat-rate-unset",
-                "LOCKED_DECISIONS §9 does not store a VAT rate. The statement fails closed until the caller supplies one.",
-            )
         first_due = min(due for due, _ in record.schedule)
         month_cursor = date(start.year, start.month, 1)
         while month_cursor <= end:

@@ -98,8 +98,7 @@ def compliance_body(**overrides) -> dict:
 
 def test_net_rate_calls_campaign_rate_and_floors_when_that_call_refuses():
     assert campaign_rate(Decimal("0.05"), Decimal("0.02")) == Decimal("0.03")
-    with pytest.raises(CalculationInputError):
-        campaign_rate(Decimal("0.05"), Decimal("0.08"))
+    assert campaign_rate(Decimal("0.05"), Decimal("0.08")) == Decimal(0)
     office = StaffOffice()
     created = office.create_campaign(
         _actor(),

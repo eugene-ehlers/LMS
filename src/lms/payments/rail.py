@@ -591,6 +591,9 @@ class PaymentRail:
                 idempotency_key=idempotency_key or receipt.receipt_id,
                 agreement_id=agreement.agreement_id,
                 attributed_due_on=receipt.attributed_due_on,
+                interest_cap_present=interest_cap_present,
+                vat_rate=vat_rate,
+                capitalise=False,
             )
         except ServicingError as exc:
             raise _from_downstream(exc) from exc
