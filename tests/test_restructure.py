@@ -254,7 +254,6 @@ def test_null_consent_and_refused_consent_and_missing_date() -> None:
         "interest_on_deferred_initiation",
         "repo_rate_fall",
         "in_duplum_trigger",
-        "residual_write_off_threshold_cents",
         "campaign_fall_away_choice",
     ],
 )
@@ -267,6 +266,16 @@ def test_each_missing_election_fails_closed(field: str) -> None:
     assert response["reason"] == f"missing election: {field}"
     assert engine.calls == 0
     assert service.agreements[AGREEMENT].status == "active"
+
+
+def test_unset_residual_fills_r100() -> None:
+    missing = elections()
+    missing["residual_write_off_threshold_cents"] = None
+    assert freeze_elections(missing).residual_write_off_threshold_cents == 10_000
+    absent = elections()
+    del absent["residual_write_off_threshold_cents"]
+    assert freeze_elections(absent).residual_write_off_threshold_cents == 10_000
+    assert freeze_elections(elections(residual_write_off_threshold_cents=0)).residual_write_off_threshold_cents == 0
 
 
 def test_invalid_election_and_conditional_trigger() -> None:

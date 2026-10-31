@@ -477,9 +477,6 @@ class StaffApp:
     def _collection_save(self, session: Session, form: dict, campaign_id: str | None) -> Page:
         return_to = "/staff/collection-campaigns/new" if campaign_id is None else f"/staff/collection-campaigns/{campaign_id}"
         action = "collection-create" if campaign_id is None else "collection-edit"
-        blocked = self._collection_role_block(session, form, action, return_to)
-        if blocked is not None:
-            return blocked
         body = _collection_body(form, session.organisation_id)
         if campaign_id is None:
             status, payload = self._collection(session, "POST", "/v1/collection-campaigns", body)
@@ -496,9 +493,6 @@ class StaffApp:
 
     def _collection_end(self, session: Session, form: dict, campaign_id: str) -> Page:
         return_to = f"/staff/collection-campaigns/{campaign_id}"
-        blocked = self._collection_role_block(session, form, "collection-end", return_to)
-        if blocked is not None:
-            return blocked
         body = {
             "organisation_id": session.organisation_id,
             "recognised_at": form.get("recognised_at", ""),
@@ -516,9 +510,6 @@ class StaffApp:
     def _collection_apply(self, session: Session, form: dict, campaign_id: str) -> Page:
         return_to = f"/staff/collection-campaigns/{campaign_id}/apply"
         org = _segment(session.organisation_id)
-        blocked = self._collection_role_block(session, form, "collection-apply", return_to)
-        if blocked is not None:
-            return blocked
         if org is None:
             return self._fail(
                 session, form, action="collection-apply", status=422, code="organisation-unset",
@@ -585,11 +576,10 @@ class StaffApp:
         return self._collection_role_block(session, {}, action, return_to)
 
     def _collection_role_block(self, session: Session, form: dict, action: str, return_to: str) -> Page | None:
-        """The route reports a missing role as an ambiguous Enigma status.
+        """Reads have no route yet. A missing role is stated here.
 
-        That message names the wrong cause. The screen states the missing role
-        and does not call the route. Timeout and a suspended enrolment still
-        go to the route.
+        Writes call the route. ``authorise`` returns ``mandate-denied`` for a
+        missing role, which is not an ambiguous Enigma status.
         """
         if session.enigma_status != "active":
             return None

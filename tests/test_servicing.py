@@ -218,14 +218,27 @@ def test_state_machine_arrears_cure_and_settlement():
         recognised_at=datetime(2026, 6, 15, 8, tzinfo=JOHANNESBURG),
     )
     assert flagged.status == "in_arrears"
+    loan = svc.ledger.store.get("org-a", record.ledger_loan_id)
+    svc._capitalise_due_amounts(
+        record,
+        first_due,
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
+    )
+    due_charges = sum(
+        svc.ledger.bucket_balance(loan, bucket)
+        for bucket in ("interest", "service", "initiation", "credit_insurance", "default_administration", "collection_costs", "additional_monthly")
+    )
     svc.accept_payment(
         organisation_id="org-a",
         person_id="person-a",
-        cents=50_000,
+        cents=due_charges + 50_000,
         recognised_at=datetime(2026, 6, 15, 7, tzinfo=JOHANNESBURG),
         idempotency_key="cure",
         agreement_id=record.agreement_id,
         attributed_due_on=first_due,
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
     )
     cured = svc.morning_check(
         record.agreement_id,
@@ -233,14 +246,26 @@ def test_state_machine_arrears_cure_and_settlement():
         recognised_at=datetime(2026, 6, 15, 9, tzinfo=JOHANNESBURG),
     )
     assert cured.status == "active"
+    svc._capitalise_due_amounts(
+        record,
+        second_due,
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
+    )
+    outstanding = sum(svc.ledger.bucket_balance(loan, bucket) for bucket in (
+        "principal", "interest", "service", "initiation", "credit_insurance",
+        "default_administration", "collection_costs", "additional_monthly",
+    ))
     svc.accept_payment(
         organisation_id="org-a",
         person_id="person-a",
-        cents=50_000,
+        cents=outstanding,
         recognised_at=datetime(2026, 7, 15, 8, tzinfo=JOHANNESBURG),
         idempotency_key="settle",
         agreement_id=record.agreement_id,
         attributed_due_on=second_due,
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
     )
     assert record.status == "settled"
 

@@ -27,10 +27,12 @@ Outcome: Capitalise then allocate. Default flag if the threshold is not met.
 ## 2. Receipt arrives
 
 Modules called (in order):
-1. Servicing.accept_payment
-2. Ledger.post_payment
+1. Ledger.accrue_day
+2. Ledger.bill_interest and Ledger.levy_service_fee (capitalise due amounts)
+3. Servicing.accept_payment
+4. Ledger.post_payment
 
-Outcome: Section 126 allocation. Excess to Laybye if linked.
+Outcome: Capitalise due amounts, then section 126 allocation. Excess to Laybye if linked. Decisions 1, 8, and 26.
 
 ## 3. Collections default flagged
 
@@ -77,10 +79,9 @@ The settlement route calls those two methods in that order. It refuses the quote
 ## 8. Returned unpaid after write-off
 
 Modules called (in order):
-1. Servicing.reverse_payment
-2. Flag write_off_approval_required
+1. Flag write_off_approval_required
 
-Outcome: Flagged only. Balance not reopened. No recovery posted in the LMS.
+Outcome: Flagged only. Balance not reopened. No recovery posted in the LMS. Decisions 8 and 26. Servicing.reverse_payment is not called on this path.
 
 ## 9. Daily calculation batch
 

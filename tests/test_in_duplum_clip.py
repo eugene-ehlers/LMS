@@ -264,6 +264,8 @@ def test_collections_default_cure_clears_the_flag_and_contractual_breach_does_no
         idempotency_key="cure",
         agreement_id=record.agreement_id,
         attributed_due_on=date(2026, 6, 15),
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
     )
     cured = collections.observe(record.agreement_id, recognised_at=at(date(2026, 6, 17)))
     assert cured.collections_default is False
@@ -316,6 +318,8 @@ def test_collections_default_cure_clears_the_flag_and_contractual_breach_does_no
         idempotency_key="pay-breach",
         agreement_id=breach.agreement_id,
         attributed_due_on=date(2026, 6, 15),
+        interest_cap_present=True,
+        vat_rate=Decimal("0.15"),
     )
     held = breach_collections.observe(breach.agreement_id, recognised_at=at(date(2026, 6, 17)))
     assert breach_loan.episodes[0].closed_on is None

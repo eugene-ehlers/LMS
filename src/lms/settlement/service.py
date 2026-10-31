@@ -959,6 +959,7 @@ class SettlementReadvance:
                 agreement_id=agreement.agreement_id,
                 attributed_due_on=recognition,
                 settle=True,
+                capitalise=False,
             )
         except ServicingError as exc:
             raise SettlementError(exc.code, str(exc), status=exc.status) from exc

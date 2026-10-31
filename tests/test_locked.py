@@ -161,8 +161,7 @@ def test_campaign_discount_falls_away_on_default_and_zero_rate_still_calculates(
     assert campaign_rate(
         Decimal("0.05"), Decimal("0.02"), in_default=False, discount_fallen_away=True
     ) == Decimal("0.05")
-    with pytest.raises(CalculationInputError):
-        campaign_rate(Decimal("0.05"), Decimal("0.06"), in_default=False)
+    assert campaign_rate(Decimal("0.05"), Decimal("0.06"), in_default=False) == Decimal(0)
 
     loan = micro_short_term().instruments[0]
     campaign = ProductTerms(

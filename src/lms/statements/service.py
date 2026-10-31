@@ -135,6 +135,15 @@ class Documents:
             loans=sections,
         )
         self.statements[key] = stored
+        registered = self.servicing.enigma.consumer_registered(organisation_id, person_id)
+        self.servicing.notifications.push(
+            organisation_id=organisation_id,
+            person_id=person_id,
+            statement_id=stored.statement_id,
+            period_start=period_start,
+            period_end=period_end,
+            registered=registered,
+        )
         self.servicing.audit.append(
             organisation_id=organisation_id,
             occurred_at=value_instant(period_end),
@@ -148,6 +157,16 @@ class Documents:
             },
         )
         return stored
+
+    def statement_issued(
+        self,
+        organisation_id: str,
+        person_id: str,
+        period_start: date,
+        period_end: date,
+    ) -> bool:
+        """Whether this period was already issued. Does not call ``issue_statement``."""
+        return (organisation_id, person_id, period_start, period_end) in self.statements
 
     def enquire(
         self,
@@ -413,6 +432,9 @@ class Documents:
                     idempotency_key=receipt.idempotency_key,
                     agreement_id=record.agreement_id,
                     attributed_due_on=receipt.attributed_due_on,
+                    interest_cap_present=interest_cap_present,
+                    vat_rate=vat_rate,
+                    capitalise=False,
                 )
             day += timedelta(days=1)
 

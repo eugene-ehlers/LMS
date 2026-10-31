@@ -47,10 +47,12 @@ class BatchService:
         store: BatchStore,
         calculation: DailyCalculation | None,
         clock: object | None = None,
+        ledger: object | None = None,
     ) -> None:
         self._store = store
         self._calculation = calculation
         self._clock = clock if clock is not None else SystemClock()
+        self._ledger = ledger
 
     def run_batch(
         self,
@@ -65,7 +67,11 @@ class BatchService:
             organisation_id = _require_token(organisation_id, "organisation_id")
             actor_id = _require_token(actor_id, "actor_id")
             recognition_day, recognition_at = parse_recognition_date(recognition_date)
-            accounts = _require_accounts(account_ids)
+            accounts = (
+                self._accounts_from_ledger(organisation_id)
+                if account_ids is None
+                else _require_accounts(account_ids)
+            )
         except ValueError as exc:
             self._refuse_if_possible(
                 organisation_id=organisation_id,
@@ -111,6 +117,24 @@ class BatchService:
             raise
         except Exception as exc:
             self._fail_incomplete(run, exc, progress)
+
+    def _accounts_from_ledger(self, organisation_id: str) -> list[str]:
+        ledger = self._ledger
+        store = getattr(ledger, "store", None)
+        accounts_for = getattr(store, "accounts_for", None)
+        if not callable(accounts_for):
+            raise ValueError("the ledger cannot supply the account list")
+        try:
+            found = accounts_for(organisation_id)
+        except Exception as exc:
+            raise ValueError("the ledger cannot supply the account list") from exc
+        identifiers: list[str] = []
+        for account in found:
+            loan_id = getattr(account, "loan_id", None)
+            if not isinstance(loan_id, str) or loan_id.strip() == "":
+                raise ValueError("the ledger cannot supply the account list")
+            identifiers.append(loan_id)
+        return identifiers
 
     def skip_run(
         self,

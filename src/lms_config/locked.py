@@ -195,7 +195,7 @@ def campaign_rate(
     """Contractual rate after decision 3.
 
     While the discount still applies, the rate is ``base_rate`` minus
-    ``discount_rate``. That result may be zero. The discount stays through
+    ``discount_rate``, floored at 0 %. Decision 3. The discount stays through
     the leniency window. It falls away on the default flag date. A later
     cure does not bring it back: pass ``discount_fallen_away`` once the
     flag date has removed it. The rate is then the base, which is the
@@ -203,11 +203,12 @@ def campaign_rate(
     """
     if base_rate < 0 or discount_rate < 0:
         raise CalculationInputError("rates cannot be negative")
-    if discount_rate > base_rate:
-        raise CalculationInputError("campaign discount cannot exceed the base rate")
     if in_default or discount_fallen_away:
         return base_rate
-    return base_rate - discount_rate
+    net = base_rate - discount_rate
+    if net < 0:
+        return Decimal(0)
+    return net
 
 
 def is_full_payment(

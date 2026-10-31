@@ -57,6 +57,8 @@ def _route(servicing: Servicing, method: str, path: str, body: dict, headers: di
             idempotency_key=headers.get("Idempotency-Key", ""),
             agreement_id=body.get("agreement_id"),
             attributed_due_on=_optional_date(body.get("attributed_due_on")),
+            interest_cap_present=body.get("interest_cap_present"),
+            vat_rate=Decimal(body["vat_rate"]) if body.get("vat_rate") is not None else None,
         )
         return _payment(payment)
     if method == "POST" and len(parts) == 4 and parts[:2] == ["v1", "payments"] and parts[3] == "reversals":

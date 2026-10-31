@@ -382,36 +382,29 @@ class Collections:
         amount_cents: int | None = None,
         formula: ProvisionFormula | None = None,
     ) -> CollectionsView:
-        """§8. Manual amount, or a caller-supplied formula over ledger facts.
+        """§8. The LMS stores the instructed cents. It does not run the formula.
 
-        The formula is not given a promise-to-pay or a contactability score.
-        The collections system keeps those. This method stores the resulting
-        provision cents only.
+        Provisioning formulas run outside the LMS. Promise-to-pay and
+        contactability are not inputs and are not calculated here.
         """
+        if formula is not None:
+            raise CollectionsError(
+                "provision-formula-outside",
+                "LOCKED_DECISIONS §8: provisioning formulas run outside the LMS. "
+                "Send the instructed amount in cents.",
+            )
         case = self._case(agreement_id)
         if case.provision_mode is None:
             raise CollectionsError(
                 "provision-mode-unset",
                 "LOCKED_DECISIONS §8: provision is per client. No mode is stored, so nothing is raised.",
             )
-        if case.provision_mode == "manual":
-            if amount_cents is None or amount_cents < 0:
-                raise CollectionsError(
-                    "provision-amount-unset",
-                    "A manual provision needs a non-negative amount in cents.",
-                )
-            case.provision_cents = amount_cents
-            return self.view(agreement_id, recognised_at)
-        if formula is None:
+        if amount_cents is None or amount_cents < 0:
             raise CollectionsError(
-                "provision-formula-unset",
-                "LOCKED_DECISIONS §8 allows a formula. This layer does not supply one.",
+                "provision-amount-unset",
+                "A provision needs the instructed non-negative amount in cents.",
             )
-        facts = self._facts(agreement_id, recognised_at)
-        scored = formula(facts)
-        if scored < 0:
-            raise CollectionsError("provision-amount-unset", "A provision cannot be negative.")
-        case.provision_cents = scored
+        case.provision_cents = amount_cents
         return self.view(agreement_id, recognised_at)
 
     def open_prescription_review(
@@ -421,12 +414,19 @@ class Collections:
         recognised_at: datetime,
         formula: PrescriptionFormula | None = None,
         signal: str = "manual",
+        instructed: bool | None = None,
     ) -> CollectionsView:
-        """§20. Manual or a client formula. No platform prescription clock.
+        """§20. The LMS receives the instruction. It does not run the formula.
 
         Opening the review does not refund a receipt already posted and does
         not allocate anything new.
         """
+        if formula is not None:
+            raise CollectionsError(
+                "prescription-formula-outside",
+                "LOCKED_DECISIONS §20: formulas that decide prescription run outside the LMS. "
+                "Send the instruction.",
+            )
         case = self._case(agreement_id)
         if case.prescription_mode is None:
             raise CollectionsError(
@@ -434,13 +434,12 @@ class Collections:
                 "LOCKED_DECISIONS §20: prescription is per client. No platform default is applied.",
             )
         if case.prescription_mode == "formula":
-            if formula is None:
+            if instructed is None:
                 raise CollectionsError(
-                    "prescription-formula-unset",
-                    "LOCKED_DECISIONS §20 allows a formula. This layer does not supply one.",
+                    "prescription-instruction-unset",
+                    "LOCKED_DECISIONS §20: the LMS receives the instruction. None was supplied.",
                 )
-            facts = self._facts(agreement_id, recognised_at)
-            if not formula(facts):
+            if not instructed:
                 return self.view(agreement_id, recognised_at)
             signal = "formula"
         case.prescription_review = True

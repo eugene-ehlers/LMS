@@ -211,6 +211,8 @@ def _pay(svc: Servicing, agreement_id: str, cents: int, *, key: str) -> dict:
             "recognised_at": PAID_AT,
             "agreement_id": agreement_id,
             "attributed_due_on": DUE.isoformat(),
+            "interest_cap_present": True,
+            "vat_rate": str(VAT_RATE),
         },
         {"Idempotency-Key": key},
     )
@@ -371,13 +373,12 @@ def test_layer0_smoke_april_statement_then_payment(monkeypatch: pytest.MonkeyPat
     assert payment["status"] == "allocated"
     assert payment["value_date"] == DUE.isoformat()
     assert payment["allocations"] == [
-        {"bucket": "interest", "cents": 10_000},
-        {"bucket": "service", "cents": 6_900},
-        {"bucket": "principal", "cents": 5_000},
+        {"bucket": "interest", "cents": 10_323},
+        {"bucket": "service", "cents": 11_577},
     ]
     assert svc.ledger.bucket_balance(loan, "interest") == 0
-    assert svc.ledger.bucket_balance(loan, "service") == 0
-    assert svc.ledger.bucket_balance(loan, "principal") == 195_000
+    assert svc.ledger.bucket_balance(loan, "service") == 2_223
+    assert svc.ledger.bucket_balance(loan, "principal") == 200_000
 
     may = _statement(svc, DUE, DUE)
     may_line = may["loans"][0]
@@ -396,15 +397,8 @@ def test_layer0_smoke_april_statement_then_payment(monkeypatch: pytest.MonkeyPat
     assert all(transaction.kind != "write_off" for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id))
 
 
-def test_same_day_capitalisation_is_not_applied_before_the_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Raise the 28 October same-day order. Do not treat the current posting order as the rule.
-
-    Main 1435869 says that on a calendar day, capitalisation at 00:00 comes
-    before payments recognised that day. The same section still says to
-    process same-day events in recognition order. The ledger follows
-    recognition order. The 1 May statement, posted after the receipt, accrues
-    1 May on the reduced principal and levies a second service fee.
-    """
+def test_same_day_capitalisation_is_applied_before_the_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Decisions 1 and 8: capitalise the day's due amounts, then allocate the receipt."""
     _block_http(monkeypatch)
     stub = CountingStub()
     svc = Servicing(enigma=stub)
@@ -419,23 +413,19 @@ def test_same_day_capitalisation_is_not_applied_before_the_receipt(monkeypatch: 
         for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id)
         if transaction.kind == "interest_accrual" and transaction.value_date == DUE
     ]
-    assert may["loans"][0]["closing"]["interest"] == 315
-    assert svc.ledger.bucket_balance(loan, "service") == 6_900
+    service_levies = [
+        transaction
+        for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id)
+        if transaction.kind == "service_fee" and transaction.value_date == DUE
+    ]
     assert may_accruals
-    assert all(transaction.recognition_sequence > payment_tx.recognition_sequence for transaction in may_accruals)
-    pytest.fail(
-        "1 May capitalisation is not applied before the 1 May receipt.\n"
-        f"  Receipt allocations: {payment['allocations']}.\n"
-        f"  1 May statement closing: {may['loans'][0]['closing']}.\n"
-        "  Interest of R3.15 (315 cents) is 1 May on R1 950, the balance after the receipt. "
-        "A day capitalised first on the R2 000 April balance would be R3.23 (323 cents).\n"
-        "  A second service fee of R69.00 is levied for May when the statement runs, after the receipt.\n"
-        "  Locked §1 and §8 (main 1435869) tell the engine to capitalise the day's due amounts "
-        "at 00:00 and then allocate payments. They also still say same-day events follow "
-        "recognition sequence. The code does the second. It does not reorder a payment behind "
-        "that day's capitalisation. Whether 1 May interest is due that day, or only at month-end, "
-        "is not settled by the two bullets. This test does not choose one."
-    )
+    assert all(transaction.recognition_sequence < payment_tx.recognition_sequence for transaction in may_accruals)
+    assert service_levies
+    assert all(transaction.recognition_sequence < payment_tx.recognition_sequence for transaction in service_levies)
+    assert may_accruals[0].memo_rands == Decimal("3.2258064516")
+    assert may["loans"][0]["closing"]["interest"] == 0
+    assert svc.ledger.bucket_balance(loan, "service") == 2_223
+    assert svc.ledger.bucket_balance(loan, "principal") == CASH_CENTS
 
 
 def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
