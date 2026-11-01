@@ -101,7 +101,7 @@ A session that holds only `lms.collection_campaign.write` cannot open this scree
 
 ### Statements
 
-Staff search matches the loan id or the frozen ID number on a stored statement for the signed-in organisation. The page paints those stored cent figures. A sequential loan number is not minted (K10). The consumer statement page paints the stored statements for the signed-in person. Neither page issues a statement.
+Staff search matches the sequential loan number stored on the agreement, or the frozen ID number, for the signed-in organisation. It then paints the stored cent figures for that agreement's ledger loan. It does not treat the ledger loan id as the loan number. A matched agreement with no loan number fails closed and the figures stay off the page. The consumer statement page paints the stored statements for the signed-in person and shows that loan number when the agreement has one. Neither page issues a statement.
 
 The settlement-quote page returns the stored quote for the signed-in person. It does not recalculate one.
 
@@ -109,7 +109,7 @@ A consumer with no Enigma person id, or with a timeout or a suspended enrolment,
 
 ### Brand
 
-Every page uses one header and one footer. The logo key and the statement footer come from the brand row for the signed-in organisation. No row leaves the logo and footer empty. One row is painted on every screen, so replacing that row changes every following page. More than one brand code for the organisation paints neither (K11).
+Every page uses one header and one footer. The logo key and the statement footer are read from `lms.cfg_brand` for the signed-in organisation. No row leaves the logo and footer empty. One row is painted on every screen, so replacing that row changes every following page. More than one brand code for the organisation paints neither. A read that does not succeed leaves the logo and footer unpainted and says the row could not be read. An organisation id that is not a uuid cannot be a row on this table, so those screens stay empty.
 
 ### Campaigns
 
@@ -125,4 +125,4 @@ These paths explain the refusal and do not call a route. A POST is a held failur
 
 ## Gaps
 
-K1–K11 in `docs/OPEN_ISSUES.md` are the gaps found while wiring these screens. The screen does not invent a batch writer, a collection list route, a locked role, a loan-number sequence, or an Enigma address.
+K1–K9 in `docs/OPEN_ISSUES.md` are the gaps still open from these screens. K10 and K11 are closed for the loan number and the brand row. The loan-number character pattern stays P2. The screen does not invent a batch writer, a collection list route, a locked role, or an Enigma address.

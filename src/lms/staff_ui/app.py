@@ -31,7 +31,7 @@ from lms.staff.service import StaffOffice
 from lms.staff_ui.access import SessionAccess
 from lms.staff_ui import render
 from lms.statements.service import Documents
-from lms_config.brand import BrandStore
+from lms_config.brand import BrandChrome, BrandDirectory, BrandReadError
 from lms_config.calendar import value_date, value_instant
 
 JOHANNESBURG = ZoneInfo("Africa/Johannesburg")
@@ -82,7 +82,7 @@ class StaffApp:
         servicing: Servicing | None = None,
         collections: Collections | None = None,
         documents: Documents | None = None,
-        brand: BrandStore | None = None,
+        brand: BrandDirectory | None = None,
     ) -> None:
         self.office = office
         self.campaigns = campaigns
@@ -90,7 +90,7 @@ class StaffApp:
         self.servicing = servicing or Servicing(audit=office.audit)
         self.collections = collections or Collections(self.servicing)
         self.documents = documents or Documents(self.servicing, office.compliance)
-        self.brand = brand or BrandStore()
+        self.brand = brand if brand is not None else BrandDirectory()
         self.sessions: dict[str, Session] = {}
 
     def handle(
@@ -783,12 +783,34 @@ class StaffApp:
                 message="The Enigma organisation id is missing, so stored statements cannot be located.",
                 return_to="/staff/statements",
             )
-        rows = [
-            _statement_payload(statement)
-            for statement in self.documents.statements.values()
-            if statement.organisation_id == session.organisation_id
-            and _statement_matches(statement, needle)
+        matched = [
+            record
+            for record in self.servicing.agreements.values()
+            if record.organisation_id == session.organisation_id
+            and (record.loan_number == needle or record.frozen_id_number == needle)
         ]
+        if any(not record.loan_number.strip() for record in matched):
+            return self._fail(
+                session, form, action="statement-find", status=422, code="loan-number-missing",
+                message="The agreement has no loan number, so the stored statement is not shown.",
+                return_to="/staff/statements",
+            )
+        loan_numbers = {}
+        for record in matched:
+            if record.ledger_loan_id:
+                loan_numbers[record.ledger_loan_id] = record.loan_number
+            if record.laybye_loan_id:
+                loan_numbers[record.laybye_loan_id] = record.loan_number
+        rows = []
+        for statement in self.documents.statements.values():
+            if statement.organisation_id != session.organisation_id:
+                continue
+            payload = _statement_payload(statement, loan_numbers)
+            payload["loans"] = [
+                loan for loan in payload["loans"] if loan["loan_id"] in loan_numbers
+            ]
+            if payload["loans"]:
+                rows.append(payload)
         inner = render.statement_lookup_form() + render.stored_statements(
             rows,
             empty="No stored statement matches that loan number or ID number.",
@@ -809,8 +831,9 @@ class StaffApp:
         refused = self._consumer_gate(session, "self-statement", "/self/statement")
         if refused is not None:
             return refused
+        loan_numbers = self._loan_numbers(session.organisation_id, session.person_id)
         rows = [
-            _statement_payload(statement)
+            _statement_payload(statement, loan_numbers)
             for statement in self.documents.statements.values()
             if statement.organisation_id == session.organisation_id
             and statement.person_id == session.person_id
@@ -993,8 +1016,24 @@ class StaffApp:
         return self._view(session, "Not an LMS screen", render.plain("Not an LMS screen", message), status=404)
 
     def _view(self, session, title, inner, *, show_nav=True, status=200) -> Page:
-        brand = self.brand.presentation(session.organisation_id)
+        try:
+            brand = self.brand.presentation(session.organisation_id)
+        except BrandReadError:
+            brand = BrandChrome("unread")
         return Page(status, render.document(title, session, inner, show_nav=show_nav, brand=brand))
+
+    def _loan_numbers(self, organisation_id: str, person_id: str | None = None) -> dict[str, str]:
+        numbers: dict[str, str] = {}
+        for record in self.servicing.agreements.values():
+            if record.organisation_id != organisation_id:
+                continue
+            if person_id is not None and record.person_id != person_id:
+                continue
+            if record.ledger_loan_id:
+                numbers[record.ledger_loan_id] = record.loan_number
+            if record.laybye_loan_id:
+                numbers[record.laybye_loan_id] = record.loan_number
+        return numbers
 
     def _save_session(self, session: Session, form: dict) -> None:
         session.person_id = form.get("person_id", "").strip()
@@ -1039,7 +1078,6 @@ def build_app() -> StaffApp:
         servicing=servicing,
         collections=Collections(servicing),
         documents=Documents(servicing, office.compliance),
-        brand=BrandStore(),
     )
 
 
@@ -1269,14 +1307,8 @@ def _tighter_lines(platform_rows: list, company_rows: list) -> list[dict]:
     return lines
 
 
-def _statement_matches(statement, needle: str) -> bool:
-    return any(
-        loan.loan_id == needle or loan.frozen_id_number == needle
-        for loan in statement.loans
-    )
-
-
-def _statement_payload(statement) -> dict:
+def _statement_payload(statement, loan_numbers: dict[str, str] | None = None) -> dict:
+    numbers = loan_numbers or {}
     return {
         "statement_id": statement.statement_id,
         "period_start": statement.period_start.isoformat(),
@@ -1284,6 +1316,7 @@ def _statement_payload(statement) -> dict:
         "loans": [
             {
                 "loan_id": loan.loan_id,
+                "loan_number": numbers.get(loan.loan_id, ""),
                 "frozen_id_number": loan.frozen_id_number,
                 "principal_debt_cents": loan.principal_debt_cents,
                 "payments_received_cents": loan.payments_received_cents,

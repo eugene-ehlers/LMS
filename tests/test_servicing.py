@@ -297,6 +297,7 @@ def test_routes_book_and_reject_a_missing_election():
     status, payload = dispatch(svc, "POST", "/v1/agreements", body, {"Idempotency-Key": "http-1"})
     assert status == 200
     assert payload["status"] == "pending_disbursement"
+    assert payload["loan_number"] == "1"
     status, disbursed = dispatch(
         svc,
         "POST",
@@ -310,6 +311,75 @@ def test_routes_book_and_reject_a_missing_election():
     status, rejected = dispatch(svc, "POST", "/v1/agreements", body, {"Idempotency-Key": "http-2"})
     assert status == 422
     assert rejected["code"] == "election-unset"
+    assert [record.loan_number for record in svc.agreements.values()] == ["1"]
+
+
+def test_booking_stores_a_sequential_loan_number():
+    svc = servicing()
+    evening = datetime(2026, 3, 1, 18, 30, tzinfo=JOHANNESBURG)
+    first = book(svc, key="one", recognised_at=evening)
+    assert first.loan_number == "1"
+    assert isinstance(first.cash_advanced_cents, int)
+    assert first.booking_value_date == date(2026, 3, 1)
+    assert first.recognised_at == evening
+    extract = svc.audit.extract(organisation_id="org-a", from_date=date(2026, 3, 1), to_date=date(2026, 3, 1))
+    booked = [row.payload["loan_number"] for row in extract.rows if row.event_type == "AGREEMENT_STATUS_CHANGED"]
+    assert booked == ["1"]
+
+    svc.enigma.mode = "timeout"
+    with pytest.raises(ServicingError) as timed_out:
+        book(svc, key="timed-out", person_id="person-b")
+    assert timed_out.value.code == "enigma-timeout"
+    assert [record.loan_number for record in svc.agreements.values()] == ["1"]
+
+    svc.enigma.mode = "active"
+    second = book(svc, key="two", person_id="person-b")
+    assert second.loan_number == "2"
+    replay = book(svc, key="one", recognised_at=evening)
+    assert replay.agreement_id == first.agreement_id
+    assert replay.loan_number == "1"
+    third = book(svc, key="three", person_id="person-c")
+    assert third.loan_number == "3"
+
+    other = book(svc, key="other-org", organisation_id="org-b")
+    assert other.loan_number == "1"
+
+    svc._loan_sequence["org-a"] = 0
+    with pytest.raises(ServicingError) as missing:
+        book(svc, key="missing-number", person_id="person-d")
+    assert missing.value.code == "loan-number-missing"
+    assert "person-d" not in {record.person_id for record in svc.agreements.values()}
+    assert svc._loan_sequence["org-a"] == 0
+
+    wide = servicing()
+    wide._loan_sequence["org-a"] = 10**40
+    stored = book(wide, key="wide")
+    assert stored.loan_number == str(10**40)
+    assert "e" not in stored.loan_number.lower()
+    following = book(wide, key="wide-next", person_id="person-b")
+    assert following.loan_number == str(10**40 + 1)
+
+    linked = servicing()
+    pair = linked.book_linked_laybye(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        settings=settings(),
+        recognised_at=at(1, 8),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((DUE, 100_000),),
+        idempotency_key="laybye",
+    )
+    assert pair.loan_number == "1"
+    parent = linked.ledger.store.get("org-a", pair.ledger_loan_id)
+    child = linked.ledger.store.get("org-a", pair.laybye_loan_id)
+    assert parent.instrument_kind == "loan"
+    assert child.instrument_kind == "laybye_hold"
+    assert child.parent_loan_id == parent.loan_id
+    after = book(linked, key="after-laybye", person_id="person-b")
+    assert after.loan_number == "2"
+    assert sorted(record.loan_number for record in linked.agreements.values()) == ["1", "2"]
 
 
 def test_clip_is_not_invoked():
