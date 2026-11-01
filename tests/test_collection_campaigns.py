@@ -608,6 +608,8 @@ def test_collections_does_not_open_or_close_in_duplum_for_a_skipped_instalment()
         frequency="monthly",
         schedule=((date(2026, 6, 15), 60_000), (date(2026, 7, 15), 40_000)),
         idempotency_key="book-1",
+        application_number="APP-1",
+        organisation_name="Cape Credit",
     )
     record = servicing.disburse(record.agreement_id, recognised_at=at(2026, 3, 1, 10))
     collections = Collections(servicing)
@@ -665,6 +667,8 @@ def test_statement_accrual_uses_the_override_when_the_service_is_wired():
         frequency="monthly",
         schedule=((date(2026, 6, 15), 100_000),),
         idempotency_key="book-2",
+        application_number="APP-2",
+        organisation_name="Cape Credit",
     )
     record = servicing.disburse(record.agreement_id, recognised_at=at(2026, 3, 1, 10))
     register(campaigns, type("Loan", (), {"loan_id": record.ledger_loan_id})())

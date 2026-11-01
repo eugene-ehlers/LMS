@@ -170,6 +170,8 @@ def _body(**overrides) -> dict:
         "schedule": [[DUE.isoformat(), CASH_CENTS]],
         "initiation_fee_cents": 0,
         "settings": settings,
+        "application_number": "APP-1",
+        "organisation_name": "Cape Credit",
     }
     payload.update(overrides)
     return payload
@@ -182,7 +184,10 @@ def _ok(status: int, payload: dict, what: str) -> dict:
 
 
 def _book(svc: Servicing, *, key: str = "book-smoke", **overrides) -> dict:
-    status, payload = dispatch(svc, "POST", "/v1/agreements", _body(**overrides), {"Idempotency-Key": key})
+    body = _body(**overrides)
+    if "application_number" not in overrides:
+        body["application_number"] = key
+    status, payload = dispatch(svc, "POST", "/v1/agreements", body, {"Idempotency-Key": key})
     return _ok(status, payload, "booking")
 
 
@@ -500,6 +505,8 @@ def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
             schedule=((DUE, CASH_CENTS),),
             initiation_fee_cents=0,
             idempotency_key="no-day-count",
+            application_number="APP-NO-DAY",
+            organisation_name="Cape Credit",
         )
     assert caught.value.code == "election-unset"
     assert svc.agreements == {}
@@ -527,6 +534,8 @@ def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
             schedule=((DUE, CASH_CENTS),),
             initiation_fee_cents=0,
             idempotency_key="no-campaign",
+            application_number="APP-NO-CAMPAIGN",
+            organisation_name="Cape Credit",
         )
     assert caught.value.code == "election-unset"
     assert "base_rate" in str(caught.value)
