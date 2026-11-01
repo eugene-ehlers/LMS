@@ -23,7 +23,7 @@ from lms.ledger.service import Ledger
 from lms.regulatory.audit import AuditLog
 from lms.regulatory.errors import RegulatoryError
 from lms.servicing.errors import ServicingError
-from lms.servicing.service import Servicing
+from lms.servicing.service import Servicing, displayed_loan_number
 from lms.staff.api import dispatch as staff_dispatch
 from lms.staff.ceilings import COMPANY, PLATFORM, RandCeiling, tighter
 from lms.staff.errors import StaffError
@@ -787,7 +787,7 @@ class StaffApp:
             record
             for record in self.servicing.agreements.values()
             if record.organisation_id == session.organisation_id
-            and (record.loan_number == needle or record.frozen_id_number == needle)
+            and _agreement_matches(record, needle)
         ]
         if any(not record.loan_number.strip() for record in matched):
             return self._fail(
@@ -795,12 +795,7 @@ class StaffApp:
                 message="The agreement has no loan number, so the stored statement is not shown.",
                 return_to="/staff/statements",
             )
-        loan_numbers = {}
-        for record in matched:
-            if record.ledger_loan_id:
-                loan_numbers[record.ledger_loan_id] = record.loan_number
-            if record.laybye_loan_id:
-                loan_numbers[record.laybye_loan_id] = record.loan_number
+        loan_numbers = _numbers_for(matched)
         rows = []
         for statement in self.documents.statements.values():
             if statement.organisation_id != session.organisation_id:
@@ -1030,9 +1025,9 @@ class StaffApp:
             if person_id is not None and record.person_id != person_id:
                 continue
             if record.ledger_loan_id:
-                numbers[record.ledger_loan_id] = record.loan_number
+                numbers[record.ledger_loan_id] = displayed_loan_number(record.loan_number, laybye=False)
             if record.laybye_loan_id:
-                numbers[record.laybye_loan_id] = record.loan_number
+                numbers[record.laybye_loan_id] = displayed_loan_number(record.loan_number, laybye=True)
         return numbers
 
     def _save_session(self, session: Session, form: dict) -> None:
@@ -1305,6 +1300,25 @@ def _tighter_lines(platform_rows: list, company_rows: list) -> list[dict]:
             "limit_cents": applied.limit_cents,
         })
     return lines
+
+
+def _agreement_matches(record, needle: str) -> bool:
+    if record.frozen_id_number == needle:
+        return True
+    core = record.loan_number.strip()
+    if not core:
+        return False
+    return needle == core or needle == displayed_loan_number(core, laybye=True)
+
+
+def _numbers_for(records) -> dict[str, str]:
+    numbers: dict[str, str] = {}
+    for record in records:
+        if record.ledger_loan_id:
+            numbers[record.ledger_loan_id] = displayed_loan_number(record.loan_number, laybye=False)
+        if record.laybye_loan_id:
+            numbers[record.laybye_loan_id] = displayed_loan_number(record.loan_number, laybye=True)
+    return numbers
 
 
 def _statement_payload(statement, loan_numbers: dict[str, str] | None = None) -> dict:

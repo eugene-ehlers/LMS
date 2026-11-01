@@ -713,7 +713,7 @@ def write_off_form(agreement_id: str) -> str:
 def statement_lookup_form() -> str:
     return f"""
 <h1>Statements</h1>
-<p class="note">Locate a stored statement by the loan number or by the frozen ID number. The figures below are the stored figures. This screen does not issue a statement.</p>
+<p class="note">Locate a stored statement by the loan number or by the frozen ID number. A linked Laybye uses that loan number with the suffix -L. The figures below are the stored figures. This screen does not issue a statement.</p>
 <form method="post" action="/staff/statements">
 <label>Loan number or ID number <input name="loan_or_id" required></label>
 <button type="submit">Show stored statement</button>

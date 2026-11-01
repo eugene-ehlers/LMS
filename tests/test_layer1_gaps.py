@@ -101,6 +101,8 @@ def test_booked_elections_fail_closed_only_when_used():
         schedule=((DUE, 100_000),),
         initiation_fee_cents=0,
         idempotency_key="book-no-trigger",
+        application_number="APP-NO-TRIGGER",
+        organisation_name="Cape Credit",
     )
     assert record.resolved.in_duplum_trigger is None
     collections_bind = Collections(servicing)
@@ -128,6 +130,8 @@ def test_book_linked_laybye_keeps_the_receipt_as_cash_in_until_grant():
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
         idempotency_key="book-laybye",
+        application_number="APP-LAYBYE",
+        organisation_name="Cape Credit",
         pre_disbursement_cents=20_000,
         pre_disbursement_at=at(date(2026, 4, 1), 9),
     )
@@ -165,6 +169,8 @@ def test_book_linked_laybye_keeps_the_receipt_as_cash_in_until_grant():
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
         idempotency_key="book-laybye",
+        application_number="APP-LAYBYE",
+        organisation_name="Cape Credit",
         pre_disbursement_cents=20_000,
         pre_disbursement_at=at(date(2026, 4, 1), 9),
         grant_at=at(date(2026, 4, 1), 11),
@@ -261,6 +267,8 @@ def test_a_loan_without_a_laybye_still_rejects_a_true_overpayment():
         schedule=((DUE, 100_000),),
         initiation_fee_cents=0,
         idempotency_key="book-plain",
+        application_number="APP-PLAIN",
+        organisation_name="Cape Credit",
     )
     servicing.disburse(record.agreement_id, recognised_at=at(date(2026, 4, 1), 10))
     with pytest.raises(ServicingError) as over:
@@ -292,6 +300,8 @@ def test_servicing_audit_extract_sees_the_key_events():
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
         idempotency_key="book-audit",
+        application_number="APP-AUDIT",
+        organisation_name="Cape Credit",
         pre_disbursement_cents=10_000,
         pre_disbursement_at=at(date(2026, 4, 1), 9),
         grant_at=at(date(2026, 4, 1), 11),

@@ -63,6 +63,8 @@ def opened(trigger: str = "collections_default", **overrides):
         schedule=((FIRST, 60_000), (SECOND, 40_000)),
         initiation_fee_cents=0,
         idempotency_key="book-1",
+        application_number="APP-1",
+        organisation_name="Cape Credit",
     )
     record = servicing.book(**payload)
     record = servicing.disburse(record.agreement_id, recognised_at=at(date(2026, 3, 1), 10))
@@ -400,6 +402,8 @@ def test_bind_before_disbursement_succeeds_and_a_rejected_bind_does_not_freeze()
         schedule=((FIRST, 60_000), (SECOND, 40_000)),
         initiation_fee_cents=0,
         idempotency_key="book-early",
+        application_number="APP-EARLY",
+        organisation_name="Cape Credit",
     )
     assert record.ledger_loan_id is None
     assert record.resolved.in_duplum_trigger == "collections_default"

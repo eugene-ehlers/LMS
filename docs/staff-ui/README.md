@@ -101,7 +101,7 @@ A session that holds only `lms.collection_campaign.write` cannot open this scree
 
 ### Statements
 
-Staff search matches the sequential loan number stored on the agreement, or the frozen ID number, for the signed-in organisation. It then paints the stored cent figures for that agreement's ledger loan. It does not treat the ledger loan id as the loan number. A matched agreement with no loan number fails closed and the figures stay off the page. The consumer statement page paints the stored statements for the signed-in person and shows that loan number when the agreement has one. Neither page issues a statement.
+Staff search matches the loan number stored on the agreement, the same number with the suffix `-L` for a linked Laybye, or the frozen ID number, for the signed-in organisation. It then paints the stored cent figures for that agreement. It does not treat the ledger loan id as the loan number. A matched agreement with no loan number fails closed and the figures stay off the page. The consumer statement page paints the stored statements for the signed-in person and shows that loan number when the agreement has one. Neither page issues a statement.
 
 The settlement-quote page returns the stored quote for the signed-in person. It does not recalculate one.
 
@@ -125,4 +125,4 @@ These paths explain the refusal and do not call a route. A POST is a held failur
 
 ## Gaps
 
-K1–K9 in `docs/OPEN_ISSUES.md` are the gaps still open from these screens. K10 and K11 are closed for the loan number and the brand row. The loan-number character pattern stays P2. The screen does not invent a batch writer, a collection list route, a locked role, or an Enigma address.
+K1–K9 in `docs/OPEN_ISSUES.md` are the gaps still open from these screens. K10 and K11 are closed for the loan number and the brand row. The loan-number pattern is `{company_prefix}-{YYYYMM}-{sequence}`. The screen does not invent a batch writer, a collection list route, a locked role, or an Enigma address.

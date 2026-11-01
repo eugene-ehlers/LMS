@@ -65,6 +65,7 @@ class AgreementRecord:
     laybye_loan_id: str | None = None
     disbursement_value_date: date | None = None
     loan_number: str = ""
+    application_number: str = ""
 
 
 @dataclass
@@ -107,7 +108,7 @@ class Servicing:
     audit: AuditLog = field(default_factory=AuditLog)
     collection_campaigns: CollectionCampaigns | None = None
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
-    _loan_sequence: dict[str, int] = field(default_factory=dict)
+    _loan_sequence: dict[tuple[str, str], int] = field(default_factory=dict)
 
     def book(
         self,
@@ -123,9 +124,12 @@ class Servicing:
         initiation_fee_cents: int = 0,
         quoted_disbursement: date | None = None,
         idempotency_key: str,
+        application_number: str,
+        organisation_name: str,
         repos: tuple[RepoRate, ...] = (),
     ) -> AgreementRecord:
         """POST /v1/agreements. Freeze elections. Do not post to the ledger."""
+        application_number, organisation_name = _booking_names(application_number, organisation_name)
         fingerprint = _fingerprint(
             {
                 "organisation_id": organisation_id,
@@ -137,6 +141,8 @@ class Servicing:
                 "quoted_disbursement": quoted_disbursement.isoformat() if quoted_disbursement else None,
                 "recognised_at": recognised_at.isoformat(),
                 "classification": product.classification,
+                "application_number": application_number,
+                "organisation_name": organisation_name,
             }
         )
         replay = self._replay("book", organisation_id, idempotency_key, fingerprint)
@@ -158,7 +164,11 @@ class Servicing:
             agreement_id=None,
         )
         disclosure = _annual_equivalent(product, resolved)
-        loan_number = self._next_loan_number(organisation_id)
+        self._require_new_application(organisation_id, application_number)
+        booked_on = value_date(recognised_at)
+        loan_number, sequence_key, sequence = self._next_loan_number(
+            organisation_id, booked_on, organisation_name,
+        )
         record = AgreementRecord(
             agreement_id=str(uuid4()),
             organisation_id=organisation_id,
@@ -179,9 +189,10 @@ class Servicing:
             frozen_service_address=identity.service_address,
             annual_equivalent_rate=disclosure,
             loan_number=loan_number,
+            application_number=application_number,
         )
         self.agreements[record.agreement_id] = record
-        self._loan_sequence[organisation_id] = int(loan_number) + 1
+        self._loan_sequence[sequence_key] = sequence + 1
         self._remember("book", organisation_id, idempotency_key, fingerprint, record.agreement_id)
         self._audit(
             organisation_id=organisation_id,
@@ -190,7 +201,11 @@ class Servicing:
             category="operational",
             agreement_id=record.agreement_id,
             enigma_person_id=person_id,
-            payload={"status": record.status, "loan_number": record.loan_number},
+            payload={
+                "status": record.status,
+                "loan_number": record.loan_number,
+                "application_number": record.application_number,
+            },
         )
         return record
 
@@ -208,6 +223,8 @@ class Servicing:
         initiation_fee_cents: int = 0,
         quoted_disbursement: date | None = None,
         idempotency_key: str,
+        application_number: str,
+        organisation_name: str,
         repos: tuple[RepoRate, ...] = (),
         pre_disbursement_cents: int | None = None,
         pre_disbursement_at: datetime | None = None,
@@ -232,6 +249,8 @@ class Servicing:
             initiation_fee_cents=initiation_fee_cents,
             quoted_disbursement=quoted_disbursement,
             idempotency_key=idempotency_key,
+            application_number=application_number,
+            organisation_name=organisation_name,
             repos=repos,
         )
         if record.ledger_loan_id is None:
@@ -914,22 +933,43 @@ class Servicing:
                 return record.frozen_full_name
         return ""
 
-    def _next_loan_number(self, organisation_id: str) -> str:
-        """The next loan number for this organisation, without taking it.
+    def _require_new_application(self, organisation_id: str, application_number: str) -> None:
+        """Decision 25: one loan number for an application.
 
-        Decision 25: the LMS generates a sequential number and does not skip
-        one. OPEN_ISSUES P2 leaves the character pattern unset, so this is
-        the full decimal of a positive integer and it has no fixed width.
-        The counter moves only after ``book`` has stored the agreement.
-        A rejected booking, including an Enigma timeout, does not take one.
+        A linked Laybye is the same agreement, so it is not a second call.
+        The child is distinguished by ``displayed_loan_number``.
         """
-        current = self._loan_sequence.get(organisation_id, 1)
+        for existing in self.agreements.values():
+            if existing.organisation_id == organisation_id and existing.application_number == application_number:
+                raise ServicingError(
+                    "application-number-used",
+                    "This application already has a loan number, so the agreement is not stored.",
+                )
+
+    def _next_loan_number(
+        self, organisation_id: str, booked_on: date, organisation_name: str,
+    ) -> tuple[str, tuple[str, str], int]:
+        """The next loan number, without taking it.
+
+        The pattern is ``{company_prefix}-{YYYYMM}-{sequence}``. The prefix
+        is the first four letters of the organisation name, in uppercase,
+        padded with zeros when the name has fewer than four letters.
+        ``YYYYMM`` is the Africa/Johannesburg year and month of the booking
+        value date. The sequence is the next positive integer for that
+        organisation in that month. It is the full decimal, so it has no
+        fixed width. The counter moves only after ``book`` has stored the
+        agreement. A rejected booking does not take one.
+        """
+        prefix = _company_prefix(organisation_name)
+        month = f"{booked_on:%Y%m}"
+        key = (organisation_id, month)
+        current = self._loan_sequence.get(key, 1)
         if type(current) is not int or current < 1:
             raise ServicingError(
                 "loan-number-missing",
                 "The next loan number is missing, so the agreement is not stored.",
             )
-        return str(current)
+        return f"{prefix}-{month}-{current}", key, current
 
     def _replay(self, kind: str, organisation_id: str, key: str, fingerprint: str) -> str | None:
         if not key:
@@ -948,6 +988,39 @@ class Servicing:
 
     def _remember(self, kind: str, organisation_id: str, key: str, fingerprint: str, resource_id: str) -> None:
         self._idempotency[(kind, organisation_id, key)] = (fingerprint, resource_id)
+
+
+def displayed_loan_number(loan_number: str, *, laybye: bool) -> str:
+    """The number painted for one loan section.
+
+    A linked Laybye keeps the agreement's core number. The child is
+    distinguished by the suffix ``-L``.
+    """
+    core = loan_number.strip()
+    if not core:
+        return ""
+    if laybye:
+        return f"{core}-L"
+    return core
+
+
+def _booking_names(application_number: str, organisation_name: str) -> tuple[str, str]:
+    if not isinstance(application_number, str) or not application_number.strip():
+        raise ServicingError(
+            "application-number-missing",
+            "The decision engine did not supply an application number, so the agreement is not stored.",
+        )
+    if not isinstance(organisation_name, str) or not organisation_name.strip():
+        raise ServicingError(
+            "organisation-name-missing",
+            "The organisation name is missing, so the loan number is not issued and the agreement is not stored.",
+        )
+    return application_number.strip(), organisation_name.strip()
+
+
+def _company_prefix(organisation_name: str) -> str:
+    letters = [character.upper() for character in organisation_name if character.isalpha()]
+    return "".join(letters[:4]).ljust(4, "0")
 
 
 def _policy(resolved: ResolvedCreditSettings, service_fee_monthly_cents: int) -> Policy:

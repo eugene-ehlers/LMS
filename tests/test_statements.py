@@ -78,6 +78,8 @@ def book_and_disburse(svc: Servicing, *, key: str = "book-1", person_id: str = "
         schedule=((DUE, 100_000),),
         initiation_fee_cents=0,
         idempotency_key=key,
+        application_number=key,
+        organisation_name="North Credit",
     )
     return svc.disburse(record.agreement_id, recognised_at=at(1, 10))
 

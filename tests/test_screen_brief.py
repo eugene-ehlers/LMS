@@ -88,6 +88,8 @@ def book(app):
         schedule=((FIRST, 60_000), (date(2026, 7, 15), 40_000)),
         initiation_fee_cents=0,
         idempotency_key="book-screen",
+        application_number="APP-SCREEN",
+        organisation_name="Cape Credit",
     )
     record = app.servicing.disburse(record.agreement_id, recognised_at=at(date(2026, 3, 1), 10))
     app.collections.bind(record.agreement_id, in_duplum_trigger="collections_default")
@@ -353,7 +355,8 @@ def test_staff_statement_screen_paints_stored_figures_for_loan_or_id():
     app = build_app()
     held = session()
     record = book(app)
-    assert record.loan_number == "1"
+    assert record.loan_number == "CAPE-202603-1"
+    assert record.application_number == "APP-SCREEN"
     assert isinstance(record.cash_advanced_cents, int)
     assert record.booking_value_date == date(2026, 3, 1)
     statement = stored_statement(record.ledger_loan_id)
@@ -375,7 +378,7 @@ def test_staff_statement_screen_paints_stored_figures_for_loan_or_id():
         assert page.status == 200
         assert "12345" in page.body
         assert statement.statement_id in page.body
-        assert "Loan number 1" in page.body
+        assert "Loan number CAPE-202603-1" in page.body
         assert record.ledger_loan_id not in page.body
         assert "99999" not in page.body
     assert "No stored statement matches" in by_ledger.body
@@ -386,12 +389,43 @@ def test_staff_statement_screen_paints_stored_figures_for_loan_or_id():
     consumer.person_id = BORROWER
     shown = app.handle(consumer, "GET", "/self/statement")
     assert "12345" in shown.body
-    assert "Loan number 1" in shown.body
+    assert "Loan number CAPE-202603-1" in shown.body
     record.loan_number = ""
     closed = app.handle(held, "POST", "/staff/statements", {"loan_or_id": record.frozen_id_number})
     assert closed.status == 422
     assert "loan-number-missing" in closed.body
     assert "12345" not in closed.body
+
+
+def test_laybye_statement_search_uses_the_core_number_with_suffix():
+    app = build_app()
+    held = session()
+    record = app.servicing.book_linked_laybye(
+        organisation_id=ORG,
+        person_id=BORROWER,
+        product=micro_short_term(),
+        settings=settings(),
+        recognised_at=at(date(2026, 3, 1), 18),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((FIRST, 60_000), (date(2026, 7, 15), 40_000)),
+        initiation_fee_cents=0,
+        idempotency_key="book-laybye-screen",
+        application_number="APP-LAYBYE-SCREEN",
+        organisation_name="Cape Credit",
+    )
+    assert record.loan_number == "CAPE-202603-1"
+    assert record.booking_value_date == date(2026, 3, 1)
+    statement = stored_statement(record.laybye_loan_id, closing_principal=22_222)
+    app.documents.statements[(ORG, BORROWER, statement.period_start, statement.period_end)] = statement
+    app.documents.issue_statement = _refuse_issue
+    by_core = app.handle(held, "POST", "/staff/statements", {"loan_or_id": record.loan_number})
+    by_suffix = app.handle(held, "POST", "/staff/statements", {"loan_or_id": f"{record.loan_number}-L"})
+    for page in (by_core, by_suffix):
+        assert page.status == 200
+        assert "Loan number CAPE-202603-1-L" in page.body
+        assert "22222" in page.body
+        assert record.laybye_loan_id not in page.body
 
 
 def test_registration_and_sign_on_direct_the_consumer_to_enigma():
