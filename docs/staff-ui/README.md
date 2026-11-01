@@ -49,16 +49,23 @@ Roles are the names already used by the routes.
 | End collection campaign | `POST /staff/collection-campaigns/{id}/end` | `POST /v1/collection-campaigns/{id}/end` | `lms.collection_campaign.write` |
 | Apply collection campaign | `GET/POST /staff/collection-campaigns/{id}/apply` | `POST /v1/organisations/{org}/collection-campaigns/{id}/applications` | `lms.collection_campaign.write` |
 | Batch status | `GET /staff/batch` | `GET /v1/staff/organisations/{org}/audit` | Any Layer 2 staff write role. See K8. |
+| Collections | `GET/POST /staff/collections` | `Collections.view` | The signed-in organisation. The screen does not call `observe`. |
+| Write-off | `POST /staff/collections/write-off` | `Servicing.apply_payment`, then `Collections.write_off` | `lms.account.write_off` |
+| Statements | `GET/POST /staff/statements` | Stored `Documents.statements` | The signed-in organisation. |
+| Registration | `GET/POST /self/register` | None. Enigma page address is not locked (N5). | None. |
+| Sign-on | `GET/POST /self/sign-on` | None. Enigma page address is not locked (N5). | None. |
+| Consumer statement | `GET /self/statement` | Stored `Documents.statements` for the signed-in person. | Enigma sign-on already held. |
+| Settlement quote | `GET /self/settlement-quote` | Stored `Documents.quotes` for the signed-in person. | Enigma sign-on already held. |
 
 The audit extract used by the batch screen accepts any of `lms.campaign.write`, `lms.elections.write`, `lms.compliance.write`, `lms.ceiling.platform.write`, or `lms.ceiling.company.write`. Decision 23 does not name a separate audit role.
 
 ### Campaigns
 
-Fields sent to the route: `product_id` (blank is an organisation campaign), `start_date`, `end_date`, `base_rate`, `discount_rate`, `fall_away_choice`, `fall_away_trigger`, `initiation_fee_discount_cents`, `service_fee_discount_cents`, `recognised_at`. The first option of each fall-away select is blank, so the browser does not submit `falls_away_on_default` on its own. Money fields are integer cents. The screen does not submit a net rate and does not call `campaign_rate` or fee preview. The confirmation shows the route's `net_rate` and `version`. Ending a campaign sends `recognised_at`; the route sets the end date.
+Fields sent to the route: `product_id` (blank is an organisation campaign), `start_date`, `end_date`, `base_rate`, `discount_rate`, `fall_away_choice`, `fall_away_trigger`, `initiation_fee_discount_cents`, `service_fee_discount_cents`, `recognised_at`. The first option of each fall-away select is blank, so the browser does not submit `falls_away_on_default` on its own. Money fields are integer cents. The screen does not submit a net rate and does not call `campaign_rate` or fee preview. The confirmation shows the route's `net_rate` and `version`. Ending a campaign sends `recognised_at`; the route sets the end date. The list shows the stored start date and end date.
 
 ### Elections
 
-Organisation and product screens edit that level only. A blank optional field is omitted, so the route stores it unset. The screen does not call `POST .../elections/resolve` and does not fill a residual threshold. The residual field is integer cents; blank stays unset.
+Organisation and product screens edit that level only. A blank optional field is omitted, so the route stores it unset. A null organisation value is shown as unset. A null product value is shown as inherits. The screen does not call `POST .../elections/resolve` and does not fill a residual threshold. The residual field is integer cents; blank is stored as null.
 
 Fields: `vat_on_rand_maxima`, `late_disbursement`, `partial_prepayment`, `interest_on_deferred_initiation`, `repo_rate_fall`, `in_duplum_trigger`, `residual_write_off_threshold_cents`, `campaign_fall_away_choice`, `campaign_fall_away_trigger`, `recognised_at`.
 
@@ -68,7 +75,7 @@ Fields: `legal_name`, `ncr_registration_number`, `trading_name`, `physical_addre
 
 ### Ceilings
 
-The platform and company pages list the stored rows. Amounts are submitted as integer cents. The page also shows the same integer as rand (`10000` cents is `100.00` rand) so the operator can read it. Zero is sent as zero. The company page's check posts `action`, `amount_cents`, and `organisation_id` to `POST /v1/staff/ceilings/apply`. That route reads both ceilings and keeps the lower amount. It does not post a journal and it does not write a ceiling. A missing platform ceiling, and an amount above the tighter ceiling, are shown as the route's refusal. An amount equal to the ceiling is allowed.
+The platform and company pages list the stored rows and show the tighter of the two by calling the same comparison the apply route uses. Amounts are submitted as integer cents. The page also shows the same integer as rand (`10000` cents is `100.00` rand) so the operator can read it. Zero is sent as zero. Saving posts to the existing platform or company ceiling route. The company page's check posts `action`, `amount_cents`, and `organisation_id` to `POST /v1/staff/ceilings/apply`. That route reads both ceilings and keeps the lower amount. It does not post a journal and it does not write a ceiling. A missing platform ceiling, and an amount above the tighter ceiling, are shown as the route's refusal. An amount equal to the ceiling is allowed. If the other ceiling list cannot be read, the tighter figure is left blank.
 
 ### Collection campaigns
 
@@ -86,6 +93,26 @@ The screen calls the staff audit extract from `1970-01-01` through `9999-12-31` 
 
 A session that holds only `lms.collection_campaign.write` cannot open this screen, because the audit route does not accept that role (K8).
 
+### Collections
+
+`POST /staff/collections` calls `Collections.view` with the recognition instant at 00:00 Africa/Johannesburg on the submitted calendar date. It shows contractual breaches already recorded on the case, and the collections-default flag the view returns. It does not call `observe`, so it does not open an in-duplum episode.
+
+`POST /staff/collections/write-off` checks the Enigma session for `lms.account.write_off` first. A timeout, a suspended enrolment, or a missing role allocates nothing and posts nothing. When the role is present, unapplied receipts already tagged with that agreement are allocated through `Servicing.apply_payment` in recognition order, and then `Collections.write_off` posts the full outstanding amount. The platform and company ceilings are the rows already stored for `lms.account.write_off`. A receipt with no due date fails closed on the existing servicing error and the write-off is not posted.
+
+### Statements
+
+Staff search matches the loan id or the frozen ID number on a stored statement for the signed-in organisation. The page paints those stored cent figures. A sequential loan number is not minted (K10). The consumer statement page paints the stored statements for the signed-in person. Neither page issues a statement.
+
+The settlement-quote page returns the stored quote for the signed-in person. It does not recalculate one.
+
+A consumer with no Enigma person id, or with a timeout or a suspended enrolment, does not see either document.
+
+### Brand
+
+Every page uses one header and one footer. The logo key and the statement footer come from the brand row for the signed-in organisation. No row leaves the logo and footer empty. One row is painted on every screen, so replacing that row changes every following page. More than one brand code for the organisation paints neither (K11).
+
+### Campaigns
+
 ## Out of scope
 
 These paths explain the refusal and do not call a route. A POST is a held failure the operator must acknowledge.
@@ -94,8 +121,8 @@ These paths explain the refusal and do not call a route. A POST is a held failur
 - `GET/POST /staff/collection-notices` — collection notice generation. Decision 27 leaves notices with the collections software.
 - `GET/POST /staff/push` — real push-provider integration.
 
-The older Layer 3 draft (`docs/staff-ui/layer3-draft.md` on `cursor/staff-ui-layer3-408d`) describes promises, contacts, write-off, and statement PDF. Those screens are not in this package.
+`GET/POST /self/register` and `GET/POST /self/sign-on` are the consumer registration and sign-on screens. They do not collect a password or an email address. No Enigma page address is locked (N5), so they do not send the browser to an invented address.
 
 ## Gaps
 
-K1–K9 in `docs/OPEN_ISSUES.md` are the gaps found while wiring these screens. The screen does not invent a batch writer, a collection list route, or a locked role.
+K1–K11 in `docs/OPEN_ISSUES.md` are the gaps found while wiring these screens. The screen does not invent a batch writer, a collection list route, a locked role, a loan-number sequence, or an Enigma address.

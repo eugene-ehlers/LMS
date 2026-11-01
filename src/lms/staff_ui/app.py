@@ -16,13 +16,23 @@ from zoneinfo import ZoneInfo
 from lms.collection_campaigns.api import dispatch as collection_dispatch
 from lms.collection_campaigns.models import FEE_TYPES, ROLE as COLLECTION_ROLE
 from lms.collection_campaigns.service import CollectionCampaigns
+from lms.collections.authority import RandCeiling as AuthorityCeiling
+from lms.collections.errors import CollectionsError
+from lms.collections.service import WRITE_OFF_ACTION, Collections
 from lms.ledger.service import Ledger
 from lms.regulatory.audit import AuditLog
 from lms.regulatory.errors import RegulatoryError
+from lms.servicing.errors import ServicingError
+from lms.servicing.service import Servicing
 from lms.staff.api import dispatch as staff_dispatch
+from lms.staff.ceilings import COMPANY, PLATFORM, RandCeiling, tighter
+from lms.staff.errors import StaffError
 from lms.staff.service import StaffOffice
 from lms.staff_ui.access import SessionAccess
 from lms.staff_ui import render
+from lms.statements.service import Documents
+from lms_config.brand import BrandStore
+from lms_config.calendar import value_date, value_instant
 
 JOHANNESBURG = ZoneInfo("Africa/Johannesburg")
 
@@ -63,10 +73,24 @@ class Session:
 
 
 class StaffApp:
-    def __init__(self, office: StaffOffice, campaigns: CollectionCampaigns, access: SessionAccess) -> None:
+    def __init__(
+        self,
+        office: StaffOffice,
+        campaigns: CollectionCampaigns,
+        access: SessionAccess,
+        *,
+        servicing: Servicing | None = None,
+        collections: Collections | None = None,
+        documents: Documents | None = None,
+        brand: BrandStore | None = None,
+    ) -> None:
         self.office = office
         self.campaigns = campaigns
         self.access = access
+        self.servicing = servicing or Servicing(audit=office.audit)
+        self.collections = collections or Collections(self.servicing)
+        self.documents = documents or Documents(self.servicing, office.compliance)
+        self.brand = brand or BrandStore()
         self.sessions: dict[str, Session] = {}
 
     def handle(
@@ -179,6 +203,24 @@ class StaffApp:
             return self._collection_save(session, form, parts[2])
         if parts == ["staff", "batch"] and method == "GET":
             return self._batch(session)
+        if parts == ["staff", "collections"] and method == "GET":
+            return self._view(session, "Collections", render.collections_form())
+        if parts == ["staff", "collections"] and method == "POST":
+            return self._collections_view(session, form)
+        if parts == ["staff", "collections", "write-off"] and method == "POST":
+            return self._collections_write_off(session, form)
+        if parts == ["staff", "statements"] and method == "GET":
+            return self._view(session, "Statements", render.statement_lookup_form())
+        if parts == ["staff", "statements"] and method == "POST":
+            return self._statements_find(session, form)
+        if parts == ["self", "register"] and method in {"GET", "POST"}:
+            return self._enigma_page(session, method, form, "register")
+        if parts == ["self", "sign-on"] and method in {"GET", "POST"}:
+            return self._enigma_page(session, method, form, "sign-on")
+        if parts == ["self", "statement"] and method == "GET":
+            return self._self_statement(session)
+        if parts == ["self", "settlement-quote"] and method == "GET":
+            return self._self_quote(session)
         if method == "POST":
             return self._fail(
                 session, form, action=path, status=404, code="not-found",
@@ -290,8 +332,11 @@ class StaffApp:
         )
         if status != 200:
             return self._route_fail(session, {}, "election-read", status, payload, "/staff/elections")
-        inner = render.election_form(
-            f"/staff/products/{product_id}/elections", payload, heading=f"Product {product_id}",
+        inner = render.election_reading(payload, "inherits") + render.election_form(
+            f"/staff/products/{product_id}/elections",
+            payload,
+            heading=f"Product {product_id}",
+            blank="inherits",
         )
         return self._view(session, "Product elections", inner)
 
@@ -371,28 +416,54 @@ class StaffApp:
         return self._ok(session, form, "compliance-edit", payload, summary, "/staff/compliance")
 
     def _ceiling_get(self, session: Session, scope: str) -> Page:
+        platform_status, platform_payload = self._staff(session, "GET", "/v1/staff/ceilings/platform", {})
+        org = _segment(session.organisation_id)
+        if org is None:
+            company_status, company_payload = 422, {
+                "code": "organisation-unset",
+                "message": "The Enigma organisation id is missing or contains a slash, so the company ceiling route cannot be addressed.",
+            }
+        else:
+            company_status, company_payload = self._staff(
+                session, "GET", f"/v1/staff/organisations/{org}/ceilings", {},
+            )
         if scope == "platform":
-            status, payload = self._staff(session, "GET", "/v1/staff/ceilings/platform", {})
+            status, payload = platform_status, platform_payload
             action = "/staff/ceilings/platform"
             title = "Solution-wide ceiling"
             check = False
         else:
-            org = _segment(session.organisation_id)
-            if org is None:
-                return self._fail(
-                    session, {}, action="ceiling-list", status=422, code="organisation-unset",
-                    message="The Enigma organisation id is missing or contains a slash, so the ceiling route cannot be addressed.",
-                    return_to="/staff/ceilings/company",
-                )
-            status, payload = self._staff(session, "GET", f"/v1/staff/organisations/{org}/ceilings", {})
+            status, payload = company_status, company_payload
             action = "/staff/ceilings/company"
             title = "Company ceiling"
             check = True
         if status != 200:
             return self._route_fail(session, {}, "ceiling-list", status, payload, action)
+        if platform_status == 200 and company_status == 200:
+            lines = _tighter_lines(platform_payload.get("ceilings") or [], company_payload.get("ceilings") or [])
+            note = ""
+        elif scope == "platform":
+            lines = []
+            note = (
+                "The company ceiling was not read, so the tighter limit is not shown. "
+                + str(company_payload.get("message") or "")
+            )
+        else:
+            lines = []
+            note = (
+                "The platform ceiling was not read, so the tighter limit is not shown. "
+                + str(platform_payload.get("message") or "")
+            )
         return self._view(
             session, title,
-            render.ceiling_page(scope=title, action=action, rows=payload.get("ceilings") or [], check=check),
+            render.ceiling_page(
+                scope=title,
+                action=action,
+                rows=payload.get("ceilings") or [],
+                check=check,
+                tighter=lines,
+                tighter_note=note,
+            ),
         )
 
     def _ceiling_put(self, session: Session, form: dict, scope: str) -> Page:
@@ -552,6 +623,244 @@ class StaffApp:
         succeeded, failed = _split_batch(payload.get("rows") or [])
         return self._view(session, "Batch status", render.batch_status(succeeded, failed, gap=BATCH_GAP))
 
+    def _collections_view(self, session: Session, form: dict) -> Page:
+        agreement_id = form.get("agreement_id", "").strip()
+        recognised = _recognition(form)
+        if _segment(agreement_id) is None:
+            return self._fail(
+                session, form, action="collections-view", status=422, code="agreement-unset",
+                message="An agreement id is required, and it cannot contain a slash.",
+                return_to="/staff/collections",
+            )
+        if recognised is None:
+            return self._fail(
+                session, form, action="collections-view", status=422, code="recognised-at",
+                message="recognised_at must be a timezone-aware timestamp. The recognition date is 00:00 Africa/Johannesburg.",
+                return_to="/staff/collections",
+            )
+        if not self._own_agreement(session, agreement_id):
+            return self._fail(
+                session, form, action="collections-view", status=404, code="not-found",
+                message="No agreement with that id is held for this organisation.",
+                return_to="/staff/collections",
+            )
+        try:
+            view = self.collections.view(agreement_id, recognised)
+        except CollectionsError as exc:
+            return self._fail(
+                session, form, action="collections-view", status=exc.status, code=exc.code,
+                message=str(exc), return_to="/staff/collections",
+            )
+        payload = {
+            "agreement_id": view.agreement_id,
+            "recognition": recognised.isoformat(),
+            "contractual_breaches": [day.isoformat() for day in view.contractual_breaches],
+            "collections_default": view.collections_default,
+            "open_episode_ceiling": view.open_episode_ceiling,
+            "provision_cents": view.provision_cents,
+            "residual_threshold_cents": view.residual_threshold_cents,
+        }
+        return self._view(session, "Collections", render.collections_result(payload))
+
+    def _collections_write_off(self, session: Session, form: dict) -> Page:
+        agreement_id = form.get("agreement_id", "").strip()
+        return_to = "/staff/collections"
+        if _segment(agreement_id) is None:
+            return self._fail(
+                session, form, action="write-off", status=422, code="agreement-unset",
+                message="An agreement id is required, and it cannot contain a slash.",
+                return_to=return_to,
+            )
+        recognised = _recognition(form)
+        if recognised is None:
+            return self._fail(
+                session, form, action="write-off", status=422, code="recognised-at",
+                message="recognised_at must be a timezone-aware timestamp. The recognition date is 00:00 Africa/Johannesburg.",
+                return_to=return_to,
+            )
+        amount = _integer_cents(form.get("amount_cents", ""))
+        if amount is None:
+            return self._fail(
+                session, form, action="write-off", status=422, code="amount-cents",
+                message="amount_cents must be integer cents.",
+                return_to=return_to,
+            )
+        if not self._own_agreement(session, agreement_id):
+            return self._fail(
+                session, form, action="write-off", status=404, code="not-found",
+                message="No agreement with that id is held for this organisation.",
+                return_to=return_to,
+            )
+        self.access.current = session
+        try:
+            try:
+                self.access.check(session.organisation_id, session.person_id, WRITE_OFF_ACTION)
+            except ServicingError as exc:
+                return self._fail(
+                    session, form, action="write-off", status=exc.status, code=exc.code,
+                    message=str(exc), return_to=return_to,
+                )
+            try:
+                self._allocate_unapplied(agreement_id)
+            except ServicingError as exc:
+                return self._fail(
+                    session, form, action="write-off", status=exc.status, code=exc.code,
+                    message=str(exc), return_to=return_to,
+                )
+            try:
+                company_row = self.office.ceilings.company(session.organisation_id, WRITE_OFF_ACTION)
+            except StaffError as exc:
+                return self._fail(
+                    session, form, action="write-off", status=exc.status, code=exc.code,
+                    message=str(exc), return_to=return_to,
+                )
+            platform_row = self.office.ceilings.platform(WRITE_OFF_ACTION)
+            platform = None if platform_row is None else AuthorityCeiling(
+                platform_row.amount_cents, version=platform_row.version,
+            )
+            company = None if company_row is None else AuthorityCeiling(
+                company_row.amount_cents, version=company_row.version,
+            )
+            try:
+                view = self.collections.write_off(
+                    agreement_id,
+                    recognised_at=recognised,
+                    actor_id=session.person_id,
+                    amount_cents=amount,
+                    platform=platform,
+                    company=company,
+                    mandate_allowed=True,
+                    access=self.access,
+                )
+            except CollectionsError as exc:
+                return self._fail(
+                    session, form, action="write-off", status=exc.status, code=exc.code,
+                    message=str(exc), return_to=return_to,
+                )
+        finally:
+            self.access.current = None
+        summary = (
+            f"Agreement {view.agreement_id} was written off. "
+            f"Recognition date is {recognised.isoformat()}. You can continue."
+        )
+        return self._ok(
+            session, form, "write-off",
+            {
+                "agreement_id": view.agreement_id,
+                "written_off": view.written_off,
+                "amount_cents": amount,
+                "recognition": recognised.isoformat(),
+            },
+            summary,
+            "/staff/collections",
+        )
+
+    def _allocate_unapplied(self, agreement_id: str) -> None:
+        pending = [
+            payment
+            for payment in self.servicing.payments.values()
+            if payment.status == "unapplied" and payment.agreement_id == agreement_id
+        ]
+        pending.sort(key=lambda payment: (payment.recognised_at, payment.payment_id))
+        for payment in pending:
+            self.servicing.apply_payment(
+                payment.payment_id,
+                agreement_id=agreement_id,
+                attributed_due_on=payment.attributed_due_on,
+            )
+
+    def _statements_find(self, session: Session, form: dict) -> Page:
+        needle = form.get("loan_or_id", "").strip()
+        if not needle:
+            return self._fail(
+                session, form, action="statement-find", status=422, code="lookup-unset",
+                message="A loan number or ID number is required.",
+                return_to="/staff/statements",
+            )
+        if not session.organisation_id.strip():
+            return self._fail(
+                session, form, action="statement-find", status=422, code="organisation-unset",
+                message="The Enigma organisation id is missing, so stored statements cannot be located.",
+                return_to="/staff/statements",
+            )
+        rows = [
+            _statement_payload(statement)
+            for statement in self.documents.statements.values()
+            if statement.organisation_id == session.organisation_id
+            and _statement_matches(statement, needle)
+        ]
+        inner = render.statement_lookup_form() + render.stored_statements(
+            rows,
+            empty="No stored statement matches that loan number or ID number.",
+        )
+        return self._view(session, "Statements", inner)
+
+    def _enigma_page(self, session: Session, method: str, form: dict, kind: str) -> Page:
+        if method == "POST":
+            return self._fail(
+                session, form, action=kind, status=422, code="enigma-redirect",
+                message="Registration and sign-on are Enigma. This screen does not accept those details.",
+                return_to=f"/self/{kind}",
+            )
+        title = "Registration" if kind == "register" else "Sign on"
+        return self._view(session, title, render.enigma_redirect(kind))
+
+    def _self_statement(self, session: Session) -> Page:
+        refused = self._consumer_gate(session, "self-statement", "/self/statement")
+        if refused is not None:
+            return refused
+        rows = [
+            _statement_payload(statement)
+            for statement in self.documents.statements.values()
+            if statement.organisation_id == session.organisation_id
+            and statement.person_id == session.person_id
+        ]
+        return self._view(
+            session,
+            "Stored statement",
+            render.stored_statements(rows, empty="No stored statement is held for this consumer."),
+        )
+
+    def _self_quote(self, session: Session) -> Page:
+        refused = self._consumer_gate(session, "self-quote", "/self/settlement-quote")
+        if refused is not None:
+            return refused
+        rows = [
+            _quote_payload(quote)
+            for quote in self.documents.quotes.values()
+            if quote.organisation_id == session.organisation_id and quote.person_id == session.person_id
+        ]
+        return self._view(
+            session,
+            "Settlement quote",
+            render.stored_quotes(rows, empty="No stored settlement quote is held for this consumer."),
+        )
+
+    def _consumer_gate(self, session: Session, action: str, return_to: str) -> Page | None:
+        if session.enigma_status == "timeout":
+            return self._fail(
+                session, {}, action=action, status=503, code="enigma-timeout",
+                message="LOCKED_DECISIONS §15: Enigma timed out. The statement and the quote stay unopened.",
+                return_to=return_to,
+            )
+        if session.enigma_status == "suspended":
+            return self._fail(
+                session, {}, action=action, status=403, code="enigma-suspended",
+                message="LOCKED_DECISIONS §15: the enrolment is suspended. The statement and the quote stay unopened.",
+                return_to=return_to,
+            )
+        if session.enigma_status != "active" or not session.person_id.strip() or not session.organisation_id.strip():
+            return self._fail(
+                session, {}, action=action, status=403, code="enigma-sign-on",
+                message="A consumer sees a stored statement or settlement quote only after Enigma sign-on. This screen does not issue either.",
+                return_to=return_to,
+            )
+        return None
+
+    def _own_agreement(self, session: Session, agreement_id: str) -> bool:
+        record = self.servicing.agreements.get(agreement_id)
+        return record is not None and record.organisation_id == session.organisation_id
+
     def _collection_read_gate(self, session: Session, action: str, return_to: str) -> Page | None:
         """The list and the edit form have no route to call.
 
@@ -684,7 +993,8 @@ class StaffApp:
         return self._view(session, "Not an LMS screen", render.plain("Not an LMS screen", message), status=404)
 
     def _view(self, session, title, inner, *, show_nav=True, status=200) -> Page:
-        return Page(status, render.document(title, session, inner, show_nav=show_nav))
+        brand = self.brand.presentation(session.organisation_id)
+        return Page(status, render.document(title, session, inner, show_nav=show_nav, brand=brand))
 
     def _save_session(self, session: Session, form: dict) -> None:
         session.person_id = form.get("person_id", "").strip()
@@ -721,7 +1031,16 @@ def build_app() -> StaffApp:
     office = StaffOffice(audit=audit)
     access = SessionAccess()
     campaigns = CollectionCampaigns(Ledger(), access, audit=audit)
-    return StaffApp(office, campaigns, access)
+    servicing = Servicing(audit=audit)
+    return StaffApp(
+        office,
+        campaigns,
+        access,
+        servicing=servicing,
+        collections=Collections(servicing),
+        documents=Documents(servicing, office.compliance),
+        brand=BrandStore(),
+    )
 
 
 def make_server(app: StaffApp, host: str, port: int) -> ThreadingHTTPServer:
@@ -914,6 +1233,104 @@ def _rand_clause(cents: object) -> str:
     if not shown:
         return ""
     return f" ({shown} rand)"
+
+
+def _tighter_lines(platform_rows: list, company_rows: list) -> list[dict]:
+    by_platform = {row["action"]: row for row in platform_rows}
+    by_company = {row["action"]: row for row in company_rows}
+    lines = []
+    for action in sorted(set(by_platform) | set(by_company)):
+        platform = by_platform.get(action)
+        company = by_company.get(action)
+        if platform is None:
+            lines.append({"action": action, "stopped": True})
+            continue
+        platform_row = RandCeiling(
+            PLATFORM, action, int(platform["amount_cents"]), platform["currency"], "", int(platform["version"]),
+        )
+        company_row = None
+        if company is not None:
+            company_row = RandCeiling(
+                COMPANY,
+                action,
+                int(company["amount_cents"]),
+                company["currency"],
+                company["organisation_id"],
+                int(company["version"]),
+            )
+        applied = tighter(action, 0, platform_row, company_row)
+        lines.append({
+            "action": action,
+            "stopped": False,
+            "platform_cents": applied.platform_cents,
+            "company_cents": applied.company_cents,
+            "limit_cents": applied.limit_cents,
+        })
+    return lines
+
+
+def _statement_matches(statement, needle: str) -> bool:
+    return any(
+        loan.loan_id == needle or loan.frozen_id_number == needle
+        for loan in statement.loans
+    )
+
+
+def _statement_payload(statement) -> dict:
+    return {
+        "statement_id": statement.statement_id,
+        "period_start": statement.period_start.isoformat(),
+        "period_end": statement.period_end.isoformat(),
+        "loans": [
+            {
+                "loan_id": loan.loan_id,
+                "frozen_id_number": loan.frozen_id_number,
+                "principal_debt_cents": loan.principal_debt_cents,
+                "payments_received_cents": loan.payments_received_cents,
+                "interest_billed_cents": loan.interest_billed_cents,
+                "fees_levied_cents": loan.fees_levied_cents,
+                "insurance_levied_cents": loan.insurance_levied_cents,
+                "collection_levied_cents": loan.collection_levied_cents,
+                "default_administration_levied_cents": loan.default_administration_levied_cents,
+                "opening": dict(loan.opening),
+                "closing": dict(loan.closing),
+            }
+            for loan in statement.loans
+        ],
+    }
+
+
+def _quote_payload(quote) -> dict:
+    return {
+        "agreement_id": quote.agreement_id,
+        "as_of": quote.as_of.isoformat(),
+        "delivered_on": quote.delivered_on.isoformat(),
+        "valid_until": quote.valid_until.isoformat(),
+        "principal_cents": quote.principal_cents,
+        "interest_cents": quote.interest_cents,
+        "fee_cents": quote.fee_cents,
+        "early_termination_cents": quote.early_termination_cents,
+        "total_cents": quote.total_cents,
+        "components": list(quote.components),
+    }
+
+
+def _integer_cents(raw: str) -> int | None:
+    text = raw.strip()
+    if text.isdigit():
+        return int(text)
+    return None
+
+
+def _recognition(form: dict | None) -> datetime | None:
+    raw = "" if not form else form.get("recognised_at", "")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return value_instant(value_date(parsed))
 
 
 def _instant(form: dict | None) -> datetime:
