@@ -17,7 +17,6 @@ Last updated: 2026-11-01
 | D1 | Wire format for rate, term, and application number is not locked. Dummy uses integer basis points, term count plus frequency, and APP- plus eight digits. | Decide later | Lock the wire format when a real decision engine is integrated. Code and database already store the values; only the contract needs a lock. |
 | D2 | Service address is returned only from the booking identity read. Organisation context does not return addresses. | Decide later | Confirm with Enigma whether organisation context should return addresses. No LMS change until Enigma exposes the field. |
 | D3 | When the name or ID number on the application differs from the Enigma booking read, which value is frozen is not locked. | Decide later | Lock the rule when a real case arises. Dummy does not reconcile them. |
-| D4 | Servicing.book does not accept application_number or credit_life_premium_cents. The quote stub returns both. The wire calls book with the arguments it already accepts and writes the application number onto the existing agreement field. The premium is not stored on the agreement. | Code change | Extend book only if a later lock says the agreement must keep the premium. Do not add a route for it. |
 
 ## Notifications (Agent D)
 

@@ -994,11 +994,11 @@ class SettlementReadvance:
                 repos=prepared.repos,
                 rate_supplied_by_decision_engine=True,
                 short_term_rate_cap=prepared.short_term_rate_cap,
+                application_number=prepared.application_number,
             )
             booked.contractual_instalment_cents = prepared.instalment_cents
             booked.term_count = prepared.term_count
             booked.short_term_rate_flag = prepared.short_term_rate_flag
-            booked.application_number = prepared.application_number
             booked.settled_from_agreement_id = agreement.agreement_id
             booked.campaign_fall_away_choice = prepared.fall_away_choice
             booked.campaign_fall_away_trigger = prepared.fall_away_trigger

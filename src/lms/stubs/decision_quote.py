@@ -65,7 +65,7 @@ class QuoteApproval:
     repos: tuple[RepoRate, ...]
 
     def book_payload(self) -> dict:
-        """Arguments ``Servicing.book`` accepts today. No extra keys."""
+        """Arguments ``Servicing.book`` accepts, including the number and the premium."""
 
         return {
             "organisation_id": self.organisation_id,
@@ -82,6 +82,8 @@ class QuoteApproval:
             "repos": self.repos,
             "rate_supplied_by_decision_engine": True,
             "short_term_rate_cap": self.short_term_rate_cap,
+            "application_number": self.application_number,
+            "credit_life_premium_cents": self.credit_life_premium_cents,
         }
 
 

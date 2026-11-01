@@ -83,6 +83,7 @@ def _book(servicing: Servicing, *, due: date, booked_at: str, disbursed_at: str,
             "frequency": "monthly",
             "schedule": [[due.isoformat(), CASH]],
             "initiation_fee_cents": 0,
+            "application_number": "APP-00000001",
             "settings": {
                 "leniency_days": 3,
                 "full_payment_threshold_percent": "100",

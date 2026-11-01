@@ -102,6 +102,7 @@ def world(
         schedule=((due, 100_000),),
         initiation_fee_cents=initiation,
         idempotency_key=f"book-{organisation_id}-{due.isoformat()}-{initiation}",
+        application_number="APP-00000001",
     )
     record = svc.disburse(record.agreement_id, recognised_at=at(ADVANCE, 10))
     settlement = Settlement(svc, store, Documents(svc, store))
@@ -201,6 +202,7 @@ def test_missing_in_duplum_trigger_fails_closed():
             schedule=((DUE, 100_000),),
             initiation_fee_cents=0,
             idempotency_key="book-no-trigger",
+            application_number="APP-00000001",
         )
     assert raised.value.code == "election-unset"
     assert str(raised.value) == "in_duplum_trigger is not set on the product or the organisation"

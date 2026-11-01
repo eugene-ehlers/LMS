@@ -55,6 +55,7 @@ def book(svc: Servicing, *, key: str = "book-1", person_id: str = "person-a", **
         schedule=((DUE, 100_000),),
         initiation_fee_cents=0,
         idempotency_key=key,
+        application_number="APP-00000001",
     )
     payload.update(overrides)
     return svc.book(**payload)
@@ -283,6 +284,7 @@ def test_routes_book_and_reject_a_missing_election():
         "cash_advanced_cents": 100_000,
         "frequency": "monthly",
         "schedule": [["2026-06-15", 100_000]],
+        "application_number": "APP-00000001",
         "settings": {
             "leniency_days": 1,
             "full_payment_threshold_percent": "100",

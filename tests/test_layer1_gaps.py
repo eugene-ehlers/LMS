@@ -106,6 +106,7 @@ def test_booking_refuses_a_missing_trigger_and_fills_residual_r100():
             schedule=((DUE, 100_000),),
             initiation_fee_cents=0,
             idempotency_key="book-no-trigger",
+            application_number="APP-00000001",
         )
     assert missing_book.value.code == "election-unset"
     assert servicing.agreements == {}
@@ -120,6 +121,7 @@ def test_booking_refuses_a_missing_trigger_and_fills_residual_r100():
         schedule=((DUE, 100_000),),
         initiation_fee_cents=0,
         idempotency_key="book-residual-default",
+        application_number="APP-00000001",
     )
     assert record.resolved.in_duplum_trigger == "collections_default"
     assert record.resolved.residual_write_off_threshold_cents == 10_000
@@ -148,6 +150,7 @@ def test_book_linked_laybye_keeps_the_receipt_as_cash_in_until_grant():
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
         idempotency_key="book-laybye",
+        application_number="APP-00000001",
         pre_disbursement_cents=20_000,
         pre_disbursement_at=at(date(2026, 4, 1), 9),
     )
@@ -185,6 +188,7 @@ def test_book_linked_laybye_keeps_the_receipt_as_cash_in_until_grant():
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
         idempotency_key="book-laybye",
+        application_number="APP-00000001",
         pre_disbursement_cents=20_000,
         pre_disbursement_at=at(date(2026, 4, 1), 9),
         grant_at=at(date(2026, 4, 1), 11),
@@ -281,6 +285,7 @@ def test_a_loan_without_a_laybye_still_rejects_a_true_overpayment():
         schedule=((DUE, 100_000),),
         initiation_fee_cents=0,
         idempotency_key="book-plain",
+        application_number="APP-00000001",
     )
     servicing.disburse(record.agreement_id, recognised_at=at(date(2026, 4, 1), 10))
     with pytest.raises(ServicingError) as over:
@@ -312,6 +317,7 @@ def test_servicing_audit_extract_sees_the_key_events():
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
         idempotency_key="book-audit",
+        application_number="APP-00000001",
         pre_disbursement_cents=10_000,
         pre_disbursement_at=at(date(2026, 4, 1), 9),
         grant_at=at(date(2026, 4, 1), 11),
