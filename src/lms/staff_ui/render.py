@@ -71,7 +71,7 @@ def now_jhb() -> str:
     return datetime.now(JOHANNESBURG).isoformat(timespec="seconds")
 
 
-def document(title: str, session, inner: str, *, show_nav: bool) -> str:
+def document(title: str, session, inner: str, *, show_nav: bool, brand) -> str:
     nav = _nav() if show_nav else ""
     who = "No Enigma session"
     if session.person_id or session.organisation_id:
@@ -94,16 +94,17 @@ button, a.continue {{ font: inherit; }}
 .note {{ color: #44403c; }}
 table {{ border-collapse: collapse; width: 100%; }}
 th, td {{ border-bottom: 1px solid #e7e5e4; text-align: left; padding: 0.35rem 0.4rem; vertical-align: top; }}
+header, footer {{ border-top: 1px solid #e7e5e4; }}
+footer {{ margin-top: 2rem; padding-top: 0.75rem; }}
 </style>
 </head>
 <body>
-<header>
-<p>LMS staff · {esc(who)}</p>
+{_brand_header(brand, who)}
 {nav}
-</header>
 <main>
 {inner}
 </main>
+{_brand_footer(brand)}
 </body>
 </html>
 """
@@ -117,8 +118,14 @@ def _nav() -> str:
         ("/staff/compliance", "Compliance"),
         ("/staff/ceilings/platform", "Solution ceiling"),
         ("/staff/ceilings/company", "Company ceiling"),
+        ("/staff/collections", "Collections"),
+        ("/staff/statements", "Statements"),
         ("/staff/collection-campaigns", "Collection campaigns"),
         ("/staff/batch", "Batch status"),
+        ("/self/register", "Register"),
+        ("/self/sign-on", "Sign on"),
+        ("/self/statement", "My statement"),
+        ("/self/settlement-quote", "Settlement quote"),
     )
     return "<nav>" + "".join(f'<a href="{esc(href)}">{esc(label)}</a>' for href, label in links) + "</nav>"
 
@@ -272,7 +279,7 @@ def election_list(organisation: Mapping, products: list) -> str:
     rows = "".join(
         "<tr>"
         f"<td><a href=\"/staff/products/{esc(row.get('product_id'))}/elections\">{esc(row.get('product_id'))}</a></td>"
-        f"<td>{_election_brief(row)}</td>"
+        f"<td>{election_reading(row, 'inherits')}</td>"
         "</tr>"
         for row in products
     )
@@ -280,10 +287,10 @@ def election_list(organisation: Mapping, products: list) -> str:
         rows = "<tr><td colspan=\"2\">No product override is stored.</td></tr>"
     return f"""
 <h1>Elections</h1>
-<p class="note">A blank field is stored as unset. A product blank inherits when a later resolve runs. This screen does not resolve and does not fill a default.</p>
+<p class="note">A null organisation value is unset. A null product value inherits. This screen does not resolve and does not fill a default.</p>
 <h2>Organisation</h2>
-{_facts(organisation)}
-{election_form("/staff/elections", organisation)}
+{election_reading(organisation, "unset")}
+{election_form("/staff/elections", organisation, blank="unset")}
 <h2>Products</h2>
 <table><thead><tr><th>Product</th><th>Stored values</th></tr></thead><tbody>{rows}</tbody></table>
 <form method="get" action="/staff/products/open">
@@ -293,21 +300,34 @@ def election_list(organisation: Mapping, products: list) -> str:
 """
 
 
-def election_form(action: str, values: Mapping | None, *, heading: str = "Edit elections") -> str:
+def election_reading(row: Mapping, null_label: str) -> str:
+    items = []
+    for name in (*ELECTION_CHOICES, "residual_write_off_threshold_cents"):
+        value = row.get(name)
+        missing = value is None or value == ""
+        shown = null_label if missing else value
+        items.append(
+            f'<li data-field="{esc(name)}" data-state="{esc(null_label if missing else "set")}">'
+            f"{esc(name)}: {esc(shown)}</li>"
+        )
+    return f'<ul data-null-label="{esc(null_label)}">' + "".join(items) + "</ul>"
+
+
+def election_form(action: str, values: Mapping | None, *, heading: str = "Edit elections", blank: str = "unset") -> str:
     values = values or {}
     fields = []
     for name, choices in ELECTION_CHOICES.items():
         current = values.get(name) or ""
         fields.append(
             f"<label>{esc(name)} <select name=\"{esc(name)}\">"
-            f"<option value=\"\">Unset</option>{_options(choices, current)}</select></label>"
+            f"<option value=\"\">{esc(blank)}</option>{_options(choices, current)}</select></label>"
         )
     residual = values.get("residual_write_off_threshold_cents")
     residual_value = "" if residual is None else residual
     fields.append(
         "<label>residual_write_off_threshold_cents "
         f"<input name=\"residual_write_off_threshold_cents\" value=\"{esc(residual_value)}\">"
-        " <span class=\"note\">Integer cents. Blank stays unset.</span></label>"
+        " <span class=\"note\">Integer cents. Blank is stored as null.</span></label>"
     )
     return f"""
 <h2>{esc(heading)}</h2>
@@ -357,7 +377,7 @@ def compliance_form(values: Mapping | None, notice: str) -> str:
 """
 
 
-def ceiling_page(*, scope: str, action: str, rows: list, check: bool) -> str:
+def ceiling_page(*, scope: str, action: str, rows: list, check: bool, tighter: list | None = None, tighter_note: str = "") -> str:
     body = "".join(
         "<tr>"
         f"<td>{esc(row.get('action'))}</td>"
@@ -385,7 +405,8 @@ def ceiling_page(*, scope: str, action: str, rows: list, check: bool) -> str:
 """
     return f"""
 <h1>{esc(scope)} ceiling</h1>
-<p class="note">Amounts are integer cents in ZAR. Zero is a real ceiling. The route applies the tighter of the solution-wide and company amounts when an amount is checked. A missing platform ceiling stops that check.</p>
+<p class="note">Amounts are integer cents in ZAR. Zero is a real ceiling. Saving uses the existing ceiling route. The tighter of the platform and company limits is shown from that same comparison. A missing platform ceiling stops the command.</p>
+{_tighter_table(tighter or [], tighter_note)}
 <table>
 <thead><tr><th>Action</th><th>Cents</th><th>Rand</th><th>Currency</th><th>Version</th></tr></thead>
 <tbody>{body}</tbody>
@@ -563,9 +584,198 @@ def _options(choices, current: object) -> str:
     )
 
 
-def _election_brief(row: Mapping) -> str:
-    parts = [f"{key}={value}" for key, value in row.items() if key != "product_id" and value is not None]
-    return esc(", ".join(parts) or "All unset")
+def _brand_header(brand, who: str) -> str:
+    status = getattr(brand, "status", "none")
+    logo = getattr(brand, "logo_object_key", None) if status == "one" else None
+    logo_html = ""
+    if logo:
+        logo_html = f'<p class="logo" data-logo-key="{esc(logo)}">Logo {esc(logo)}</p>'
+    note = ""
+    if status == "many":
+        note = "<p>More than one brand row is stored. No logo or footer is chosen.</p>"
+    return (
+        f'<header data-brand="{esc(status)}">'
+        f"<p>LMS · {esc(who)}</p>"
+        f"{logo_html}{note}"
+        "</header>"
+    )
+
+
+def _brand_footer(brand) -> str:
+    status = getattr(brand, "status", "none")
+    footer = getattr(brand, "statement_footer", None) if status == "one" else None
+    if footer:
+        return f'<footer data-footer="set">{esc(footer)}</footer>'
+    if status == "many":
+        return '<footer data-footer="blocked"></footer>'
+    return '<footer data-footer="empty"></footer>'
+
+
+def _tighter_table(lines: list, note: str) -> str:
+    if note:
+        return f'<p data-tighter="unavailable">{esc(note)}</p>'
+    if not lines:
+        return '<p data-tighter="none">No ceiling is stored to compare.</p>'
+    body = []
+    for line in lines:
+        if line.get("stopped"):
+            body.append(
+                "<tr>"
+                f"<td>{esc(line.get('action'))}</td>"
+                '<td colspan="3">A missing platform ceiling stops the command.</td>'
+                "</tr>"
+            )
+            continue
+        company = line.get("company_cents")
+        company_shown = "no company ceiling" if company is None else company
+        body.append(
+            "<tr>"
+            f"<td>{esc(line.get('action'))}</td>"
+            f"<td>{esc(line.get('platform_cents'))}</td>"
+            f"<td>{esc(company_shown)}</td>"
+            f'<td data-limit="{esc(line.get("limit_cents"))}">{esc(line.get("limit_cents"))}</td>'
+            "</tr>"
+        )
+    return (
+        "<h2>Tighter limit</h2>"
+        "<table><thead><tr><th>Action</th><th>Platform cents</th><th>Company cents</th>"
+        "<th>Tighter cents</th></tr></thead><tbody>"
+        + "".join(body)
+        + "</tbody></table>"
+    )
+
+
+def enigma_redirect(kind: str) -> str:
+    title = "Registration" if kind == "register" else "Sign on"
+    return f"""
+<section data-screen="{esc(kind)}" data-redirect="closed">
+<h1>{esc(title)}</h1>
+<p>Registration and sign-on are Enigma. This screen does not collect a name, an identity number, an email address, or a password, and it does not create an LMS user.</p>
+<p>No Enigma page address is stored, so this screen does not send the browser to an address.</p>
+</section>
+"""
+
+
+def collections_form() -> str:
+    return f"""
+<h1>Collections</h1>
+<p class="note">Contractual breach and collections default are read from the collections view. Amounts on that view stay in integer cents. The recognition date sent with the command is 00:00 Africa/Johannesburg.</p>
+<form method="post" action="/staff/collections">
+{_hidden_time()}
+<label>Agreement id <input name="agreement_id" required></label>
+<button type="submit">Show collections</button>
+</form>
+"""
+
+
+def collections_result(payload: Mapping) -> str:
+    breaches = payload.get("contractual_breaches") or []
+    breach_html = "".join(f"<li>{esc(day)}</li>" for day in breaches) or "<li>None recorded.</li>"
+    defaulted = "true" if payload.get("collections_default") else "false"
+    ceiling = payload.get("open_episode_ceiling")
+    ceiling_shown = "none" if ceiling is None else ceiling
+    provision = payload.get("provision_cents")
+    provision_shown = "none" if provision is None else provision
+    return f"""
+<section data-screen="collections">
+<h1>Collections</h1>
+<p>Agreement {esc(payload.get("agreement_id"))}.</p>
+<p>Recognition date {esc(payload.get("recognition"))}.</p>
+<h2>Contractual breach</h2>
+<ul data-contractual-breach="list">{breach_html}</ul>
+<h2>Collections default</h2>
+<p data-collections-default="{esc(defaulted)}">{esc(defaulted)}</p>
+<p>Open episode ceiling cents: {esc(ceiling_shown)}.</p>
+<p>Provision cents: {esc(provision_shown)}.</p>
+<p>Residual threshold cents: {esc(payload.get("residual_threshold_cents"))}.</p>
+</section>
+{write_off_form(str(payload.get("agreement_id") or ""))}
+"""
+
+
+def write_off_form(agreement_id: str) -> str:
+    return f"""
+<h2>Write off</h2>
+<p class="note">The write-off uses the existing collections write-off. It requires the mandate. Unapplied receipts on this agreement are allocated first. The amount is integer cents and must be the full outstanding position.</p>
+<form method="post" action="/staff/collections/write-off">
+{_hidden_time()}
+<input type="hidden" name="agreement_id" value="{esc(agreement_id)}">
+<label>Amount (cents) <input name="amount_cents" required></label>
+<button type="submit">Write off</button>
+</form>
+"""
+
+
+def statement_lookup_form() -> str:
+    return f"""
+<h1>Statements</h1>
+<p class="note">Locate a stored statement by the loan id on that statement or by the frozen ID number. The figures below are the stored figures. This screen does not issue a statement.</p>
+<form method="post" action="/staff/statements">
+<label>Loan number or ID number <input name="loan_or_id" required></label>
+<button type="submit">Show stored statement</button>
+</form>
+"""
+
+
+def stored_statements(rows: list, *, empty: str) -> str:
+    if not rows:
+        return f'<section data-screen="statement"><h1>Stored statement</h1><p>{esc(empty)}</p></section>'
+    blocks = []
+    for row in rows:
+        loans = []
+        for loan in row.get("loans") or []:
+            loans.append(
+                "<section>"
+                f"<h3>Loan {esc(loan.get('loan_id'))}</h3>"
+                f"<p>ID number {esc(loan.get('frozen_id_number'))}</p>"
+                f"<p>Principal debt cents: {esc(loan.get('principal_debt_cents'))}</p>"
+                f"<p>Payments received cents: {esc(loan.get('payments_received_cents'))}</p>"
+                f"<p>Interest billed cents: {esc(loan.get('interest_billed_cents'))}</p>"
+                f"<p>Fees levied cents: {esc(loan.get('fees_levied_cents'))}</p>"
+                f"<p>Insurance levied cents: {esc(loan.get('insurance_levied_cents'))}</p>"
+                f"<p>Collection levied cents: {esc(loan.get('collection_levied_cents'))}</p>"
+                f"<p>Default administration levied cents: {esc(loan.get('default_administration_levied_cents'))}</p>"
+                f"{_cents_map('Opening', loan.get('opening') or {})}"
+                f"{_cents_map('Closing', loan.get('closing') or {})}"
+                "</section>"
+            )
+        blocks.append(
+            "<article>"
+            f"<h2>Statement {esc(row.get('statement_id'))}</h2>"
+            f"<p>{esc(row.get('period_start'))} to {esc(row.get('period_end'))}</p>"
+            + "".join(loans)
+            + "</article>"
+        )
+    return '<section data-screen="statement"><h1>Stored statement</h1>' + "".join(blocks) + "</section>"
+
+
+def stored_quotes(rows: list, *, empty: str) -> str:
+    if not rows:
+        return f'<section data-screen="quote"><h1>Settlement quote</h1><p>{esc(empty)}</p></section>'
+    blocks = []
+    for row in rows:
+        parts = "".join(
+            f"<li>{esc(name)}: {esc(cents)}</li>" for name, cents in (row.get("components") or [])
+        )
+        blocks.append(
+            "<article>"
+            f"<h2>Quote {esc(row.get('agreement_id'))}</h2>"
+            f"<p>As of {esc(row.get('as_of'))}. Delivered {esc(row.get('delivered_on'))}. "
+            f"Valid until {esc(row.get('valid_until'))}.</p>"
+            f"<p>Principal cents: {esc(row.get('principal_cents'))}</p>"
+            f"<p>Interest cents: {esc(row.get('interest_cents'))}</p>"
+            f"<p>Fee cents: {esc(row.get('fee_cents'))}</p>"
+            f"<p>Early termination cents: {esc(row.get('early_termination_cents'))}</p>"
+            f"<p data-total-cents=\"{esc(row.get('total_cents'))}\">Total cents: {esc(row.get('total_cents'))}</p>"
+            f"<ul>{parts}</ul>"
+            "</article>"
+        )
+    return '<section data-screen="quote"><h1>Settlement quote</h1>' + "".join(blocks) + "</section>"
+
+
+def _cents_map(label: str, amounts: Mapping) -> str:
+    items = "".join(f"<li>{esc(name)}: {esc(amounts[name])}</li>" for name in amounts)
+    return f"<h4>{esc(label)} cents</h4><ul>{items}</ul>"
 
 
 def _rands(cents: object) -> str:
