@@ -305,6 +305,7 @@ class Collections:
                 "LOCKED_DECISIONS §8 reserves the small residual for an exact "
                 "contractual instalment. An arrears balance uses the mandated write-off.",
             )
+        self._allocate_unapplied_receipts(record)
         outstanding = _outstanding_cents(self.servicing.ledger, account)
         if outstanding == 0:
             raise CollectionsError("write-off-zero", "There is no residual to write off.")
@@ -333,20 +334,16 @@ class Collections:
     ) -> CollectionsView:
         """Larger write-off. Mandate and operational ceiling, then one journal.
 
-        The access check runs before the journal. A timeout, an ambiguous
-        status, a suspended enrolment, a denied mandate, or an amount over
-        the ceiling posts nothing (§15, §8).
+        The access check runs before any receipt is allocated and before the
+        journal. A timeout, an ambiguous status, a suspended enrolment, a
+        denied mandate, or an amount over the ceiling posts nothing (§15, §8).
+        Unapplied receipts are allocated after that check and before the
+        write-off. The amount has to be the full outstanding position after
+        those receipts. Anything else is not a write-off.
         """
         case = self._case(agreement_id)
         record = self.servicing._agreement(agreement_id)
-        account = self._loan(record)
-        outstanding = _outstanding_cents(self.servicing.ledger, account)
-        if amount_cents != outstanding:
-            raise CollectionsError(
-                "write-off-partial-unset",
-                "LOCKED_DECISIONS §8 does not order a partial write-off. "
-                "The amount has to be the full outstanding position.",
-            )
+        self._loan(record)
         authorise_write_off(
             access or self.servicing.enigma,
             organisation_id=record.organisation_id,
@@ -357,6 +354,15 @@ class Collections:
             company=company,
             mandate_allowed=mandate_allowed,
         )
+        self._allocate_unapplied_receipts(record)
+        outstanding = _outstanding_cents(self.servicing.ledger, self._loan(record))
+        if amount_cents != outstanding:
+            raise CollectionsError(
+                "write-off-partial-unset",
+                "LOCKED_DECISIONS §8 does not order a partial write-off. "
+                "Receipts are allocated first. The amount has to be the full "
+                "outstanding position after that allocation.",
+            )
         self._post_write_off(record, recognised_at, amount_cents)
         case.written_off = True
         record.status = "written_off"
@@ -587,6 +593,58 @@ class Collections:
             contactability=contactability,
             as_of=check_on,
         )
+
+    def _allocate_unapplied_receipts(self, record) -> None:
+        """Post receipts still sitting unapplied. LOCKED_DECISIONS §8.
+
+        A denied mandate never reaches this. The receipt keeps the recognition
+        date it was given. Allocation uses the ledger's section 126 order.
+        """
+        if record.ledger_loan_id is None:
+            raise CollectionsError("status", "The agreement has not been disbursed.")
+        pending = [
+            payment
+            for payment in self.servicing.payments.values()
+            if payment.organisation_id == record.organisation_id
+            and payment.agreement_id == record.agreement_id
+            and payment.status == "unapplied"
+        ]
+        pending.sort(key=lambda item: (item.value_date, item.recognised_at, item.payment_id))
+        for payment in pending:
+            if payment.attributed_due_on is None:
+                raise CollectionsError(
+                    "due-date-attribution-unset",
+                    "LOCKED_DECISIONS §6 compares the amount received for a due date. "
+                    "An unattributed receipt is not allocated.",
+                )
+            if payment.cents < 0:
+                raise CollectionsError("payment", "A receipt cannot be negative.")
+            if payment.cents == 0:
+                payment.status = "allocated"
+                continue
+            try:
+                transaction = self.servicing.ledger.post_payment(
+                    organisation_id=payment.organisation_id,
+                    loan_id=record.ledger_loan_id,
+                    cents=payment.cents,
+                    recognised_at=payment.recognised_at,
+                    attributed_due_on=payment.attributed_due_on,
+                )
+            except LedgerError as exc:
+                raise CollectionsError(exc.code, str(exc)) from exc
+            payment.ledger_transaction_id = transaction.transaction_id
+            payment.allocations = tuple(
+                (entry.bucket, entry.credit_cents)
+                for entry in transaction.entries
+                if entry.bucket is not None and entry.credit_cents
+            )
+            payment.status = "allocated"
+            self.servicing._audit_payment(
+                payment,
+                transaction,
+                self.servicing.ledger._last_laybye_transaction_id,
+            )
+            self.servicing._refresh_status(record)
 
     def _post_write_off(self, record, recognised_at: datetime, amount_cents: int) -> None:
         if record.ledger_loan_id is None:

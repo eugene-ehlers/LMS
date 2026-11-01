@@ -150,6 +150,7 @@ class Ledger:
         quoted_disbursement: date | None = None,
         initiation_fee_cents: int = 0,
         contractual_end: date | None = None,
+        application_number: str | None = None,
     ) -> LoanAccount:
         if product.classification not in {SHORT_TERM, UNSECURED, ZERO_COST, CPA_LAYBY}:
             raise LedgerError(
@@ -196,6 +197,7 @@ class Ledger:
             quoted_disbursement=quoted_disbursement,
             initiation_fee_cents=initiation_fee_cents,
             contractual_end=end,
+            application_number=application_number,
         )
         return self.grant(
             organisation_id=account.organisation_id,
@@ -222,6 +224,7 @@ class Ledger:
         quoted_disbursement: date | None = None,
         initiation_fee_cents: int = 0,
         contractual_end: date | None = None,
+        application_number: str | None = None,
     ) -> LoanAccount:
         """Open the parent before the loan-out journal. LOCKED_DECISIONS §4.
 
@@ -263,6 +266,18 @@ class Ledger:
             payment_frequency=frequency,
             classification=product.classification,
         )
+        stored_application = (application_number or "").strip()
+        if stored_application:
+            for existing in self.store.accounts_for(organisation_id):
+                if (
+                    existing.instrument_kind == "loan"
+                    and existing.application_number == stored_application
+                ):
+                    raise LedgerError(
+                        "application-already-booked",
+                        "LOCKED_DECISIONS §25: one loan number for an application. "
+                        "A second loan is not stored.",
+                    )
         account = LoanAccount(
             organisation_id=organisation_id,
             loan_id=str(uuid4()),
@@ -278,6 +293,8 @@ class Ledger:
             quoted_disbursement=quoted_disbursement,
             contractual_end=end,
             cash_advanced_cents=cash_advanced_cents,
+            loan_number=self.store.next_loan_number(organisation_id),
+            application_number=stored_application,
         )
         self.store.add(account)
         return account
@@ -410,6 +427,8 @@ class Ledger:
             quoted_disbursement=None,
             contractual_end=parent.contractual_end,
             cash_advanced_cents=parent.cash_advanced_cents,
+            loan_number=parent.loan_number,
+            application_number=parent.application_number,
         )
         self.store.add(child)
         if amount_cents:

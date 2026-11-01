@@ -63,6 +63,8 @@ class AgreementRecord:
     ledger_loan_id: str | None = None
     laybye_loan_id: str | None = None
     disbursement_value_date: date | None = None
+    application_number: str | None = None
+    loan_number: str | None = None
 
 
 @dataclass
@@ -120,8 +122,16 @@ class Servicing:
         quoted_disbursement: date | None = None,
         idempotency_key: str,
         repos: tuple[RepoRate, ...] = (),
+        application_number: str | None = None,
     ) -> AgreementRecord:
         """POST /v1/agreements. Freeze elections. Do not post to the ledger."""
+        if application_number is not None:
+            if not isinstance(application_number, str) or not application_number.strip():
+                raise ServicingError(
+                    "application-number",
+                    "LOCKED_DECISIONS §25: a supplied application number is blank. The agreement is not stored.",
+                )
+            application_number = application_number.strip()
         fingerprint = _fingerprint(
             {
                 "organisation_id": organisation_id,
@@ -133,11 +143,23 @@ class Servicing:
                 "quoted_disbursement": quoted_disbursement.isoformat() if quoted_disbursement else None,
                 "recognised_at": recognised_at.isoformat(),
                 "classification": product.classification,
+                "application_number": application_number,
             }
         )
         replay = self._replay("book", organisation_id, idempotency_key, fingerprint)
         if replay is not None:
             return self.agreements[replay]
+        if application_number:
+            for existing in self.agreements.values():
+                if (
+                    existing.organisation_id == organisation_id
+                    and existing.application_number == application_number
+                ):
+                    raise ServicingError(
+                        "application-already-booked",
+                        "LOCKED_DECISIONS §25: one loan number for an application. "
+                        "A second agreement is not stored.",
+                    )
         identity = self.enigma.check(organisation_id, person_id, "agreement.book")
         resolved = self._resolve(settings, product)
         self._engine_validate(
@@ -173,6 +195,7 @@ class Servicing:
             frozen_id_number=identity.id_number,
             frozen_service_address=identity.service_address,
             annual_equivalent_rate=disclosure,
+            application_number=application_number,
         )
         self.agreements[record.agreement_id] = record
         self._remember("book", organisation_id, idempotency_key, fingerprint, record.agreement_id)
@@ -202,6 +225,7 @@ class Servicing:
         quoted_disbursement: date | None = None,
         idempotency_key: str,
         repos: tuple[RepoRate, ...] = (),
+        application_number: str | None = None,
         pre_disbursement_cents: int | None = None,
         pre_disbursement_at: datetime | None = None,
         grant_at: datetime | None = None,
@@ -226,6 +250,7 @@ class Servicing:
             quoted_disbursement=quoted_disbursement,
             idempotency_key=idempotency_key,
             repos=repos,
+            application_number=application_number,
         )
         if record.ledger_loan_id is None:
             try:
@@ -245,11 +270,13 @@ class Servicing:
                     quoted_disbursement=record.quoted_disbursement,
                     initiation_fee_cents=record.initiation_fee_cents,
                     contractual_end=max(due for due, _amount in record.schedule),
+                    application_number=record.application_number,
                 )
             except (LedgerError, LaybyeError, CalculationInputError, RuleError) as exc:
                 raise _from_downstream(exc) from exc
             record.ledger_loan_id = parent.loan_id
             record.laybye_loan_id = child.loan_id
+            record.loan_number = parent.loan_number
         if pre_disbursement_cents is not None:
             if pre_disbursement_at is None:
                 raise ServicingError(
@@ -363,10 +390,12 @@ class Servicing:
                     quoted_disbursement=record.quoted_disbursement,
                     initiation_fee_cents=record.initiation_fee_cents,
                     contractual_end=max(due for due, _amount in record.schedule),
+                    application_number=record.application_number,
                 )
         except (LedgerError, LaybyeError, CalculationInputError, RuleError) as exc:
             raise _from_downstream(exc) from exc
         record.ledger_loan_id = account.loan_id
+        record.loan_number = account.loan_number
         record.disbursement_value_date = account.disbursement_value_date
         record.status = "active"
         self._audit(

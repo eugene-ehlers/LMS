@@ -192,7 +192,40 @@ def _route(office: StaffOffice, method: str, path: str, body: dict, headers: dic
             maturity_date=_optional_date(body.get("maturity_date")),
         )
         return _intake(row)
+    if method == "GET" and len(parts) == 3 and parts[0] == "organisations" and parts[2] == "statements":
+        loan_number = body.get("loan_number") or headers.get("X-Loan-Number") or None
+        id_number = body.get("id_number") or headers.get("X-Id-Number") or None
+        rows = office.search_statements(
+            actor,
+            parts[1],
+            loan_number=str(loan_number) if loan_number else None,
+            id_number=str(id_number) if id_number else None,
+        )
+        return {"statements": [_stored_statement(row) for row in rows]}
     raise StaffError("not-found", f"No route {method} /v1/staff/{'/'.join(parts)}.", status=404)
+
+
+def _stored_statement(row) -> dict:
+    return {
+        "statement_id": row.statement_id,
+        "organisation_id": row.organisation_id,
+        "person_id": row.person_id,
+        "period_start": row.period_start.isoformat(),
+        "period_end": row.period_end.isoformat(),
+        "brand_display_name": row.brand_display_name,
+        "brand_statement_footer": row.brand_statement_footer,
+        "loans": [
+            {
+                "loan_id": section.loan_id,
+                "loan_number": section.loan_number,
+                "frozen_id_number": section.frozen_id_number,
+                "instrument_kind": section.instrument_kind,
+                "opening": dict(section.opening),
+                "closing": dict(section.closing),
+            }
+            for section in row.loans
+        ],
+    }
 
 
 def _actor(headers: dict) -> StaffActor:
