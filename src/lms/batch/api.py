@@ -12,13 +12,21 @@ from lms.batch.service import BatchService
 from lms.batch.store import BatchStore
 
 _STATUS_PATH = re.compile(r"^/organisations/([^/]+)/batch-status$")
+_ACCOUNT_STATUS_PATH = re.compile(
+    r"^/organisations/([^/]+)/accounts/([^/]+)/batch-status$"
+)
+_UI_ORG_PATH = re.compile(r"^/organisations/([^/]+)/ui-actions/status$")
+_UI_ACCOUNT_PATH = re.compile(
+    r"^/organisations/([^/]+)/accounts/([^/]+)/ui-actions/status$"
+)
 _RUN_PATH = re.compile(r"^/organisations/([^/]+)/batch-runs$")
 _SKIP_PATH = re.compile(r"^/organisations/([^/]+)/batch-runs/([^/]+)/skip$")
 
 
 class BatchStatusApp:
-    def __init__(self, service: BatchService) -> None:
+    def __init__(self, service: BatchService, ui_actions: object | None = None) -> None:
         self._service = service
+        self._ui_actions = ui_actions
 
     def handle(
         self, method: str, path: str, body: bytes | None = None
@@ -32,6 +40,27 @@ class BatchStatusApp:
             if method != "GET":
                 return 405, {"error": "method not allowed"}
             return self._status(unquote(status_match.group(1)))
+        account_match = _ACCOUNT_STATUS_PATH.fullmatch(route)
+        if account_match:
+            if method != "GET":
+                return 405, {"error": "method not allowed"}
+            return self._account_status(
+                unquote(account_match.group(1)),
+                unquote(account_match.group(2)),
+            )
+        ui_account = _UI_ACCOUNT_PATH.fullmatch(route)
+        if ui_account:
+            if method != "GET":
+                return 405, {"error": "method not allowed"}
+            return self._ui_status(
+                unquote(ui_account.group(1)),
+                unquote(ui_account.group(2)),
+            )
+        ui_org = _UI_ORG_PATH.fullmatch(route)
+        if ui_org:
+            if method != "GET":
+                return 405, {"error": "method not allowed"}
+            return self._ui_status(unquote(ui_org.group(1)), None)
         run_match = _RUN_PATH.fullmatch(route)
         if run_match:
             if method != "POST":
@@ -54,6 +83,35 @@ class BatchStatusApp:
         except BatchError as exc:
             return exc.status_code, _error_body(exc)
         return 200, status.to_dict()
+
+    def _account_status(
+        self, organisation_id: str, account_id: str
+    ) -> tuple[int, dict[str, object]]:
+        try:
+            status = self._service.account_status(organisation_id, account_id)
+        except BatchError as exc:
+            return exc.status_code, _error_body(exc)
+        return 200, status.to_dict()
+
+    def _ui_status(
+        self, organisation_id: str, account_id: str | None
+    ) -> tuple[int, dict[str, object]]:
+        if self._ui_actions is None:
+            return 200, {
+                "organisation_id": organisation_id,
+                "account_id": account_id,
+                "recorded": False,
+                "reason": "no UI action has been recorded",
+            }
+        view = self._ui_actions(organisation_id, account_id)
+        if not isinstance(view, dict):
+            return 200, {
+                "organisation_id": organisation_id,
+                "account_id": account_id,
+                "recorded": False,
+                "reason": "no UI action has been recorded",
+            }
+        return 200, view
 
     def _run(
         self, organisation_id: str, body: bytes | None

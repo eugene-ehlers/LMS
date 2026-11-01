@@ -2,8 +2,8 @@
 
 The lock requires a sequential number that is not skipped, one number for an
 application, and the same core number for a Laybye with another indicator.
-It does not fix the character pattern. This series is 12 digits, starting at
-1, with no company prefix and no month reset. That pattern is not a locked rule.
+Decision 25: the Day-1 number is a 12-digit sequence starting at 1, with no
+company prefix until one is supplied, and no month reset.
 A Laybye does not take the next number. It keeps the core number and stores
 the indicator ``L``.
 """

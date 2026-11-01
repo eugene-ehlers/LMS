@@ -681,6 +681,40 @@ class BatchStore:
                 open_alerts=alerts,
             )
 
+    def account_status(self, organisation_id: str, account_id: str):
+        from lms.batch.records import AccountBatchStatus, AccountFailure
+
+        with self._transaction():
+            row = self._conn.execute(
+                """
+                SELECT f.account_id, f.step, f.reason, f.recorded_at, r.id AS run_id
+                FROM batch_account_failures f
+                JOIN batch_runs r ON r.id = f.batch_run_id
+                WHERE r.organisation_id = ? AND f.account_id = ?
+                ORDER BY r.seq DESC, f.recorded_at DESC, f.id DESC
+                LIMIT 1
+                """,
+                (organisation_id, account_id),
+            ).fetchone()
+            if row is None:
+                return AccountBatchStatus(
+                    organisation_id=organisation_id,
+                    account_id=account_id,
+                    batch_run_id=None,
+                    failure=None,
+                )
+            return AccountBatchStatus(
+                organisation_id=organisation_id,
+                account_id=account_id,
+                batch_run_id=row["run_id"],
+                failure=AccountFailure(
+                    account_id=row["account_id"],
+                    step=row["step"],
+                    reason=row["reason"],
+                    recorded_at=row["recorded_at"],
+                ),
+            )
+
     def audit_entries(self, organisation_id: str) -> tuple[AuditEntry, ...]:
         with self._transaction():
             rows = self._conn.execute(

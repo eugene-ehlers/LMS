@@ -46,6 +46,21 @@ def _route(
 ) -> dict:
     parts = [part for part in path.split("/") if part]
     actor = headers.get("X-Actor-Id", "")
+    if (
+        method == "GET"
+        and len(parts) == 4
+        and parts[:2] == ["v1", "organisations"]
+        and parts[3] == "collection-campaigns"
+    ):
+        rows = campaigns.list_campaigns(parts[2], actor)
+        return {"campaigns": [_campaign(campaign) for campaign in rows]}
+    if (
+        method == "GET"
+        and len(parts) == 5
+        and parts[:2] == ["v1", "organisations"]
+        and parts[3] == "collection-campaigns"
+    ):
+        return _campaign(campaigns.get_campaign(parts[2], parts[4], actor))
     if method == "POST" and parts == ["v1", "collection-campaigns"]:
         campaign = campaigns.create(
             organisation_id=_required(body, "organisation_id"),

@@ -401,16 +401,22 @@ def ceiling_page(*, scope: str, action: str, rows: list, check: bool) -> str:
 """
 
 
+def _campaign_cell(row, key: str):
+    if isinstance(row, dict):
+        return row.get(key)
+    return getattr(row, key)
+
+
 def collection_list(rows: list) -> str:
     body = "".join(
         "<tr>"
-        f"<td><a href=\"/staff/collection-campaigns/{esc(row.campaign_id)}\">{esc(row.campaign_id)}</a></td>"
-        f"<td>{esc(row.start_date.isoformat())}</td>"
-        f"<td>{esc(row.end_date.isoformat() if row.end_date else 'open-ended')}</td>"
-        f"<td>{esc(format(row.rate_reduction, 'f'))}</td>"
-        f"<td>{esc(row.rate_scope or '')}</td>"
-        f"<td>{'yes' if row.payment_holiday else 'no'}</td>"
-        f"<td>{esc(row.notice_date.isoformat())}</td>"
+        f"<td><a href=\"/staff/collection-campaigns/{esc(_campaign_cell(row, 'campaign_id'))}\">{esc(_campaign_cell(row, 'campaign_id'))}</a></td>"
+        f"<td>{esc(_campaign_cell(row, 'start_date'))}</td>"
+        f"<td>{esc(_campaign_cell(row, 'end_date') or 'open-ended')}</td>"
+        f"<td>{esc(_campaign_cell(row, 'rate_reduction'))}</td>"
+        f"<td>{esc(_campaign_cell(row, 'rate_scope') or '')}</td>"
+        f"<td>{'yes' if _campaign_cell(row, 'payment_holiday') else 'no'}</td>"
+        f"<td>{esc(_campaign_cell(row, 'notice_date'))}</td>"
         "</tr>"
         for row in rows
     )
@@ -418,7 +424,7 @@ def collection_list(rows: list) -> str:
         body = "<tr><td colspan=\"7\">No collection campaign is held for this organisation.</td></tr>"
     return f"""
 <h1>Collection campaigns</h1>
-<p class="note">The collection-campaign route has no list method. This table is the campaigns the service already holds for this organisation. It does not decide which campaign applies, and it does not change a contractual term or instalment.</p>
+<p class="note">This table is the collection-campaign list route for this organisation. The read does not decide which campaign applies, and it does not change a contractual term or instalment.</p>
 <p><a href="/staff/collection-campaigns/new">Create a collection campaign</a></p>
 <table>
 <thead><tr><th>Campaign</th><th>Start</th><th>End</th><th>Rate reduction</th><th>Rate duration</th><th>Payment holiday</th><th>Notice date</th></tr></thead>
@@ -498,6 +504,30 @@ def collection_apply_form(campaign_id: str) -> str:
 <button type="submit">Apply</button>
 </form>
 <p><a href="/staff/collection-campaigns/{esc(campaign_id)}">Back to the campaign</a></p>
+"""
+
+
+def batch_service_status(view) -> str:
+    """Show the batch the service recorded. This screen does not run the steps."""
+    last = view.last_status
+    failed = view.last_failed_run
+    reasons = []
+    if failed is not None:
+        reasons = [f"{item.account_id}: {item.reason}" for item in failed.failures]
+    processed = "none recorded" if last is None else str(last.accounts_processed)
+    failed_count = "none recorded" if last is None else str(last.accounts_failed)
+    ceiling = "none recorded" if last is None else str(last.accounts_at_ceiling)
+    reason_text = "none recorded" if not reasons else "; ".join(reasons)
+    return f"""
+<h1>Batch status</h1>
+<p class="note">This screen reads the daily calculation batch. It does not accrue, capitalise, or flag a default.</p>
+<p>Accounts processed: {esc(processed)}. Accounts failed: {esc(failed_count)}. Accounts at the ceiling: {esc(ceiling)}.</p>
+<h2>Last successful run</h2>
+<p>{esc("none recorded" if view.last_successful_run is None else view.last_successful_run.id)}</p>
+<h2>Last failed run</h2>
+<p>{esc("none recorded" if failed is None else failed.id)}</p>
+<h2>Failure reasons</h2>
+<p>{esc(reason_text)}</p>
 """
 
 

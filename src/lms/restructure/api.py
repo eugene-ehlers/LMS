@@ -59,6 +59,7 @@ def dispatch(
             consent_present="client_consent" in body,
             consent_date=_consent_date(body),
             elections=body.get("elections"),
+            product_id=body.get("product_id"),
             identity=body.get("identity"),
             kind=_kind(body),
             caller_term_fields=frozenset(body),

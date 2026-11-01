@@ -74,10 +74,9 @@ class EnigmaStub:
         """Whether the consumer is registered. No email or mobile is returned.
 
         Decision 27 sends the statement-ready push only when the consumer is
-        registered. The real Enigma registration read is still open (N2). This
-        dummy answers without contact details and fails closed on the same
-        Enigma faults as ``check``. ``registered`` is that answer. It is not
-        an email or a mobile number.
+        registered. Decision 15: this check returns whether the consumer is
+        registered. It does not return email or mobile. It fails closed on the
+        same Enigma faults as ``check``.
         """
         if not organisation_id or not person_id:
             raise ServicingError(

@@ -48,6 +48,29 @@ class CollectionCampaigns:
         self.accounts: dict[tuple[str, str], RegisteredAccount] = {}
         self.applications: dict[tuple[str, str, str], Application] = {}
 
+    def list_campaigns(self, organisation_id: str, actor_id: str) -> tuple:
+        """Stored campaigns for one organisation. Does not apply overlap, notice, or rate rules."""
+        authorise(self.access, organisation_id=organisation_id, actor_id=actor_id)
+        rows = [
+            campaign
+            for campaign in self.campaigns.values()
+            if campaign.organisation_id == organisation_id
+        ]
+        rows.sort(key=lambda campaign: (campaign.start_date.isoformat(), campaign.campaign_id))
+        return tuple(rows)
+
+    def get_campaign(self, organisation_id: str, campaign_id: str, actor_id: str):
+        """One stored campaign. Does not apply overlap, notice, or rate rules."""
+        authorise(self.access, organisation_id=organisation_id, actor_id=actor_id)
+        campaign = self.campaigns.get(campaign_id)
+        if campaign is None or campaign.organisation_id != organisation_id:
+            raise CollectionCampaignError(
+                "campaign-unknown",
+                "That collection campaign is not held for this organisation.",
+                status=404,
+            )
+        return campaign
+
     def register_account(
         self,
         *,
