@@ -130,6 +130,7 @@ def home(session) -> str:
 <h1>Staff session</h1>
 <p>Enigma holds identity and access. This screen keeps the opaque person id, organisation id, and role names Enigma already returned. It does not register a consumer and it does not collect an email address or a password.</p>
 <p>The route names are the ones the existing commands already check.</p>
+<p>Enigma is not connected on the test deployment. This form is the temporary staff bypass. Consumer registration and sign-on stay on <a href="/self/register">/self/register</a> and <a href="/self/sign-on">/self/sign-on</a>. A booking and a debit-order receipt use the in-process stubs at <a href="/exercise">/exercise</a>.</p>
 <ul>{role_list}</ul>
 <form method="post" action="/staff/session">
 <label>Person id <input name="person_id" value="{esc(session.person_id)}" autocomplete="off" required></label>

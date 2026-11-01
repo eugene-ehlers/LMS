@@ -1,0 +1,56 @@
+{
+  "family": "lms-test",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/lms-test-execution",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/lms-test-task",
+  "containerDefinitions": [
+    {
+      "name": "lms",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/lms-test:test",
+      "essential": true,
+      "portMappings": [
+        {"containerPort": 8765, "protocol": "tcp"}
+      ],
+      "environment": [
+        {"name": "STAFF_UI_HOST", "value": "0.0.0.0"},
+        {"name": "STAFF_UI_PORT", "value": "8765"},
+        {"name": "LMS_REQUIRE_DEPLOY_CONFIG", "value": "1"},
+        {"name": "LMS_DB_HOST", "value": "lms-test.REGION.rds.amazonaws.com"},
+        {"name": "LMS_DB_PORT", "value": "5432"},
+        {"name": "LMS_DB_NAME", "value": "lms"},
+        {"name": "LMS_DB_USER", "value": "lms_admin"},
+        {"name": "LMS_DB_SSL", "value": "require"},
+        {"name": "LMS_S3_BUCKET", "value": "lms-test-statements-ACCOUNT_ID"},
+        {"name": "AWS_REGION", "value": "us-east-1"},
+        {"name": "AWS_DEFAULT_REGION", "value": "us-east-1"}
+      ],
+      "secrets": [
+        {
+          "name": "LMS_DB_PASSWORD",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:lms-test-db-password"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/lms/test",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "lms"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health')\""
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 120
+      }
+    }
+  ]
+}

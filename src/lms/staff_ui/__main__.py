@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import os
 
-from lms.staff_ui.app import build_app, serve
+from lms.runtime import serve_lms
 
 
 def main() -> None:
     host = os.environ.get("STAFF_UI_HOST", "127.0.0.1")
     port = int(os.environ.get("STAFF_UI_PORT", "8765"))
-    serve(build_app(), host, port)
+    serve_lms(host, port)
 
 
 if __name__ == "__main__":
