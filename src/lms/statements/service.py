@@ -35,6 +35,7 @@ from lms.ledger.service import Ledger, _day_count, _prepayment, _repo_fall
 from lms.servicing.service import AgreementRecord, Servicing
 from lms.statements.errors import DocumentsError
 from lms.statements.models import AmountOwing, LoanSection, StoredQuote, StoredStatement, TransactionView
+from lms_config.brand import Brand, BrandStore
 from lms_config.calendar import add_business_days, value_date, value_instant
 from lms_config.compliance import ComplianceStore, ProviderCompliance
 from lms_config.exceptions import CalculationInputError
@@ -69,9 +70,15 @@ class RecognisedReceipt:
 
 
 class Documents:
-    def __init__(self, servicing: Servicing, compliance: ComplianceStore) -> None:
+    def __init__(
+        self,
+        servicing: Servicing,
+        compliance: ComplianceStore,
+        brands: BrandStore | None = None,
+    ) -> None:
         self.servicing = servicing
         self.compliance = compliance
+        self.brands = brands if brands is not None else BrandStore()
         self.statements: dict[tuple[str, str, date, date], StoredStatement] = {}
         self.quotes: dict[tuple[str, date, date], StoredQuote] = {}
 
@@ -109,6 +116,7 @@ class Documents:
         agreements = self._agreements(organisation_id, person_id)
         if not agreements:
             raise DocumentsError("no-loan", "This client has no disbursed loan at this organisation.")
+        brand = self._one_brand(organisation_id)
         by_day = self._receipts_by_day(receipts, agreements, period_start, period_end)
         self._require_vat_before_posting(agreements, period_start, period_end, vat_rate)
         for record in agreements:
@@ -134,6 +142,7 @@ class Documents:
             period_end=period_end,
             provider=provider,
             loans=sections,
+            brand=brand,
         )
         self.statements[key] = stored
         self.servicing.audit.append(
@@ -149,6 +158,40 @@ class Documents:
             },
         )
         return stored
+
+    def find_statements(
+        self,
+        organisation_id: str,
+        *,
+        loan_number: str | None = None,
+        id_number: str | None = None,
+    ) -> tuple[StoredStatement, ...]:
+        """Stored statements for one loan number or one frozen identity number.
+
+        LOCKED_DECISIONS §12. The figures are the ones copied at issue. This
+        does not rebuild a statement from the ledger. Supply one key. Both,
+        or neither, fails closed.
+        """
+        loan_key = (loan_number or "").strip()
+        identity_key = (id_number or "").strip()
+        if bool(loan_key) == bool(identity_key):
+            raise DocumentsError(
+                "search-key-unset",
+                "LOCKED_DECISIONS §12: locate a record by loan number or by identity number. "
+                "Supply one of them. The search does not guess.",
+            )
+        found: list[StoredStatement] = []
+        for statement in self.statements.values():
+            if statement.organisation_id != organisation_id:
+                continue
+            for section in statement.loans:
+                if loan_key and section.loan_number == loan_key:
+                    found.append(statement)
+                    break
+                if identity_key and section.frozen_id_number == identity_key:
+                    found.append(statement)
+                    break
+        return tuple(found)
 
     def enquire(
         self,
@@ -277,6 +320,18 @@ class Documents:
     def _mandate(self, organisation_id: str, person_id: str, action: str) -> None:
         # Locked decision 15. The servicing stub is the port servicing already uses.
         self.servicing.enigma.check(organisation_id, person_id, action)
+
+    def _one_brand(self, organisation_id: str) -> Brand | None:
+        rows = self.brands.for_organisation(organisation_id)
+        if len(rows) > 1:
+            raise DocumentsError(
+                "brand-ambiguous",
+                "LOCKED_DECISIONS §12: more than one brand row is stored for this organisation. "
+                "The statement does not pick a header or a footer, and it does not post.",
+            )
+        if not rows:
+            return None
+        return rows[0]
 
     def _provider(self, organisation_id: str) -> ProviderCompliance:
         try:
@@ -536,6 +591,7 @@ class Documents:
         instalment_cents, instalment_due = _instalment(account, period_end)
         return LoanSection(
             loan_id=account.loan_id,
+            loan_number=account.loan_number,
             instrument_kind=account.instrument_kind,
             parent_loan_id=account.parent_loan_id,
             frozen_full_name=account.frozen_full_name,
@@ -611,6 +667,7 @@ def _freeze(
     period_end: date,
     provider: ProviderCompliance,
     loans: tuple[LoanSection, ...],
+    brand: Brand | None = None,
 ) -> StoredStatement:
     payload = {
         "organisation_id": organisation_id,
@@ -639,7 +696,16 @@ def _freeze(
         ],
     }
     body = json.dumps(payload, sort_keys=True).encode()
-    stub = b"PDF-STUB\n" + body
+    if brand is None:
+        stub = b"PDF-STUB\n" + body
+        header = None
+        footer = None
+    else:
+        # Figures are the stored opening and closing. The header and footer
+        # are the brand row copied at this moment. Nothing here is recalculated.
+        stub = _paint(provider, loans, brand, period_start, period_end)
+        header = brand.display_name
+        footer = brand.statement_footer
     return StoredStatement(
         statement_id=str(uuid4()),
         organisation_id=organisation_id,
@@ -660,7 +726,34 @@ def _freeze(
         loans=loans,
         pdf_sha256=hashlib.sha256(stub).hexdigest(),
         pdf_stub=stub,
+        brand_display_name=header,
+        brand_statement_footer=footer,
     )
+
+
+def _paint(
+    provider: ProviderCompliance,
+    loans: tuple[LoanSection, ...],
+    brand: Brand,
+    period_start: date,
+    period_end: date,
+) -> bytes:
+    lines = [
+        "LMS-STATEMENT",
+        f"header:{brand.display_name}",
+        f"footer:{brand.statement_footer or ''}",
+        f"logo:{brand.logo_object_key or ''}",
+        f"legal_name:{provider.legal_name}",
+        f"ncr:{provider.ncr_registration_number}",
+        f"period:{period_start.isoformat()}/{period_end.isoformat()}",
+    ]
+    for section in loans:
+        lines.append(f"loan:{section.loan_number}")
+        for bucket in sorted(section.opening):
+            lines.append(f"opening:{section.loan_number}:{bucket}:{section.opening[bucket]}")
+        for bucket in sorted(section.closing):
+            lines.append(f"closing:{section.loan_number}:{bucket}:{section.closing[bucket]}")
+    return ("\n".join(lines) + "\n").encode()
 
 
 def _components(ledger: Ledger, account: LoanAccount, as_of: date) -> dict[str, int]:

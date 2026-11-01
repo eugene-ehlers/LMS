@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Protocol
 
 from lms.regulatory.audit import AuditLog
 from lms.staff.authority import (
@@ -20,6 +21,7 @@ from lms.staff.authority import (
     StaffActor,
     require_actor,
     require_role,
+    require_staff_role,
 )
 from lms.staff.campaigns import Campaign, CampaignStore, build_campaign, end_campaign
 from lms.staff.ceilings import (
@@ -39,6 +41,18 @@ from lms_config.calendar import value_date
 from lms_config.compliance import ComplianceStore, ProviderCompliance
 
 
+class StatementIndex(Protocol):
+    """Stored statements. The staff package does not import the statement module."""
+
+    def find_statements(
+        self,
+        organisation_id: str,
+        *,
+        loan_number: str | None = None,
+        id_number: str | None = None,
+    ) -> tuple: ...
+
+
 class StaffOffice:
     def __init__(
         self,
@@ -49,6 +63,7 @@ class StaffOffice:
         compliance: ComplianceStore | None = None,
         intakes: IntakeStore | None = None,
         audit: AuditLog | None = None,
+        statements: StatementIndex | None = None,
     ) -> None:
         self.campaigns = campaigns or CampaignStore()
         self.elections = elections or ElectionStore()
@@ -56,6 +71,45 @@ class StaffOffice:
         self.compliance = compliance or ComplianceStore()
         self.intakes = intakes or IntakeStore()
         self.audit = audit or AuditLog()
+        self.statements = statements
+
+    def search_statements(
+        self,
+        actor: StaffActor,
+        organisation_id: str,
+        *,
+        loan_number: str | None,
+        id_number: str | None,
+    ) -> tuple:
+        """Decision 12 and decision 27. Return the stored statement, not a new one.
+
+        A missing statement store fails closed. The role is one of the staff
+        roles already named for this layer. A separate read role is not invented.
+        """
+        require_staff_role(actor)
+        if actor.organisation_id != organisation_id:
+            raise StaffError(
+                "mandate-denied",
+                "The Enigma organisation does not match the statement search.",
+                status=403,
+            )
+        if self.statements is None:
+            raise StaffError(
+                "statement-index-missing",
+                "LOCKED_DECISIONS §12: no statement store is configured. The search fails closed.",
+                status=422,
+            )
+        try:
+            return self.statements.find_statements(
+                organisation_id,
+                loan_number=loan_number,
+                id_number=id_number,
+            )
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            if not code or isinstance(exc, StaffError):
+                raise
+            raise StaffError(str(code), str(exc)) from exc
 
     def create_campaign(
         self,

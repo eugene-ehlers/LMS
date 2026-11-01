@@ -50,6 +50,8 @@ _FROZEN_ACCOUNT_FIELDS = frozenset(
         "quoted_disbursement",
         "contractual_end",
         "cash_advanced_cents",
+        "loan_number",
+        "application_number",
     }
 )
 
@@ -152,6 +154,8 @@ class LoanAccount:
     quoted_disbursement: date | None
     contractual_end: date
     cash_advanced_cents: int
+    loan_number: str = ""
+    application_number: str = ""
     capitalised_initiation_cents: int = 0
     slices: list[Slice] = field(default_factory=list)
     charges: list[DueCharge] = field(default_factory=list)

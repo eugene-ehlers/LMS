@@ -11,6 +11,7 @@ class LedgerStore:
         self._accounts: dict[tuple[str, str], LoanAccount] = {}
         self._transactions: list[Transaction] = []
         self._sequence: dict[str, int] = {}
+        self._loan_serial: dict[str, int] = {}
         self._statements: set[tuple[str, str, object, object]] = set()
 
     def add(self, account: LoanAccount) -> None:
@@ -36,6 +37,20 @@ class LedgerStore:
         sequence = self._sequence.get(organisation_id, 0) + 1
         self._sequence[organisation_id] = sequence
         return sequence
+
+    def next_loan_number(self, organisation_id: str) -> str:
+        """Next sequential loan number for one organisation. LOCKED_DECISIONS §25.
+
+        Eighteen digits, zero-padded, so the sequence does not run out. The
+        number is assigned only when a parent loan is stored. A lay-by child
+        copies the parent's number and does not take the next one. A refused
+        booking does not call this, so a failed command does not skip a number.
+        The first four letters of the company name and the month and year may
+        be included; they are not required, and this sequence does not add them.
+        """
+        last = self._loan_serial.get(organisation_id, 0) + 1
+        self._loan_serial[organisation_id] = last
+        return f"{last:018d}"
 
     def append(self, transaction: Transaction) -> None:
         if any(existing.transaction_id == transaction.transaction_id for existing in self._transactions):

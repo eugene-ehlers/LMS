@@ -116,6 +116,16 @@ The write calls `lms_config.compliance.ComplianceStore.put`. A blank required fi
 
 The response copies the qualifying campaign's base, discount, net, and fall-away as they stood at this call. No match stores those campaign fields as null and still stores the supplied rate and premium. More than one match stores nothing.
 
+## Statement search
+
+`GET /v1/staff/organisations/{organisation_id}/statements`
+
+Decision 12. Staff locate a stored statement by loan number or by the frozen identity number. Send one of `loan_number` or `id_number` in the body, or `X-Loan-Number` or `X-Id-Number`. Both, or neither, fails closed. The response is the statement copied at issue: opening and closing cents are not recalculated.
+
+The call needs one of the staff write roles already listed above. Decision 27 says staff with the appropriate role can give account information to a caller. Decision 23 does not name a separate statement-read role, so this route does not invent one.
+
+No statement store on the staff office fails closed. The staff package does not generate a statement.
+
 ## Audit
 
 `GET /v1/staff/organisations/{organisation_id}/audit`

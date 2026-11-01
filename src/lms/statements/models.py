@@ -34,6 +34,7 @@ class LoanSection:
     """
 
     loan_id: str
+    loan_number: str
     instrument_kind: str
     parent_loan_id: str | None
     frozen_full_name: str
@@ -93,6 +94,9 @@ class StoredStatement:
     loans: tuple[LoanSection, ...]
     pdf_sha256: str
     pdf_stub: bytes
+    # Copied from lms.cfg_brand at issue. A later brand edit does not rewrite them.
+    brand_display_name: str | None = None
+    brand_statement_footer: str | None = None
 
 
 @dataclass(frozen=True)

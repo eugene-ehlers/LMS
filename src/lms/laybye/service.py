@@ -125,6 +125,7 @@ def prepare_pair(
     initiation_fee_cents: int = 0,
     contractual_end: date | None = None,
     opening_hold_cents: int = 0,
+    application_number: str | None = None,
 ) -> tuple[LoanAccount, LoanAccount]:
     """Parent without a loan-out, plus one Laybye child. LOCKED_DECISIONS §4."""
     if opening_hold_cents < 0:
@@ -144,6 +145,7 @@ def prepare_pair(
         quoted_disbursement=quoted_disbursement,
         initiation_fee_cents=initiation_fee_cents,
         contractual_end=contractual_end,
+        application_number=application_number,
     )
     child = ledger.open_laybye(
         organisation_id=organisation_id,
