@@ -17,7 +17,7 @@ from lms.staff.authority import (
 )
 from lms.staff_ui.app import Session, build_app
 from lms.statements.models import LoanSection, StoredQuote, StoredStatement
-from lms_config.brand import Brand
+from lms_config.brand import BrandDirectory
 from lms_config.calendar import value_date
 from lms_config.locked import OrganisationSettings
 from lms_config.templates import micro_short_term
@@ -99,18 +99,25 @@ def outstanding(app, loan_id: str) -> int:
     return sum(app.servicing.ledger.bucket_balance(loan, bucket) for bucket in BUCKETS)
 
 
-def stored_statement() -> StoredStatement:
+def stored_statement(
+    loan_id: str = "loan-88",
+    *,
+    organisation_id: str = ORG,
+    statement_id: str = "stmt-1",
+    closing_principal: int = 12_345,
+    frozen_id_number: str = "8001015800085",
+) -> StoredStatement:
     loan = LoanSection(
-        loan_id="loan-88",
+        loan_id=loan_id,
         instrument_kind="credit",
         parent_loan_id=None,
         frozen_full_name="Ada Borrower",
-        frozen_id_number="8001015800085",
+        frozen_id_number=frozen_id_number,
         frozen_service_address="1 Main Road",
         payment_frequency="monthly",
         principal_debt_cents=100_000,
         opening={"principal": 100_000},
-        closing={"principal": 12_345},
+        closing={"principal": closing_principal},
         opening_source="no-previous-statement",
         base_rate=Decimal("0.05"),
         discount_rate=Decimal("0"),
@@ -135,8 +142,8 @@ def stored_statement() -> StoredStatement:
         transactions=(),
     )
     return StoredStatement(
-        statement_id="stmt-1",
-        organisation_id=ORG,
+        statement_id=statement_id,
+        organisation_id=organisation_id,
         person_id=BORROWER,
         period_start=date(2026, 6, 1),
         period_end=date(2026, 6, 30),
@@ -345,17 +352,46 @@ def test_collections_screen_shows_breach_and_default_and_allocates_before_write_
 def test_staff_statement_screen_paints_stored_figures_for_loan_or_id():
     app = build_app()
     held = session()
-    statement, _quote = keep_stored(app)
+    record = book(app)
+    assert record.loan_number == "1"
+    assert isinstance(record.cash_advanced_cents, int)
+    assert record.booking_value_date == date(2026, 3, 1)
+    statement = stored_statement(record.ledger_loan_id)
+    app.documents.statements[(ORG, BORROWER, statement.period_start, statement.period_end)] = statement
+    other = stored_statement(
+        "loan-other",
+        organisation_id="org-other",
+        statement_id="stmt-other",
+        closing_principal=99_999,
+    )
+    app.documents.statements[("org-other", BORROWER, other.period_start, other.period_end)] = other
+    app.documents.issue_statement = _refuse_issue
     before = len(app.documents.statements)
-    by_id = app.handle(held, "POST", "/staff/statements", {"loan_or_id": "8001015800085"})
-    by_loan = app.handle(held, "POST", "/staff/statements", {"loan_or_id": "loan-88"})
+    by_id = app.handle(held, "POST", "/staff/statements", {"loan_or_id": record.frozen_id_number})
+    by_loan = app.handle(held, "POST", "/staff/statements", {"loan_or_id": record.loan_number})
+    by_ledger = app.handle(held, "POST", "/staff/statements", {"loan_or_id": record.ledger_loan_id})
     missed = app.handle(held, "POST", "/staff/statements", {"loan_or_id": "missing"})
     for page in (by_id, by_loan):
+        assert page.status == 200
         assert "12345" in page.body
-        assert "stmt-1" in page.body
         assert statement.statement_id in page.body
+        assert "Loan number 1" in page.body
+        assert record.ledger_loan_id not in page.body
+        assert "99999" not in page.body
+    assert "No stored statement matches" in by_ledger.body
+    assert "12345" not in by_ledger.body
     assert "No stored statement matches" in missed.body
     assert len(app.documents.statements) == before
+    consumer = session()
+    consumer.person_id = BORROWER
+    shown = app.handle(consumer, "GET", "/self/statement")
+    assert "12345" in shown.body
+    assert "Loan number 1" in shown.body
+    record.loan_number = ""
+    closed = app.handle(held, "POST", "/staff/statements", {"loan_or_id": record.frozen_id_number})
+    assert closed.status == 422
+    assert "loan-number-missing" in closed.body
+    assert "12345" not in closed.body
 
 
 def test_registration_and_sign_on_direct_the_consumer_to_enigma():
@@ -397,56 +433,164 @@ def test_self_service_paints_the_stored_statement_and_quote():
     assert "12345" not in hidden.body
 
 
-def test_one_brand_change_updates_every_screen():
-    app = build_app()
-    held = session()
-    keep_stored(app)
-    held.person_id = BORROWER
-    app.brand.put(Brand(
-        organisation_id=ORG,
-        brand_code="primary",
-        display_name="Cape",
-        logo_object_key="logo-a",
-        statement_footer="Footer A",
-    ))
-    first_pages = (
-        app.handle(held, "GET", "/staff/"),
-        app.handle(held, "GET", "/self/register"),
-        app.handle(held, "GET", "/self/statement"),
+BRAND_URL = "postgresql://lms_screen:lms_screen@127.0.0.1:5432/postgres"
+BRAND_ORG = "00000000-0000-4000-8000-0000000000b1"
+BRAND_OTHER = "00000000-0000-4000-8000-0000000000b2"
+
+
+def _brand_database() -> str:
+    import shutil
+    import subprocess
+
+    import pytest
+
+    binary = shutil.which("psql")
+    if binary is None:
+        pytest.skip("psql is not installed")
+    probe = subprocess.run(
+        ["sudo", "-u", "postgres", binary, "-d", "postgres", "-c", "SELECT 1"],
+        capture_output=True,
+        text=True,
     )
-    for page in first_pages:
-        assert 'data-logo-key="logo-a"' in page.body
-        assert "Footer A" in page.body
-    app.brand.put(Brand(
-        organisation_id=ORG,
-        brand_code="primary",
-        display_name="Cape",
-        logo_object_key="logo-b",
-        statement_footer="Footer B",
-    ))
-    second_pages = (
-        app.handle(held, "GET", "/staff/campaigns"),
-        app.handle(held, "GET", "/self/sign-on"),
-        app.handle(held, "GET", "/self/settlement-quote"),
+    if probe.returncode != 0:
+        pytest.skip(probe.stderr.strip() or "postgres is not running")
+    present = subprocess.run(
+        ["sudo", "-u", "postgres", binary, "-d", "postgres", "-tAc", "SELECT to_regclass('lms.cfg_brand')"],
+        capture_output=True,
+        text=True,
     )
-    for page in second_pages:
-        assert 'data-logo-key="logo-b"' in page.body
-        assert "Footer B" in page.body
-        assert "logo-a" not in page.body
-        assert "Footer A" not in page.body
-    app.brand.put(Brand(
-        organisation_id=ORG,
-        brand_code="second",
-        display_name="Other",
-        logo_object_key="logo-c",
-        statement_footer="Footer C",
-    ))
-    blocked = app.handle(held, "GET", "/staff/elections")
-    assert 'data-brand="many"' in blocked.body
-    assert "logo-b" not in blocked.body
-    assert "logo-c" not in blocked.body
-    assert "Footer B" not in blocked.body
-    assert "Footer C" not in blocked.body
+    if present.returncode != 0:
+        raise AssertionError(present.stderr)
+    if present.stdout.strip() != "lms.cfg_brand":
+        apply = subprocess.run(
+            ["sudo", "-u", "postgres", binary, "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-f", str(ROOT / "db/migrations/0001_lms_owned.sql")],
+            capture_output=True,
+            text=True,
+        )
+        if apply.returncode != 0:
+            raise AssertionError(apply.stderr)
+    role = """
+    DO $$ BEGIN
+      CREATE ROLE lms_screen LOGIN PASSWORD 'lms_screen' IN ROLE lms_app;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+    ALTER ROLE lms_screen LOGIN PASSWORD 'lms_screen';
+    GRANT lms_app TO lms_screen;
+    """
+    granted = subprocess.run(
+        ["sudo", "-u", "postgres", binary, "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        input=role,
+        capture_output=True,
+        text=True,
+    )
+    if granted.returncode != 0:
+        raise AssertionError(granted.stderr)
+    return BRAND_URL
+
+
+def _brand_sql(sql: str) -> None:
+    import os
+    import subprocess
+
+    env = os.environ.copy()
+    env["PGPASSWORD"] = "lms_screen"
+    completed = subprocess.run(
+        ["psql", "-q", "-h", "127.0.0.1", "-U", "lms_screen", "-d", "postgres", "-v", "ON_ERROR_STOP=1"],
+        input=sql,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr)
+
+
+def _clear_brand(organisation_id: str) -> None:
+    _brand_sql(
+        "SELECT set_config('lms.organisation_id', '" + organisation_id + "', false);\n"
+        "DELETE FROM lms.cfg_brand WHERE organisation_id = '" + organisation_id + "'::uuid;\n"
+    )
+
+
+def test_one_brand_change_updates_every_screen(monkeypatch):
+    monkeypatch.setenv("LMS_DATABASE_URL", _brand_database())
+    for organisation_id in (BRAND_ORG, BRAND_OTHER):
+        _clear_brand(organisation_id)
+    try:
+        app = build_app()
+        held = session()
+        held.organisation_id = BRAND_ORG
+        held.person_id = BORROWER
+        empty = app.handle(held, "GET", "/staff/")
+        assert 'data-brand="none"' in empty.body
+        assert 'data-footer="empty"' in empty.body
+        assert "data-logo-key=" not in empty.body
+        _brand_sql(
+            "SELECT set_config('lms.organisation_id', '" + BRAND_ORG + "', false);\n"
+            "INSERT INTO lms.cfg_brand (organisation_id, brand_code, display_name, logo_object_key, statement_footer)\n"
+            "VALUES ('" + BRAND_ORG + "', 'primary', 'Cape Display Name', 'logo-a', 'Footer A');\n"
+        )
+        first_pages = (
+            app.handle(held, "GET", "/staff/"),
+            app.handle(held, "GET", "/self/register"),
+            app.handle(held, "GET", "/self/statement"),
+        )
+        for page in first_pages:
+            assert 'data-logo-key="logo-a"' in page.body
+            assert "Footer A" in page.body
+            assert "Cape Display Name" not in page.body
+        _brand_sql(
+            "SELECT set_config('lms.organisation_id', '" + BRAND_ORG + "', false);\n"
+            "UPDATE lms.cfg_brand SET logo_object_key = 'logo-b', statement_footer = 'Footer B'\n"
+            "WHERE organisation_id = '" + BRAND_ORG + "'::uuid AND brand_code = 'primary';\n"
+        )
+        second_pages = (
+            app.handle(held, "GET", "/staff/campaigns"),
+            app.handle(held, "GET", "/self/sign-on"),
+            app.handle(held, "GET", "/self/settlement-quote"),
+        )
+        for page in second_pages:
+            assert 'data-logo-key="logo-b"' in page.body
+            assert "Footer B" in page.body
+            assert "logo-a" not in page.body
+            assert "Footer A" not in page.body
+        _brand_sql(
+            "SELECT set_config('lms.organisation_id', '" + BRAND_ORG + "', false);\n"
+            "INSERT INTO lms.cfg_brand (organisation_id, brand_code, display_name, logo_object_key, statement_footer)\n"
+            "VALUES ('" + BRAND_ORG + "', 'second', 'Other Display Name', 'logo-c', 'Footer C');\n"
+        )
+        blocked = app.handle(held, "GET", "/staff/elections")
+        assert 'data-brand="many"' in blocked.body
+        assert 'data-footer="blocked"' in blocked.body
+        assert "logo-b" not in blocked.body
+        assert "logo-c" not in blocked.body
+        assert "Footer B" not in blocked.body
+        assert "Footer C" not in blocked.body
+        assert "Other Display Name" not in blocked.body
+        other = session()
+        other.organisation_id = BRAND_OTHER
+        quiet = app.handle(other, "GET", "/staff/")
+        assert 'data-brand="none"' in quiet.body
+        assert 'data-footer="empty"' in quiet.body
+        assert "logo-c" not in quiet.body
+        plain = session()
+        plain_page = app.handle(plain, "GET", "/staff/")
+        assert 'data-brand="none"' in plain_page.body
+        assert "logo-b" not in plain_page.body
+        unread = build_app()
+        unread.brand = BrandDirectory("postgresql://lms_screen:lms_screen@127.0.0.1:1/postgres")
+        unread_held = session()
+        unread_held.organisation_id = BRAND_ORG
+        unread_page = unread.handle(unread_held, "GET", "/staff/")
+        assert 'data-brand="unread"' in unread_page.body
+        assert 'data-footer="unread"' in unread_page.body
+        assert "could not be read" in unread_page.body
+        assert "data-logo-key=" not in unread_page.body
+        assert "Footer B" not in unread_page.body
+        assert "Footer C" not in unread_page.body
+    finally:
+        for organisation_id in (BRAND_ORG, BRAND_OTHER):
+            _clear_brand(organisation_id)
 
 
 def _nonce(body: str) -> str:

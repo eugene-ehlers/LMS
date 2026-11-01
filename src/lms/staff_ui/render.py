@@ -593,6 +593,8 @@ def _brand_header(brand, who: str) -> str:
     note = ""
     if status == "many":
         note = "<p>More than one brand row is stored. No logo or footer is chosen.</p>"
+    elif status == "unread":
+        note = "<p>The brand row could not be read. No logo or footer is shown.</p>"
     return (
         f'<header data-brand="{esc(status)}">'
         f"<p>LMS · {esc(who)}</p>"
@@ -608,6 +610,8 @@ def _brand_footer(brand) -> str:
         return f'<footer data-footer="set">{esc(footer)}</footer>'
     if status == "many":
         return '<footer data-footer="blocked"></footer>'
+    if status == "unread":
+        return '<footer data-footer="unread"></footer>'
     return '<footer data-footer="empty"></footer>'
 
 
@@ -709,7 +713,7 @@ def write_off_form(agreement_id: str) -> str:
 def statement_lookup_form() -> str:
     return f"""
 <h1>Statements</h1>
-<p class="note">Locate a stored statement by the loan id on that statement or by the frozen ID number. The figures below are the stored figures. This screen does not issue a statement.</p>
+<p class="note">Locate a stored statement by the loan number or by the frozen ID number. The figures below are the stored figures. This screen does not issue a statement.</p>
 <form method="post" action="/staff/statements">
 <label>Loan number or ID number <input name="loan_or_id" required></label>
 <button type="submit">Show stored statement</button>
@@ -726,7 +730,7 @@ def stored_statements(rows: list, *, empty: str) -> str:
         for loan in row.get("loans") or []:
             loans.append(
                 "<section>"
-                f"<h3>Loan {esc(loan.get('loan_id'))}</h3>"
+                f"<h3>Loan number {esc(loan.get('loan_number') or '')}</h3>"
                 f"<p>ID number {esc(loan.get('frozen_id_number'))}</p>"
                 f"<p>Principal debt cents: {esc(loan.get('principal_debt_cents'))}</p>"
                 f"<p>Payments received cents: {esc(loan.get('payments_received_cents'))}</p>"

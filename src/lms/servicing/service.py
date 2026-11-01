@@ -64,6 +64,7 @@ class AgreementRecord:
     ledger_loan_id: str | None = None
     laybye_loan_id: str | None = None
     disbursement_value_date: date | None = None
+    loan_number: str = ""
 
 
 @dataclass
@@ -106,6 +107,7 @@ class Servicing:
     audit: AuditLog = field(default_factory=AuditLog)
     collection_campaigns: CollectionCampaigns | None = None
     _idempotency: dict[tuple[str, str, str], tuple[str, str]] = field(default_factory=dict)
+    _loan_sequence: dict[str, int] = field(default_factory=dict)
 
     def book(
         self,
@@ -156,6 +158,7 @@ class Servicing:
             agreement_id=None,
         )
         disclosure = _annual_equivalent(product, resolved)
+        loan_number = self._next_loan_number(organisation_id)
         record = AgreementRecord(
             agreement_id=str(uuid4()),
             organisation_id=organisation_id,
@@ -175,8 +178,10 @@ class Servicing:
             frozen_id_number=identity.id_number,
             frozen_service_address=identity.service_address,
             annual_equivalent_rate=disclosure,
+            loan_number=loan_number,
         )
         self.agreements[record.agreement_id] = record
+        self._loan_sequence[organisation_id] = int(loan_number) + 1
         self._remember("book", organisation_id, idempotency_key, fingerprint, record.agreement_id)
         self._audit(
             organisation_id=organisation_id,
@@ -185,7 +190,7 @@ class Servicing:
             category="operational",
             agreement_id=record.agreement_id,
             enigma_person_id=person_id,
-            payload={"status": record.status},
+            payload={"status": record.status, "loan_number": record.loan_number},
         )
         return record
 
@@ -908,6 +913,23 @@ class Servicing:
             if record.ledger_loan_id == loan_id:
                 return record.frozen_full_name
         return ""
+
+    def _next_loan_number(self, organisation_id: str) -> str:
+        """The next loan number for this organisation, without taking it.
+
+        Decision 25: the LMS generates a sequential number and does not skip
+        one. OPEN_ISSUES P2 leaves the character pattern unset, so this is
+        the full decimal of a positive integer and it has no fixed width.
+        The counter moves only after ``book`` has stored the agreement.
+        A rejected booking, including an Enigma timeout, does not take one.
+        """
+        current = self._loan_sequence.get(organisation_id, 1)
+        if type(current) is not int or current < 1:
+            raise ServicingError(
+                "loan-number-missing",
+                "The next loan number is missing, so the agreement is not stored.",
+            )
+        return str(current)
 
     def _replay(self, kind: str, organisation_id: str, key: str, fingerprint: str) -> str | None:
         if not key:
