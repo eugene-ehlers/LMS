@@ -944,9 +944,20 @@ def _policy(account: LoanAccount, service_fee_monthly_cents: int) -> Policy:
 
 
 def _payment_events(ledger: Ledger, account: LoanAccount) -> tuple[Payment, ...]:
+    """Receipts still allocated on this loan.
+
+    A reversal restores the pre-receipt balance (LOCKED_DECISIONS §1). The
+    quote must not keep treating that receipt as money received.
+    """
+    rows = tuple(ledger.store.transactions_for(account.organisation_id, account.loan_id))
+    reversed_ids = {
+        item.reverses_transaction_id for item in rows if item.reverses_transaction_id is not None
+    }
     events: list[Payment] = []
-    for transaction in ledger.store.transactions_for(account.organisation_id, account.loan_id):
+    for transaction in rows:
         if transaction.kind != "payment" or not transaction.amount_cents:
+            continue
+        if transaction.transaction_id in reversed_ids:
             continue
         events.append(
             Payment(
