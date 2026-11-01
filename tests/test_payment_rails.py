@@ -83,6 +83,7 @@ def _book_and_disburse(servicing: Servicing, *, person_id: str = PERSON, key: st
             "frequency": "monthly",
             "schedule": [[DUE.isoformat(), CASH_CENTS]],
             "initiation_fee_cents": 0,
+            "application_number": "APP-00000001",
             "settings": dict(ELECTIONS),
         },
         {"Idempotency-Key": key},

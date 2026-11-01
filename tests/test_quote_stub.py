@@ -53,6 +53,9 @@ def test_quote_approval_books_through_the_existing_method() -> None:
     assert first.recognised_at == value_instant(date(2026, 3, 1))
     assert record.agreement_id in svc.agreements
     assert record.application_number == first.application_number
+    assert record.credit_life_premium_cents == first.credit_life_premium_cents
+    assert first.book_payload()["application_number"] == first.application_number
+    assert first.book_payload()["credit_life_premium_cents"] == first.credit_life_premium_cents
     assert record.rate_supplied_by_decision_engine is True
     assert record.short_term_rate_cap == SHORT_TERM_FIRST_MONTHLY
     assert record.product.instruments[0].monthly_rate == first.contractual_rate

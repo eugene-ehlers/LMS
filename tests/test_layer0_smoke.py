@@ -171,6 +171,7 @@ def _body(**overrides) -> dict:
         "frequency": "monthly",
         "schedule": [[DUE.isoformat(), CASH_CENTS]],
         "initiation_fee_cents": 0,
+        "application_number": "APP-00000001",
         "settings": settings,
     }
     payload.update(overrides)
@@ -503,6 +504,7 @@ def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
             schedule=((DUE, CASH_CENTS),),
             initiation_fee_cents=0,
             idempotency_key="no-day-count",
+            application_number="APP-00000001",
         )
     assert caught.value.code == "election-unset"
     assert svc.agreements == {}
@@ -530,6 +532,7 @@ def test_missing_election_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
             schedule=((DUE, CASH_CENTS),),
             initiation_fee_cents=0,
             idempotency_key="no-campaign",
+            application_number="APP-00000001",
         )
     assert caught.value.code == "election-unset"
     assert "base_rate" in str(caught.value)

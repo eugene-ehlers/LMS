@@ -236,6 +236,7 @@ def test_collections_default_cure_clears_the_flag_and_contractual_breach_does_no
         schedule=((date(2026, 6, 15), 60_000), (date(2026, 7, 15), 40_000)),
         initiation_fee_cents=0,
         idempotency_key="book-clip",
+        application_number="APP-00000001",
     )
     record = servicing.disburse(record.agreement_id, recognised_at=at(date(2026, 3, 1), 10))
     collections = Collections(servicing)
@@ -292,6 +293,7 @@ def test_collections_default_cure_clears_the_flag_and_contractual_breach_does_no
         schedule=((date(2026, 6, 15), 50_000),),
         initiation_fee_cents=0,
         idempotency_key="book-breach",
+        application_number="APP-00000002",
     )
     breach = breach_servicing.disburse(breach.agreement_id, recognised_at=at(date(2026, 3, 1), 10))
     breach_collections = Collections(breach_servicing)

@@ -191,6 +191,7 @@ def _book(servicing: Servicing, person: str, when: date, cash: int, frequency: s
         initiation_fee_cents=0,
         quoted_disbursement=when,
         idempotency_key=key,
+        application_number="APP-00000001",
     )
 
 
@@ -324,6 +325,7 @@ def _fail_closed(smoke: Smoke, servicing: Servicing, collections: Collections) -
             initiation_fee_cents=0,
             quoted_disbursement=date(2026, 4, 1),
             idempotency_key="book-unset",
+            application_number="APP-00000001",
         )
         smoke.fail("booking with every election unset succeeded")
     except Exception as exc:
@@ -347,6 +349,7 @@ def _fail_closed(smoke: Smoke, servicing: Servicing, collections: Collections) -
             initiation_fee_cents=0,
             quoted_disbursement=date(2026, 4, 1),
             idempotency_key="book-trigger-unset",
+            application_number="APP-00000001",
         )
         smoke.fail("booking without an in-duplum trigger succeeded")
     except Exception as exc:
@@ -366,6 +369,7 @@ def _fail_closed(smoke: Smoke, servicing: Servicing, collections: Collections) -
         initiation_fee_cents=0,
         quoted_disbursement=date(2026, 4, 1),
         idempotency_key="book-residual-unset",
+        application_number="APP-00000001",
     )
     smoke.say(
         f"book with residual omitted: status {filled.status}, "

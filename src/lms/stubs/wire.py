@@ -8,15 +8,9 @@ from lms.stubs.decision_quote import QuoteApproval
 
 
 def book_quoted(servicing: Servicing, approval: QuoteApproval) -> AgreementRecord:
-    """Pass the approval through ``Servicing.book`` and keep the application number.
+    """Pass the rate, the premium, and the application number into ``Servicing.book``."""
 
-    ``book`` has no application-number argument. The agreement record already
-    has the field, so the wire writes it after the existing call.
-    """
-
-    record = servicing.book(**approval.book_payload())
-    record.application_number = approval.application_number
-    return record
+    return servicing.book(**approval.book_payload())
 
 
 def apply_debit_receipts(

@@ -75,6 +75,7 @@ class AgreementRecord:
     settled_from_agreement_id: str | None = None
     campaign_fall_away_choice: str | None = None
     campaign_fall_away_trigger: str | None = None
+    credit_life_premium_cents: int = 0
 
 
 @dataclass
@@ -138,8 +139,16 @@ class Servicing:
         repos: tuple[RepoRate, ...] = (),
         rate_supplied_by_decision_engine: bool = False,
         short_term_rate_cap: Decimal | None = None,
+        application_number: str | None = None,
+        credit_life_premium_cents: int | None = None,
     ) -> AgreementRecord:
-        """POST /v1/agreements. Freeze elections. Do not post to the ledger."""
+        """POST /v1/agreements. Freeze elections. Do not post to the ledger.
+
+        The decision engine supplies the application number and the credit-life
+        premium. A missing number is not stored. A missing premium is zero.
+        """
+        stored_application_number = _require_application_number(application_number)
+        stored_premium_cents = _credit_life_premium_cents(credit_life_premium_cents)
         fingerprint = _fingerprint(
             {
                 "organisation_id": organisation_id,
@@ -153,6 +162,8 @@ class Servicing:
                 "classification": product.classification,
                 "rate_supplied_by_decision_engine": rate_supplied_by_decision_engine,
                 "short_term_rate_cap": None if short_term_rate_cap is None else str(short_term_rate_cap),
+                "application_number": stored_application_number,
+                "credit_life_premium_cents": stored_premium_cents,
             }
         )
         replay = self._replay("book", organisation_id, idempotency_key, fingerprint)
@@ -197,6 +208,8 @@ class Servicing:
             annual_equivalent_rate=disclosure,
             rate_supplied_by_decision_engine=rate_supplied_by_decision_engine,
             short_term_rate_cap=short_term_rate_cap,
+            application_number=stored_application_number,
+            credit_life_premium_cents=stored_premium_cents,
         )
         self.agreements[record.agreement_id] = record
         self._remember("book", organisation_id, idempotency_key, fingerprint, record.agreement_id)
@@ -226,6 +239,8 @@ class Servicing:
         quoted_disbursement: date | None = None,
         idempotency_key: str,
         repos: tuple[RepoRate, ...] = (),
+        application_number: str | None = None,
+        credit_life_premium_cents: int | None = None,
         pre_disbursement_cents: int | None = None,
         pre_disbursement_at: datetime | None = None,
         grant_at: datetime | None = None,
@@ -250,6 +265,8 @@ class Servicing:
             quoted_disbursement=quoted_disbursement,
             idempotency_key=idempotency_key,
             repos=repos,
+            application_number=application_number,
+            credit_life_premium_cents=credit_life_premium_cents,
         )
         if record.ledger_loan_id is None:
             try:
@@ -1025,6 +1042,32 @@ def _cleared(ledger: Ledger, account: LoanAccount) -> bool:
     if any(charge.remaining_cents for charge in account.charges):
         return False
     return ledger.bucket_balance(account, "principal") == 0
+
+
+def _require_application_number(value: object) -> str:
+    if not isinstance(value, str) or value.strip() == "":
+        raise ServicingError(
+            "application-number",
+            "The decision engine must supply an application number.",
+        )
+    return value
+
+
+def _credit_life_premium_cents(value: object) -> int:
+    """A missing premium is zero. A negative premium is not stored."""
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ServicingError(
+            "credit-life-premium",
+            "The credit-life premium must be integer cents.",
+        )
+    if value < 0:
+        raise ServicingError(
+            "credit-life-premium",
+            "The credit-life premium cannot be negative.",
+        )
+    return value
 
 
 def _fingerprint(payload: dict) -> str:

@@ -43,6 +43,8 @@ def _route(servicing: Servicing, method: str, path: str, body: dict, headers: di
             initiation_fee_cents=int(body.get("initiation_fee_cents") or 0),
             quoted_disbursement=_optional_date(body.get("quoted_disbursement")),
             idempotency_key=headers.get("Idempotency-Key", ""),
+            application_number=body.get("application_number"),
+            credit_life_premium_cents=body.get("credit_life_premium_cents"),
         )
         return _agreement(record)
     if method == "POST" and len(parts) == 4 and parts[:2] == ["v1", "agreements"] and parts[3] == "disbursements":
@@ -112,6 +114,8 @@ def _agreement(record) -> dict:
         "frozen_service_address": record.frozen_service_address,
         "leniency_days": record.resolved.leniency_days,
         "annual_equivalent_rate": str(record.annual_equivalent_rate) if record.annual_equivalent_rate is not None else None,
+        "application_number": record.application_number,
+        "credit_life_premium_cents": record.credit_life_premium_cents,
     }
 
 
