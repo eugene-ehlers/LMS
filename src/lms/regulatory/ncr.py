@@ -6,9 +6,9 @@ does not block booking, and this module does not book.
 
 The ledger classifications are ``short_term`` and ``unsecured``. The Day-1
 templates that publish those classifications are named ``micro_short_term``
-and ``unsecured_personal``. Decision 21 says "micro" and "unsecured
-personal" and does not name the classification strings. The mapping below
-is that template reading. It is recorded as gap RX24.
+and ``unsecured_personal``. Decision 21 names ``short_term`` and
+``unsecured`` as the loans that require the number, and ``zero_cost`` and
+``cpa_layby`` as Laybye/BNPL. Pure hosting is supplied by the caller.
 """
 
 from __future__ import annotations
@@ -64,9 +64,9 @@ def require_ncr_for_extract(
 
     When no classification in the extract requires the number, a missing
     number stays ``None``. When one does, a missing number fails closed
-    (decision 21). ``pure_hosting`` has no column on the compliance row
-    (gap RX23). ``None`` fails closed when a requiring classification is
-    present. It is not read as false.
+    (decision 21). ``pure_hosting`` is not a column. The caller supplies it.
+    ``None`` fails closed when a requiring classification is present. It is
+    not read as false.
     """
     if pure_hosting is None:
         if any(ncr_number_required(classification=code, pure_hosting=False) for code in classifications):

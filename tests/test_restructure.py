@@ -425,8 +425,8 @@ def test_unchanged_terms_and_frequency_only_change() -> None:
     status, response = post(service)
     assert status == 422
     assert response["reason"] == (
-        "payment frequency changed and the term count and instalment did not. "
-        "Whether that change is a restructure is not locked"
+        "a payment-frequency change that does not change the contractual term "
+        "or the contractual instalment is neither a restructure nor a collection campaign"
     )
     assert service.agreements[AGREEMENT].outstanding_balance_cents == 150_000
 

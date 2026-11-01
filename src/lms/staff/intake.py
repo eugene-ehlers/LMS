@@ -78,7 +78,7 @@ def record_intake(
         raise StaffError(
             "campaign-ambiguous",
             "More than one campaign covers this recognition date. "
-            "LOCKED_DECISIONS does not say which one qualifies, so the intake is not stored.",
+            "Decision 3: intake fails closed and stores nothing.",
         )
     campaign = matches[0] if matches else None
     return DecisionIntake(

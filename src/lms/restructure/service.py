@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 from lms.restructure.audit import AuditLog, AuditRecord
 from lms.restructure.elections import ElectionError, FrozenElections, freeze_elections
+from lms.staff.elections import ElectionStore
 from lms.restructure.engine import (
     DecisionEngine,
     EngineError,
@@ -22,6 +24,7 @@ from lms.restructure.engine import (
     SuppliedTerms,
 )
 from lms.restructure.models import Agreement
+from lms_config.exceptions import CalculationInputError
 from lms.restructure.money import (
     require_basis_points,
     require_cents,
@@ -105,8 +108,13 @@ class StatusView:
 
 
 class RestructureService:
-    def __init__(self, engine: DecisionEngine) -> None:
+    def __init__(
+        self,
+        engine: DecisionEngine,
+        election_store: ElectionStore | None = None,
+    ) -> None:
         self.engine = engine
+        self.election_store = election_store
         self.agreements: dict[str, Agreement] = {}
         self.audit = AuditLog()
 
@@ -181,6 +189,7 @@ class RestructureService:
         consent_present: bool = False,
         consent_date: object = None,
         elections: object = None,
+        product_id: object = None,
         identity: object = None,
         kind: object = "restructure",
         caller_term_fields: frozenset[str] = frozenset(),
@@ -211,6 +220,7 @@ class RestructureService:
                 consent_present=consent_present,
                 consent_date=consent_date,
                 elections=elections,
+                product_id=product_id,
                 identity=identity,
                 kind=kind,
                 caller_term_fields=caller_term_fields,
@@ -242,6 +252,31 @@ class RestructureService:
                     },
                 )
             return result
+
+    def last_ui_status(
+        self, organisation_id: str, agreement_id: str | None = None
+    ) -> StatusView:
+        """Last recorded restructure action. Decision 30.
+
+        An agreement id is the account query. With no agreement id, the last
+        recorded action for the organisation is returned.
+        """
+        if agreement_id:
+            return self.last_status(organisation_id, agreement_id)
+        if not str(organisation_id).strip():
+            return StatusView(
+                recorded=False,
+                http_status=422,
+                reason="agreement not found",
+            )
+        rows = self.audit.for_organisation(organisation_id)
+        if not rows:
+            return StatusView(
+                recorded=False,
+                http_status=200,
+                reason="no UI action has been recorded",
+            )
+        return _view(rows[-1])
 
     def last_status(self, organisation_id: str, agreement_id: str) -> StatusView:
         if not _matches(organisation_id, agreement_id):
@@ -281,6 +316,7 @@ class RestructureService:
         consent_present: bool,
         consent_date: object,
         elections: object,
+        product_id: object,
         identity: object,
         kind: object,
         caller_term_fields: frozenset[str],
@@ -304,9 +340,9 @@ class RestructureService:
         if agreement.status != _ACTIVE:
             raise Failed(f"agreement status {agreement.status} cannot be restructured")
         consent, consented_on = _consent(client_consent, consent_present, consent_date)
-        frozen = _elections(elections)
+        frozen = self._frozen_elections(elections, organisation_id, product_id)
         name, id_number, service_address = _identity(identity, agreement)
-        supplied = self._supplied(agreement)
+        supplied = self._supplied(agreement, recognised_at.date())
         _require_contractual_change(agreement, supplied)
         new_id = self._new_id()
         try:
@@ -419,7 +455,7 @@ class RestructureService:
             raise Failed(f"kind {kind.strip()} is not a restructure")
         raise Failed("kind is not a restructure")
 
-    def _supplied(self, agreement: Agreement) -> SuppliedTerms:
+    def _supplied(self, agreement: Agreement, on: date) -> SuppliedTerms:
         facts = RestructureFacts(
             organisation_id=agreement.organisation_id,
             agreement_id=agreement.agreement_id,
@@ -448,7 +484,30 @@ class RestructureService:
             raise Failed(reason, status)
         if not isinstance(supplied, SuppliedTerms):
             raise Failed("decision engine response is ambiguous", 503)
-        return _terms(supplied)
+        return _terms(supplied, on)
+
+    def _frozen_elections(
+        self, raw: object, organisation_id: str, product_id: object
+    ) -> FrozenElections:
+        """Use a supplied row. Otherwise read Decision 19 from the election store."""
+        if raw is None and self.election_store is not None:
+            product = product_id if isinstance(product_id, str) and product_id.strip() else None
+            try:
+                resolved = self.election_store.require(organisation_id, product)
+            except CalculationInputError as exc:
+                raise Failed(str(exc)) from exc
+            raw = {
+                "vat_on_rand_maxima": resolved.vat_on_rand_maxima,
+                "late_disbursement": resolved.late_disbursement,
+                "partial_prepayment": resolved.partial_prepayment,
+                "interest_on_deferred_initiation": resolved.interest_on_deferred_initiation,
+                "repo_rate_fall": resolved.repo_rate_fall,
+                "in_duplum_trigger": resolved.in_duplum_trigger,
+                "residual_write_off_threshold_cents": resolved.residual_write_off_threshold_cents,
+                "campaign_fall_away_choice": resolved.campaign_fall_away_choice,
+                "campaign_fall_away_trigger": resolved.campaign_fall_away_trigger,
+            }
+        return _elections(raw)
 
     def _new_id(self) -> str:
         new_id = str(uuid4())
@@ -551,7 +610,7 @@ def _identity(raw: object, agreement: Agreement) -> tuple[str, str, str]:
     return stored[0], stored[1], stored[2]
 
 
-def _terms(supplied: SuppliedTerms) -> SuppliedTerms:
+def _terms(supplied: SuppliedTerms, on: date) -> SuppliedTerms:
     try:
         rate = require_basis_points(
             supplied.contractual_periodic_rate_bps, "contractual_periodic_rate_bps"
@@ -565,6 +624,7 @@ def _terms(supplied: SuppliedTerms) -> SuppliedTerms:
         if message.startswith("application_number"):
             raise Failed("decision engine did not supply application_number") from exc
         raise Failed(f"decision engine did not supply a usable term: {message}") from exc
+    _within_prescribed_rate(rate, on)
     return SuppliedTerms(
         contractual_periodic_rate_bps=rate,
         term_count=term,
@@ -574,6 +634,16 @@ def _terms(supplied: SuppliedTerms) -> SuppliedTerms:
     )
 
 
+def _within_prescribed_rate(bps: int, on: date) -> None:
+    """Decision 13. The engine's higher prescribed monthly rate. No new maximum."""
+    from lms.calc.interest import micro_monthly_rate
+
+    rate = Decimal(bps) / Decimal(10_000)
+    cap = micro_monthly_rate(on)
+    if rate > cap:
+        raise Failed(f"Agreed monthly rate {rate} exceeds the prescribed {cap}.")
+
+
 def _require_contractual_change(agreement: Agreement, supplied: SuppliedTerms) -> None:
     term_changed = supplied.term_count != agreement.term_count
     instalment_changed = supplied.instalment_cents != agreement.contractual_instalment_cents
@@ -581,8 +651,8 @@ def _require_contractual_change(agreement: Agreement, supplied: SuppliedTerms) -
         return
     if supplied.payment_frequency != agreement.payment_frequency:
         raise Failed(
-            "payment frequency changed and the term count and instalment did not. "
-            "Whether that change is a restructure is not locked"
+            "a payment-frequency change that does not change the contractual term "
+            "or the contractual instalment is neither a restructure nor a collection campaign"
         )
     if supplied.contractual_periodic_rate_bps != agreement.contractual_periodic_rate_bps:
         raise Failed(

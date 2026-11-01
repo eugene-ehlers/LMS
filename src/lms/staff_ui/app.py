@@ -13,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 
+from lms.batch.errors import BatchError
+from lms.batch.service import BatchService
 from lms.collection_campaigns.api import dispatch as collection_dispatch
 from lms.collection_campaigns.models import FEE_TYPES, ROLE as COLLECTION_ROLE
 from lms.collection_campaigns.service import CollectionCampaigns
@@ -27,8 +29,7 @@ from lms.staff_ui import render
 JOHANNESBURG = ZoneInfo("Africa/Johannesburg")
 
 BATCH_GAP = (
-    "No daily-calculation batch route is registered. The audit extract was read "
-    "and it contains no batch run. Last successful run: none recorded. "
+    "No batch run is stored. Last successful run: none recorded. "
     "Last failed run: none recorded. Failure reasons: none recorded. "
     "This screen does not accrue, capitalise, or flag a default."
 )
@@ -63,10 +64,17 @@ class Session:
 
 
 class StaffApp:
-    def __init__(self, office: StaffOffice, campaigns: CollectionCampaigns, access: SessionAccess) -> None:
+    def __init__(
+        self,
+        office: StaffOffice,
+        campaigns: CollectionCampaigns,
+        access: SessionAccess,
+        batch: BatchService | None = None,
+    ) -> None:
         self.office = office
         self.campaigns = campaigns
         self.access = access
+        self.batch = batch
         self.sessions: dict[str, Session] = {}
 
     def handle(
@@ -445,26 +453,37 @@ class StaffApp:
         gated = self._collection_read_gate(session, "collection-list", "/staff/collection-campaigns")
         if gated is not None:
             return gated
-        rows = [
-            campaign
-            for campaign in self.campaigns.campaigns.values()
-            if campaign.organisation_id == session.organisation_id
-        ]
-        rows.sort(key=lambda campaign: (campaign.start_date.isoformat(), campaign.campaign_id))
-        return self._view(session, "Collection campaigns", render.collection_list(rows))
+        org = _segment(session.organisation_id)
+        if org is None:
+            return self._fail(
+                session, {}, action="collection-list", status=422, code="organisation-unset",
+                message="The Enigma organisation id is missing or contains a slash, so the list route cannot be addressed.",
+                return_to="/staff/collection-campaigns",
+            )
+        status, payload = self._collection(
+            session, "GET", f"/v1/organisations/{org}/collection-campaigns", {},
+        )
+        if status != 200:
+            return self._route_fail(session, {}, "collection-list", status, payload, "/staff/collection-campaigns")
+        return self._view(session, "Collection campaigns", render.collection_list(payload.get("campaigns") or []))
 
     def _collection_detail(self, session: Session, campaign_id: str) -> Page:
         gated = self._collection_read_gate(session, "collection-read", "/staff/collection-campaigns")
         if gated is not None:
             return gated
-        campaign = self._held(session, campaign_id)
-        if campaign is None:
+        org = _segment(session.organisation_id)
+        if org is None:
             return self._fail(
-                session, {}, action="collection-read", status=404, code="campaign-unknown",
-                message="That collection campaign is not held for this organisation. The route has no read method.",
+                session, {}, action="collection-read", status=422, code="organisation-unset",
+                message="The Enigma organisation id is missing or contains a slash, so the read route cannot be addressed.",
                 return_to="/staff/collection-campaigns",
             )
-        values = _collection_values(campaign)
+        status, payload = self._collection(
+            session, "GET", f"/v1/organisations/{org}/collection-campaigns/{campaign_id}", {},
+        )
+        if status != 200:
+            return self._route_fail(session, {}, "collection-read", status, payload, "/staff/collection-campaigns")
+        values = _collection_values(payload)
         inner = (
             render.collection_form(
                 f"/staff/collection-campaigns/{campaign_id}", values, heading="Edit collection campaign",
@@ -531,7 +550,7 @@ class StaffApp:
         if org is None:
             return self._fail(
                 session, {}, action="batch-status", status=422, code="organisation-unset",
-                message="The Enigma organisation id is missing or contains a slash, so the audit route cannot be addressed.",
+                message="The Enigma organisation id is missing or contains a slash, so the batch status cannot be addressed.",
                 return_to="/staff/batch",
             )
         status, payload = self._staff(
@@ -540,8 +559,16 @@ class StaffApp:
         )
         if status != 200:
             return self._route_fail(session, {}, "batch-status", status, payload, "/staff/batch")
-        succeeded, failed = _split_batch(payload.get("rows") or [])
-        return self._view(session, "Batch status", render.batch_status(succeeded, failed, gap=BATCH_GAP))
+        if self.batch is None:
+            return self._view(session, "Batch status", render.batch_status([], [], gap=BATCH_GAP))
+        try:
+            view = self.batch.status(session.organisation_id)
+        except BatchError as exc:
+            return self._fail(
+                session, {}, action="batch-status", status=exc.status_code, code="batch-status",
+                message=exc.reason, return_to="/staff/batch",
+            )
+        return self._view(session, "Batch status", render.batch_service_status(view))
 
     def _collection_read_gate(self, session: Session, action: str, return_to: str) -> Page | None:
         """The list and the edit form have no route to call.
@@ -707,11 +734,14 @@ class StaffApp:
 
 
 def build_app() -> StaffApp:
+    from lms.batch.store import BatchStore
+
     audit = AuditLog()
     office = StaffOffice(audit=audit)
     access = SessionAccess()
     campaigns = CollectionCampaigns(Ledger(), access, audit=audit)
-    return StaffApp(office, campaigns, access)
+    batch = BatchService(BatchStore(":memory:"), None)
+    return StaffApp(office, campaigns, access, batch)
 
 
 def make_server(app: StaffApp, host: str, port: int) -> ThreadingHTTPServer:
@@ -873,6 +903,18 @@ def _apply_body(form: dict) -> dict:
 
 
 def _collection_values(campaign) -> dict:
+    if isinstance(campaign, dict):
+        end = campaign.get("end_date") or ""
+        return {
+            "start_date": campaign.get("start_date") or "",
+            "end_date": end,
+            "rate_reduction": campaign.get("rate_reduction") or "",
+            "rate_scope": campaign.get("rate_scope") or "",
+            "notice_date": campaign.get("notice_date") or "",
+            "payment_holiday": bool(campaign.get("payment_holiday")),
+            "fee_reductions": dict(campaign.get("fee_reductions_cents") or {}),
+            "fee_scope": campaign.get("fee_scope") or "",
+        }
     return {
         "start_date": campaign.start_date.isoformat(),
         "end_date": "" if campaign.end_date is None else campaign.end_date.isoformat(),

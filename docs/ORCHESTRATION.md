@@ -99,9 +99,9 @@ Modules called (in order):
 
 If the batch does not finish, batch status raises an alert. A later recognition date does not start until that run is resolved by a finished run of the same recognition date, or the unfinished run is explicitly skipped.
 
-A batch that finishes with account failures has completed. Those failures stay on the batch record and in the audit log. Whether they block the next recognition date is not locked (docs/OPEN_ISSUES.md, J5). This flow does not block the next day for account failures alone.
+A batch that finishes with account failures has completed. Those failures stay on the batch record and in the audit log. Decision 30: those failures do not block the next recognition date. An unfinished run blocks a later date until that same date is finished or explicitly skipped.
 
-Not part of this flow: Servicing.accept_payment, collection-file generation, and statement generation. A receipt is allocated by section 1 or section 2 before this batch's default check. The check reads receipts already posted, including one recognised on the flag date (Decision 1). This batch does not take receipts of its own. The default check is not named as Collections.observe (docs/OPEN_ISSUES.md, J4).
+Not part of this flow: Servicing.accept_payment, collection-file generation, and statement generation. A receipt is allocated by section 1 or section 2 before this batch's default check. The check reads receipts already posted, including one recognised on the flag date (Decision 1). This batch does not take receipts of its own. Decision 30: `default_check` is this batch's morning check. The batch does not call `Collections.observe`.
 
 The stored record and the operator query are in docs/batch-status/.
 

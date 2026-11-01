@@ -354,6 +354,12 @@ class Settlement:
                 "quote-mismatch",
                 f"Receipt of {cents} cents does not match the quoted amount owing of {stored.total_cents} cents.",
             )
+        if repos:
+            raise SettlementError(
+                "repo-quote-unset",
+                "Documents.settlement_quote does not take repo rows. "
+                "A settlement that needs them is not executed.",
+            )
         self._require_elections(record)
         self._require_cap(interest_cap_present)
         vat = self._require_vat(vat_rate)

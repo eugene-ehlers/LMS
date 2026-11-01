@@ -21,6 +21,7 @@ from lms.batch.errors import (
 from lms.batch.records import (
     STATUS_SKIPPED,
     STEPS,
+    AccountBatchStatus,
     AccountFailure,
     BatchRun,
     BatchStatus,
@@ -175,6 +176,14 @@ class BatchService:
         except ValueError as exc:
             raise InvalidBatchRequest(str(exc)) from exc
         return self._store.status(organisation_id)
+
+    def account_status(self, organisation_id: str, account_id: str) -> AccountBatchStatus:
+        try:
+            organisation_id = _require_token(organisation_id, "organisation_id")
+            account_id = _require_token(account_id, "account_id")
+        except ValueError as exc:
+            raise InvalidBatchRequest(str(exc)) from exc
+        return self._store.account_status(organisation_id, account_id)
 
     def audit_entries(self, organisation_id: str):
         organisation_id = _require_token(organisation_id, "organisation_id")

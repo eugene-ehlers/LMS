@@ -318,7 +318,7 @@ def test_collection_campaign_create_edit_end_and_apply():
     campaign_id = re.search(r"Collection campaign ([0-9a-f-]+) was stored", created.body).group(1)
     listed = app.handle(session, "GET", "/staff/collection-campaigns")
     assert campaign_id in listed.body
-    assert "no list method" in listed.body
+    assert "list route" in listed.body
     edited = app.handle(
         session, "POST", f"/staff/collection-campaigns/{campaign_id}", collection_form(rate_reduction="0.02"),
     )
@@ -352,9 +352,10 @@ def test_batch_status_reads_the_audit_route_and_reports_no_run():
     app.handle(session, "POST", "/staff/campaigns", campaign_form())
     page = app.handle(session, "GET", "/staff/batch")
     assert page.status == 200
-    assert "No daily-calculation batch route is registered." in page.body
+    assert "none recorded" in page.body
+    assert "does not accrue, capitalise, or flag a default" in page.body
     assert "Last successful run" in page.body
-    assert "None recorded." in page.body
+    assert "none recorded" in page.body
     assert "You can continue." not in page.body
     assert "accrue, capitalise, or flag a default" in page.body
     limited = staff()

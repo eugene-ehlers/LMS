@@ -4,7 +4,7 @@ Single source of truth for all decisions that have been researched and locked.
 All future agents, chats and developers must follow these rules.
 Do not re-open a locked decision without an explicit change request.
 
-Last updated: 2026-10-31
+Last updated: 2026-11-01
 
 ## Standing instruction for all agents
 
@@ -17,6 +17,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 
 - System recognition date is the value date for all allocation and reversals.
 - Start of the day is treated as 00:00.
+- The recognition date is 00:00 Africa/Johannesburg. An instant is accepted only when it is exactly 00:00 in that zone, and the stored offset is +02:00. Any other clock time is refused. A naive datetime has no Johannesburg day and is refused. It is not written to the audit log.
 - A loan, settlement or deposit concluded at any time on a calendar day is treated as having occurred at 00:00 on that day.
 - Reversals use the same value date the system originally recognised.
 - A payment received on a flag date is treated as 00:00 on that day and is visible to the morning default check.
@@ -37,6 +38,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - If the initiation fee is capitalised, it is already part of the loan value. It is not added again.
 - If the initiation fee is not capitalised, the outstanding portion is not yet due. It is added to the settlement value.
 - VAT is always included in the settlement value. The client remains accountable for the VAT portion.
+- A settlement quote is binding for five business days (section 113, `binding_until`). The caller supplies the public holidays. No holiday calendar is assumed.
+- Early-settlement interest runs to the quote as-of date. Days between that date and a later receipt date are not accrued on this path.
+- An early-settlement receipt must equal the quoted total. A different amount is refused and is not allocated. That refusal is not the Laybye remainder in Decision 4.
+- `Documents.settlement_quote` does not take repo rows. A non-empty repo list is refused on the quote and on execute. No repo rate is assumed.
+- An audit record includes when the action was done. A naive recognition timestamp has no Johannesburg day, so no audit row is written and the failure is returned. An unknown agreement id has no organisation to attach, so no audit row is written and the failure is returned. No actor and no timestamp are invented to force a row.
 
 ## 3. Zero rates, zero fees and campaigns
 
@@ -54,8 +60,11 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It must be clear which default event (contractual breach or collections default) triggers fall-away when Option A is selected.
 - The base rate is the rate charged by the client. For unsecured personal this is normally the NCA maximum (repo rate + margin) fixed at the time of contract. The discount is applied against that contractual rate.
 - If the client has opted for the rate to reduce when the repo rate falls, the contractual rate reduces and the discount is applied to the reduced rate. The effective rate is capped at 0 % and can never be negative.
-- Every campaign has a start date and an end date. Staff must be able to set and change them (for example to correct errors).
+- Every campaign has a start date and an end date. Staff must be able to set and change them (for example to correct errors). The end date in this section is the pricing campaign. An open-ended period is a collection campaign (Decision 28), not a pricing campaign.
 - Any loan generated during the campaign period qualifies for the linked campaign, even if the loan term extends beyond the campaign end date.
+- When a loan qualifies for a campaign, that campaign's fall-away choice and trigger apply. When it does not, the organisation election applies, and a product value overrides the organisation.
+- When more than one campaign period contains the recognition date, intake fails closed and stores nothing.
+- The contractual rate remains the rate the decision engine supplies. The campaign net is the rate used for calculations during the campaign. Both figures are stored. One is not copied over the other.
 - Treatment of variable rates, discounts, or opted-for reducing rates depends on the rules of that campaign.
 - The system must be agile enough to support campaigns that match the client’s products and campaign rules.
 - A campaign edit or end does not reprice agreements already booked.
@@ -148,6 +157,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Any income received after a write-off is a recovery and is dealt with at the accounting level, not in the LMS.
 - Provisioning formulas are run outside the LMS. The LMS only receives an instruction to write off or not, or the action is performed manually.
 - Recency, months on book, promise-to-pay adherence and contactability are risk calculations performed on LMS data in reporting. They are not calculated inside the LMS.
+- The LMS does not store promise-to-pay adherence or contactability, and it does not accept them as provisioning or prescription inputs.
+- A full write-off journal can be posted. The Form 39 write-off cell stays empty. The journal is not mapped onto that cell.
 
 ## 9. Service-fee pro-rata and VAT
 
@@ -179,6 +190,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - One statement per client per credit-provider organisation, showing all of that client's loans with that organisation.
 - Each loan retains its own opening and closing balance so section 109 still holds.
 - The maximum period between successive statements is one month for Day-1 products (short-term and unsecured personal). Section 108 allows longer periods for other agreement types; those are not Day-1 products.
+- One month in this section is a calendar month. The statement path does not count thirty days. It refuses an overlapping period and a gap that would hide a ledger value date.
 - The LMS produces shortened statements, interim statements, regular statements, proof of balances and proof of payments.
 - Origination and contracting documents are produced in the decision engine before the information is sent to the LMS.
 - Logo and look-and-feel are client-specific. The platform provides basic templates. The client may supply their own look and feel for customisation.
@@ -205,6 +217,16 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Additional fees outside interest, initiation, monthly service fee and credit life (for example certain collection costs) should be added as a further monthly fee (fixed or variable), not capitalised into the amortisation schedule.
 - A loan restructuring capability exists so that other costs can be added during the term by creating a new instalment, pricing and term when required.
 - The 5 % / 3 % short-term rate distinction is supplied by the decision engine. The LMS uses the rate it is given and checks that calculations stay within the Act for that rate. The LMS does not contain the rules that decide whether a loan is concurrent, subsequent, settled-and-readvanced, or restructured. Those rules sit in the decision engine.
+- Day-1 test and dummy decision-engine values are an integer periodic rate in basis points, a term count plus a payment frequency, and an application number of APP- plus eight digits. One basis point is 0.01 percent. This is the Day-1 contract the LMS accepts. It is not a statutory wire format.
+- A restructure keeps the original loan number. It copies the application number and does not allocate a second loan number.
+- The restructure path runs the calculation engine's prescribed-rate check on the supplied periodic rate. It does not add a maximum of its own. The 5 percent and 3 percent distinction stays with the decision engine, so the check uses the engine's higher prescribed monthly rate.
+- The restructure path records the roles presented to it. It does not invent a role name and it does not call a role check that would invent one.
+- A payment-frequency change that does not change the contractual term or the contractual instalment is neither a restructure nor a collection campaign. The path fails closed and creates no agreement.
+- A restructure moves the outstanding balance, in integer cents, from the original agreement record to the new agreement record. The original record's outstanding balance becomes zero. A ledger bucket balance remains the sum of its entries. These decisions do not name a restructure journal, so the path does not post one.
+- The new agreement is stored as active. The original agreement is stored as restructured.
+- When the caller does not supply a resolved election row, the restructure path reads the organisation election and the optional product override. A missing election fails closed. An unset residual write-off threshold still fills R100.
+- A consented restructure requires client consent and a consent date. It does not add the collection-campaign notice of five business days.
+- A naive recognised_at on a restructure is reported on the response and is not written to the audit log, because Decision 1 gives that clock no Johannesburg day.
 - Interest and fee accrual must use the same method that was used to calculate the contractual instalment.
 - To avoid loan splitting, a second quote or loan for the same application must be failed until the first has been declined and is no longer open.
 
@@ -231,18 +253,22 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - All data required for statements so that the correct details appear.
   - All data required for regulatory and compliance reporting.
 - Enigma does not hold or return the NCR registration number, trading names, addresses, telephone numbers for unregistered consumers, payment-account details, brand assets, operational ceilings, or campaign data.
+- Organisation context returns the organisation id and the company registration number. It does not return a service address. The booking identity read returns the service address that is frozen.
+- The consumer-registration check returns whether the consumer is registered. It does not return email or mobile.
 - A consumer who wants to see their statements or settlement quotes must register via Enigma and sign in. The LMS does not store the consumer’s contact number or email for this purpose.
 - LMS registration and sign-on pages direct the consumer to Enigma. The LMS does not implement registration or sign-on functionality.
 
 ## 16. Identity freeze on agreement
 
 - Freeze name + ID number + service address at booking.
+- The frozen name, ID number, and service address are the Enigma booking read. A differing application value is not frozen.
 - Subsequent changes in Enigma do not rewrite the concluded agreement.
 
 ## 17. Rounding and disclosure
 
 - Round half-up to cents on billing.
 - The same rounding rule must be applied everywhere rounding is required.
+- The calculation engine rounds each interest bill half-up and clears the unbilled remainder. The ledger rounds the cumulative memo half-up. A one-cent difference between those totals is a refusal. No balancing journal is posted.
 - Proviso: rounding must not create a compliance issue (example: an instalment rounded up above the affordability figure previously aligned with the client).
 - Annual-equivalent rate for disclosure = periodic rate × number of periods per year (simple nominal, not effective). Disclose both the periodic rate and the nominal annual rate.
 - A discount affects the rate value used in the calculation. It does not change the annualisation method.
@@ -265,6 +291,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
   - Residual write-off threshold. The platform default is R100. An unset organisation value and an unset product value fill R100. A stored value, including zero, is kept. A product value overrides the organisation.
   - Campaign discount fall-away choice (falls_away_on_default / does_not_fall_away)
   - Campaign fall-away trigger (contractual_breach / collections_default)
+  - Debit orders enabled. This is the automated-collections switch. It does not change allocation. An unset value fails closed. A false value submits no debit-order file.
 - Unset values fail closed. The residual write-off threshold is the exception: an unset value fills R100.
 - Campaign fall-away choice and trigger are stored per campaign.
 - Role names for edits must be descriptive and follow best practice (for example lms.elections.write, lms.campaign.write).
@@ -283,6 +310,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - It is compulsory. For testing a test number in the same format with all zeros may be used.
 - It is required on NCA communications and regulatory extracts for micro and unsecured personal loans.
 - It is not required for pure hosting or for Laybye/BNPL.
+- The ledger classifications `short_term` and `unsecured` are the micro and unsecured personal loans that require the number. `zero_cost` and `cpa_layby` are Laybye/BNPL and do not. Pure hosting is not a column. The extract reads the agreement classification. The caller supplies pure hosting. When it is omitted and a classification would require the number, the extract fails closed. A statement covers more than one loan, so it is not given a second classification column.
+- A blank NCR number is refused. A non-blank value, including a test number of all zeros, is accepted.
 - Trading name, addresses, telephone numbers, payment-account details and brand assets are also LMS-owned and are not supplied by Enigma.
 - Compliance details (NCR number, trading name, addresses, telephone, payment-account details) are required for reporting, control and audits and must be captured up front.
 
@@ -301,6 +330,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - The audit record includes who did it (staff identity from Enigma), when it was done, and what was done.
 - A system-error correction is an audited action and must record the staff identity.
 - For any change (compliance, elections, brand, ceiling, campaign, promise-to-pay, contact, system-error), a person must sign in with the correct role so the sign-in details can be stored in the audit record.
+- Promise-to-pay and contact are named above as changes that need a signed-in person. The LMS does not store those facts and does not accept them as provisioning or prescription inputs.
+- An operator who holds only `lms.collection_campaign.write` cannot open the batch screen. No batch-status role is named.
 - The audit must be sufficient to identify who did things and whether they had the mandate to do so.
 - Role-based access and audit records are required to pass POPIA and other audits.
 
@@ -318,6 +349,8 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Loan numbers must be sequential and cannot be skipped.
 - Loan numbers must be long enough so the system does not run out of numbers.
 - Identifiers such as the first four letters of the company name and the month and year created may be included.
+- The Day-1 loan number is a 12-digit sequence starting at 1. No company prefix is added until one is supplied. The sequence is not skipped.
+- The debit-order loan line reads the amount still outstanding on that due date. The contractual instalment stays stored on the agreement and is not replaced by that line.
 
 ## 26. Payment rails and debit orders
 
@@ -325,6 +358,7 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - A returned unpaid item after a write-off is flagged only. The balance is not reopened and no recovery is posted in the LMS.
 - The decision engine supplies the credit-life premium amount each time.
 - Debit-order file layout uses a standard South African format and must also cater for DebiCheck.
+- The Day-1 file writes record 50 for both EFT and DebiCheck and hashes homing account numbers modulo 10**12. A missing homing account or abbreviated name fails closed. A credit-life premium receipt is stored as accepted by the insurer and is not posted to an insurer. No other DebiCheck record type and no other hash algorithm are named.
 - An unmatched receipt may be matched on loan number or ID number.
 
 ## 27. Consumer access and notifications
@@ -335,11 +369,12 @@ Before proposing or implementing any calculation, ledger, servicing or configura
 - Staff with the appropriate role can access account information and provide it to a consumer who phones a call centre.
 - The NCR registration number must be displayed on all NCA communications.
 - The LMS sends a regular push when the monthly statement for the month is ready. The push tells the consumer the statement is available. It does not contain collection content.
+- The NCR character pattern, the call-centre role name, the Enigma page URLs, and the push-provider machine action stay unset. The LMS does not store them.
 
 ## 28. Collection campaigns
 
 - A collection campaign is a bulk change applied to existing accounts. It does not create a new credit agreement (section 95).
-- Staff define a collection campaign with a start date, an end date (or open-ended), and one or more of the following changes:
+- Staff define a collection campaign with a start date, an end date (or open-ended), and one or more of the following changes. A null end date on this path is open-ended. Decision 3's end date is the pricing campaign:
   - Reduce or zero the interest rate for the campaign period or the rest of the term.
   - Reduce or zero one or more fees for the campaign period or the rest of the term.
   - Waive the contractual instalment for the campaign period (payment holiday).
@@ -358,21 +393,33 @@ Points section 28 does not settle are listed in `docs/collection-campaigns/gaps.
 
 The payment-rail layer found these points unset. Nothing in this section is a decision. The implementation fails closed or calls an existing interface. It does not fill a value in.
 
-- Section 19 does not name an automated-collections election. The configuration catalogue already has `debit_orders_enabled` (“Submit debit orders”). A missing row fails closed. The lock does not say that flag is the section 4 automation switch.
-- Section 25 does not fix the loan-number character pattern. The Bankserv user reference allows 14 characters for the mandate or agreement number. Section 13 requires the contractual instalment to be stored; the agreement stores a principal schedule. The debit-order loan line reads the section 6 amount still outstanding on that due date and does not invent unbilled interest.
-- The published Bankserv collections layout does not define a DebiCheck record, and it does not state the hash-total algorithm beyond a 12-digit field. Consumer homing-account details and the bank’s 10-character abbreviated user name are not LMS fields in this document. A credit-life premium receipt has no insurer hand-off here.
+- `debit_orders_enabled` is the Decision 19 automated-collections switch. It does not change allocation. An unset value fails closed. A false value submits no file. The earlier note that the lock did not name that flag is superseded.
+- The Day-1 loan number is the 12-digit sequence in Decision 25, starting at 1, with no company prefix until one is supplied. The debit-order loan line reads the amount still outstanding on that due date. The contractual instalment stays stored. The earlier note that the character pattern was unset is superseded.
+- The Day-1 Bankserv file writes record 50 for both EFT and DebiCheck and hashes homing account numbers modulo 10**12. A missing homing account or abbreviated name fails closed. A credit-life premium receipt is stored as accepted by the insurer and is not posted to an insurer. The earlier note that the layout named nothing else is superseded by that Day-1 reading.
 - Interest that has accrued up to the due date is due on that date and is capitalised before the receipt is allocated. Sections 1 and 8. The earlier note that this was unsettled is superseded.
 - Decision 19 fills an unset residual write-off threshold with R100. A stored value, including zero, is kept. The earlier payment-rail note that the resolver returned 5 000 cents, and that the two readings were unsettled, is superseded.
 - Settlement re-advance has no module order in the orchestration note. The route, the settlement-month fee, and the points this command does not decide are recorded in `docs/settlement-readvance/`. That note is not a rule.
 
 ## Open points raised while implementing Layer 2
 
-Points 1 to 3 are unresolved. Nothing in those points changes a rule above or chooses a reading. Point 4 is answered by Decision 19.
+Points 1 to 4 are answered by the sentences in Decisions 3, 13, and 19. Nothing in those points chooses a different reading.
 
-1. Decisions 3 and 19 store the campaign fall-away choice and trigger on the campaign, and decision 19 also stores them as an organisation election with an optional product override. The document does not say which stored value applies when they differ.
-2. The document does not say which campaign applies when more than one campaign period includes the recognition date of a new loan.
-3. Decision 3 defines the campaign price as a base rate less a discount. Decision 13 says the LMS uses the rate supplied by the decision engine. The document does not say whether a loan that qualifies for a campaign keeps the supplied rate, or uses the campaign net.
+1. Decision 3 answers this. When a loan qualifies for a campaign, that campaign's fall-away choice and trigger apply. When it does not, the organisation election applies, and a product value overrides the organisation.
+2. Decision 3 answers this. When more than one campaign period contains the recognition date, intake fails closed and stores nothing.
+3. Decisions 3 and 13 answer this. The contractual rate remains the rate the decision engine supplies. The campaign net is the rate used for calculations during the campaign. Both figures are stored. One is not copied over the other.
 4. Decision 19 answers this. An unset residual write-off threshold fills R100. A stored value, including zero, is kept. A product value overrides the organisation.
+
+## 30. Daily calculation batch
+
+- The batch steps are accrue, capitalise, then `default_check`. `default_check` is this batch's morning check. The batch does not call `Collections.observe`. `Collections.observe` is the call when a collections default is flagged.
+- The batch does not take receipts. It checks receipts already posted, including a receipt recognised on the flag date.
+- A finished batch with account failures does not block the next recognition date. An unfinished run blocks a later date until that same date is finished or explicitly skipped.
+- A retry of an incomplete or skipped run walks every account through accrue, capitalise, and `default_check` again.
+- The batch does not call Enigma. A missing `actor_id` fails closed and is not audited. A supplied person id is stored on the run and on the audit row. No role name is invented for running or skipping the batch.
+- A calendar day that was never started does not block a later date.
+- A recognition date whose batch has finished cannot be started again, including when accounts failed.
+- The alert is a row returned by the status query. A hard stop leaves the run in progress. The alert row is written when a later start is refused or the run is skipped. No timeout is applied.
+- Operators can query batch status by organisation and by account. The account query returns the stored failures for that account. UI-action status for a restructure is the last status recorded for that agreement, and the last recorded action for the organisation when no agreement is named.
 
 ## 29. Non-campaign rate or fee change
 

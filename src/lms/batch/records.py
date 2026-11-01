@@ -124,6 +124,24 @@ class BatchRun:
 
 
 @dataclass(frozen=True)
+class AccountBatchStatus:
+    """Stored failures for one account. Decision 30. No extra fields are invented."""
+
+    organisation_id: str
+    account_id: str
+    batch_run_id: str | None
+    failure: AccountFailure | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "organisation_id": self.organisation_id,
+            "account_id": self.account_id,
+            "batch_run_id": self.batch_run_id,
+            "failure": None if self.failure is None else self.failure.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
 class BatchStatus:
     organisation_id: str
     timezone: str
