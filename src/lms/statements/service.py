@@ -91,10 +91,10 @@ class Documents:
     ) -> StoredStatement:
         """One statement per person per organisation (locked decision 12).
 
-        On each day in the period, at 00:00: accrue, capitalise amounts the
-        engine treats as due, then allocate receipts recognised that day
-        (locked decisions 1 and 8). The stored statement is returned again
-        on a repeat of the same period and is not rebuilt.
+        On each day in the period, at 00:00: accrue, capitalise amounts due
+        that day, allocate receipts recognised that day, then run the morning
+        default check (locked decision 1). The stored statement is returned
+        again on a repeat of the same period and is not rebuilt.
         """
         self._mandate(organisation_id, person_id, "statement.issue")
         if period_end < period_start:
@@ -418,7 +418,8 @@ class Documents:
             )
         day = start
         while day <= end:
-            self._morning(record, account, day)
+            # LOCKED_DECISIONS §1. Accrue and capitalise, allocate receipts
+            # recognised this day, then run the morning default check.
             self._accrue(record, account, day, interest_cap_present)
             self._capitalise(record, account, day, vat_rate, interest_cap_present)
             for owner, receipt in by_day.get(day, ()):
@@ -436,10 +437,16 @@ class Documents:
                     vat_rate=vat_rate,
                     capitalise=False,
                 )
+            self._morning(record, account, day)
             day += timedelta(days=1)
 
     def _morning(self, record: AgreementRecord, account: LoanAccount, day: date) -> None:
         # Locked decision 6: flag only on the contractual due date plus leniency.
+        # A receipt that settled the agreement already ran. The check refuses
+        # that status, and there is no open instalment left to flag.
+        current = self.servicing._agreement(record.agreement_id)
+        if current.status not in {"active", "in_arrears"} or current.ledger_loan_id is None:
+            return
         for due_on, _amount in record.schedule:
             flag_on = due_on + timedelta(days=account.snapshot.leniency_days)
             if day == flag_on:

@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from lms.collections.authority import RandCeiling, authorise_write_off
 from lms.collections.errors import CollectionsError
+from lms.ledger.attribution import cents_toward_attributed_due
 from lms.ledger.errors import LedgerError
 from lms.ledger.models import LoanAccount
 from lms.servicing.enigma import EnigmaStub
@@ -491,7 +492,7 @@ class Collections:
                 continue
             if check_on <= due_on or due_on in case.breaches:
                 continue
-            received = _received_on(self._payments(account), due_on, due_on)
+            received = _received_on(account, self._payments(account), due_on, due_on)
             instalment = _threshold_instalment(account, due_on)
             if not is_full_payment(received, instalment, threshold):
                 case.breaches.add(due_on)
@@ -514,7 +515,7 @@ class Collections:
         for due_on, _schedule_cents in _schedule(account):
             if honour_skip and self._skipped(account, due_on):
                 continue
-            received = _received_until(self._payments(account), due_on, check_on)
+            received = _received_until(account, self._payments(account), due_on, check_on)
             instalment = _threshold_instalment(account, due_on)
             if is_in_default(
                 due_on=due_on,
@@ -585,7 +586,7 @@ class Collections:
         for due_on, schedule_cents in _schedule(account):
             if check_on < due_on:
                 continue
-            received = _received_until(self._payments(account), due_on, check_on)
+            received = _received_until(account, self._payments(account), due_on, check_on)
             arrears += max(0, schedule_cents - received)
         last_paid = _last_payment_date(self._payments(account))
         anchor = last_paid or account.disbursement_value_date
@@ -680,17 +681,17 @@ def _leniency(account: LoanAccount) -> timedelta:
     return timedelta(days=account.snapshot.leniency_days)
 
 
-def _received_on(payments, due_on: date, day: date) -> int:
+def _received_on(account: LoanAccount, payments, due_on: date, day: date) -> int:
     return sum(
-        item.amount_cents or 0
+        cents_toward_attributed_due(account, item)
         for item in payments
         if item.attributed_due_on == due_on and item.value_date == day
     )
 
 
-def _received_until(payments, due_on: date, day: date) -> int:
+def _received_until(account: LoanAccount, payments, due_on: date, day: date) -> int:
     return sum(
-        item.amount_cents or 0
+        cents_toward_attributed_due(account, item)
         for item in payments
         if item.attributed_due_on == due_on and item.value_date <= day
     )
@@ -706,7 +707,7 @@ def _last_payment_date(payments) -> date | None:
 def _schedule_paid_exactly(collections: Collections, account: LoanAccount) -> bool:
     payments = collections._payments(account)
     for due_on, amount in _schedule(account):
-        received = _received_until(payments, due_on, date.max)
+        received = _received_until(account, payments, due_on, date.max)
         if received != amount:
             return False
     return True

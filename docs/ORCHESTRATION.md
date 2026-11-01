@@ -22,7 +22,7 @@ Modules called (in order):
 3. Servicing.accept_payment (if a receipt has been recognised that day)
 4. Collections.observe
 
-Outcome: Capitalise then allocate. Default flag if the threshold is not met.
+Outcome: Accrue and capitalise the day's due amounts, then allocate a receipt recognised that day, then run the morning default check. A receipt recognised on the flag date is visible to that check. Decisions 1 and 6.
 
 ## 2. Receipt arrives
 
@@ -101,7 +101,7 @@ If the batch does not finish, batch status raises an alert. A later recognition 
 
 A batch that finishes with account failures has completed. Those failures stay on the batch record and in the audit log. Whether they block the next recognition date is not locked (docs/OPEN_ISSUES.md, J5). This flow does not block the next day for account failures alone.
 
-Not part of this flow: Servicing.accept_payment, collection-file generation, and statement generation. Servicing.accept_payment remains in section 1 and is not called here (docs/OPEN_ISSUES.md, J3). The default check is not named as Collections.observe (docs/OPEN_ISSUES.md, J4).
+Not part of this flow: Servicing.accept_payment, collection-file generation, and statement generation. A receipt is allocated by section 1 or section 2 before this batch's default check. The check reads receipts already posted, including one recognised on the flag date (Decision 1). This batch does not take receipts of its own. The default check is not named as Collections.observe (docs/OPEN_ISSUES.md, J4).
 
 The stored record and the operator query are in docs/batch-status/.
 

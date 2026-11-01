@@ -285,9 +285,10 @@ class PaymentRail:
         not yet an instalment due date is accrued and not billed. Unbilled
         interest stays out of allocation. §6 and §8.
 
-        Whether the accrual on the due date itself is due that day is not
-        settled by the lock. ``bill_interest`` debits the whole unbilled memo,
-        which includes that day's accrual because accrual runs first.
+        Interest that has accrued up to the due date is due on that date.
+        LOCKED_DECISIONS §1 and §8. Accrual runs through the recognition date
+        first. ``bill_interest`` then debits the whole unbilled memo, including
+        that day's accrual, before the receipt is allocated.
         """
         if interest_cap_present is None:
             raise PaymentRailError(

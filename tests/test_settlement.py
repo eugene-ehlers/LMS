@@ -207,6 +207,42 @@ def test_missing_in_duplum_trigger_fails_closed():
     assert svc.agreements == {}
 
 
+def test_settlement_closes_an_open_in_duplum_episode_and_clears_the_flag():
+    """LOCKED_DECISIONS §7. Either trigger. The discount flag stays as it is."""
+    for trigger, fall_away in (
+        ("collections_default", False),
+        ("contractual_breach", True),
+    ):
+        svc, settlement, record = world(initiation=0, trigger=trigger)
+        loan = svc.ledger.store.get(record.organisation_id, record.ledger_loan_id)
+        svc.ledger.open_in_duplum_episode(
+            organisation_id=record.organisation_id,
+            loan_id=loan.loan_id,
+            recognised_at=at(ADVANCE, 12),
+            fall_away=fall_away,
+        )
+        loan.in_duplum_ceiling_reached = True
+        loan.in_duplum_ceiling_warning = "In-duplum ceiling reached."
+        assert loan.discount_fallen_away is fall_away
+        quoted = quote(settlement, record, as_of=ADVANCE, vat=VAT_ZERO, recognised_at=at(ADVANCE, 14))
+        done = settlement.execute(
+            agreement_id=record.agreement_id,
+            quote_id=quoted.quote_id,
+            cents=quoted.amount_owing_cents,
+            recognised_at=at(ADVANCE, 15),
+            interest_cap_present=True,
+            vat_rate=VAT_ZERO,
+            idempotency_key=f"settle-episode-{trigger}",
+        )
+        assert done.success is True
+        assert done.balance_cents == 0
+        assert loan.episodes[0].closed_on == ADVANCE
+        assert svc.ledger._open_episode(loan) is None
+        assert loan.in_duplum_ceiling_reached is False
+        assert loan.in_duplum_ceiling_warning is None
+        assert loan.discount_fallen_away is fall_away
+
+
 def test_execute_allocates_the_quote_and_marks_the_agreement_settled():
     svc, settlement, record = world(initiation=statutory_initiation(VAT_ZERO))
     quoted = quote(settlement, record)

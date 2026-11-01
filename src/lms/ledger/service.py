@@ -33,6 +33,7 @@ from lms.calc.models import (
     VatRate,
 )
 from lms.calc.money import cents_to_rands, to_cents
+from lms.ledger.attribution import cents_toward_attributed_due
 from lms.ledger.errors import LedgerError
 from lms.ledger.models import (
     FREQUENCIES,
@@ -850,10 +851,9 @@ class Ledger:
 
         A loan with a Laybye child takes due section 126 amounts first and
         credits any remainder to the Laybye. LOCKED_DECISIONS §4 and §8.
-        The §13 partial-prepayment election is not applied to that remainder.
-        The lock does not say whether prepayment runs before the Laybye.
-        A loan with no Laybye child keeps the prepayment election, then
-        ``overpayment-unset`` when a remainder has no home.
+        The §13 partial-prepayment election applies only to a remainder that
+        is not sent to a linked Laybye. A loan with no Laybye child keeps
+        that election, then ``overpayment-unset`` when a remainder has no home.
 
         ``settle=True`` pays every remaining principal slice. That is section
         125, in section 126 order, and it is not the section 13 prepayment
@@ -1042,12 +1042,13 @@ class Ledger:
                 recognised_at=recognised_at,
             )
             self._last_laybye_transaction_id = laybye_tx.transaction_id
-        if loan_tx is not None:
-            return loan_tx
-        raise LedgerError(
-            "settlement-short",
-            "The settlement balance is 0 cents. There is nothing to allocate, so the receipt is not a settlement.",
-        )
+        if loan_tx is None:
+            raise LedgerError(
+                "settlement-short",
+                "The settlement balance is 0 cents. There is nothing to allocate, so the receipt is not a settlement.",
+            )
+        self._close_settled_episode(account, recognised_at)
+        return loan_tx
 
     def _owed_cents(self, account: LoanAccount) -> int:
         charges = sum(charge.remaining_cents for charge in account.charges)
@@ -1296,6 +1297,7 @@ class Ledger:
             amount_cents=cents,
         )
         self._assert_consistent(account)
+        self._close_settled_episode(account, recognised_at)
         return transaction
 
     def reverse(
@@ -1380,7 +1382,7 @@ class Ledger:
             RecognisedReceipt(
                 transaction.recognised_at,
                 transaction.recognition_sequence,
-                transaction.amount_cents or 0,
+                cents_toward_attributed_due(account, transaction),
                 transaction.attributed_due_on,
             )
             for transaction in payments
@@ -1455,7 +1457,12 @@ class Ledger:
         loan_id: str,
         recognised_at: datetime,
     ) -> Episode:
-        """Close the open episode. The discount flag is left as it is (§3)."""
+        """Close the open episode. LOCKED_DECISIONS §7.
+
+        A settlement closes any open episode through this effect. The ceiling
+        flag and the warning are cleared. The discount fall-away flag is left
+        as it is (§3).
+        """
         account = self._loan(organisation_id, loan_id)
         episode = self._open_episode(account)
         if episode is None:
@@ -1470,6 +1477,16 @@ class Ledger:
             ),
         )
         return episode
+
+    def _close_settled_episode(self, account: LoanAccount, recognised_at: datetime) -> None:
+        """A settlement closes any open in-duplum episode. LOCKED_DECISIONS §7."""
+        if self._open_episode(account) is None:
+            return
+        self.close_in_duplum_episode(
+            organisation_id=account.organisation_id,
+            loan_id=account.loan_id,
+            recognised_at=recognised_at,
+        )
 
     def mark_discount_fallen_away(
         self,
@@ -1620,11 +1637,12 @@ class Ledger:
         return total
 
     def ordered_receipts(self, organisation_id: str, loan_id: str) -> tuple[RecognisedReceipt, ...]:
+        account = self.store.get(organisation_id, loan_id)
         receipts = [
             RecognisedReceipt(
                 transaction.recognised_at,
                 transaction.recognition_sequence,
-                transaction.amount_cents or 0,
+                cents_toward_attributed_due(account, transaction),
                 transaction.attributed_due_on,
             )
             for transaction in self.store.transactions_for(organisation_id, loan_id)

@@ -9,7 +9,8 @@ The path calls the implementations already on these branches:
 - Regulatory extracts (PR #18)
 
 Locked decisions are not given a new reading. The closed gaps are called
-through servicing. Two rule questions are still reported and fail this test.
+through servicing. A receipt counts only toward its attributed due date,
+and a Laybye remainder is not a partial prepayment.
 
 Caller elections for this run, not platform defaults:
 
@@ -40,6 +41,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from lms.calc.interest import daily_interest_rands
+from lms.ledger.attribution import cents_toward_attributed_due
 from lms.collections.errors import CollectionsError
 from lms.collections.service import Collections
 from lms.regulatory.audit import AuditExtract, AuditRecord
@@ -170,11 +172,11 @@ def _instalment_cents(account, due_on: date) -> int:
     return principal + levied
 
 
-def _received_until(ledger, loan_id: str, due_on: date, day: date) -> int:
+def _received_until(ledger, account, due_on: date, day: date) -> int:
     total = 0
-    for item in ledger.store.transactions_for(ORG, loan_id):
+    for item in ledger.store.transactions_for(ORG, account.loan_id):
         if item.kind == "payment" and item.attributed_due_on == due_on and item.value_date <= day:
-            total += item.amount_cents or 0
+            total += cents_toward_attributed_due(account, item)
     return total
 
 
@@ -494,6 +496,18 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
         loan_taken == RECEIPT_CENTS,
         f"loan took {_rands(loan_taken)} of {_rands(RECEIPT_CENTS)}",
     )
+    counted = cents_toward_attributed_due(parent, loan_tx)
+    earlier = (loan_tx.amount_cents or 0) - counted
+    numbers.append(
+        f"1 May receipt counts {_rands(counted)} toward {DUE.isoformat()}; "
+        f"{_rands(earlier)} was applied to an earlier due amount"
+    )
+    _expect(
+        problems,
+        earlier == NET_APRIL_INTEREST_CENTS and counted == RECEIPT_CENTS - NET_APRIL_INTEREST_CENTS,
+        "a section 126 part applied to the 30 April interest must not count toward 1 May. "
+        f"Counted {_rands(counted)}, earlier {_rands(earlier)}.",
+    )
     numbers.append(
         "after the receipt: "
         f"principal {_rands(servicing.ledger.bucket_balance(parent, 'principal'))}, "
@@ -618,7 +632,7 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
     _expect(problems, flagged.episode_count == 1, f"episode count is {flagged.episode_count}")
 
     instalment = _instalment_cents(parent, DUE)
-    received = _received_until(servicing.ledger, parent.loan_id, DUE, FLAG_ON)
+    received = _received_until(servicing.ledger, parent, DUE, FLAG_ON)
     shortfall = instalment - received
     numbers.append(
         f"1 May instalment {_rands(instalment)}, received by the flag date {_rands(received)}, "
@@ -670,21 +684,6 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
         "the contractual breach of 1 May was removed by the later payment. "
         f"Breaches are {cured.contractual_breaches}. Locked §6 says that breach cannot be rectified.",
     )
-    remaining_principal = servicing.ledger.bucket_balance(parent, "principal")
-    if cured.collections_default is False and remaining_principal == NET_APRIL_INTEREST_CENTS:
-        gaps.append(
-            "The collections default closed while principal of "
-            f"{_rands(remaining_principal)} was still unpaid. "
-            "The 1 May instalment used here is the R2 000 principal slice plus the R69 service fee "
-            f"({_rands(instalment)}). April interest of {_rands(NET_APRIL_INTEREST_CENTS)} was billed on "
-            "30 April, so it is not part of that instalment. "
-            "The R219 receipt is stored as one amount attributed to 1 May, and collections counts that "
-            "whole amount, including the R90 section 126 applied to the 30 April interest. "
-            "The cure receipt is the instalment minus that R219, which is R1 850, and it pays principal only. "
-            "R90 of principal remains, equal to the April interest. "
-            "Locked §6 does not say whether a receipt that section 126 splits across due dates counts in full "
-            "toward the single attributed due date. This smoke does not choose a split."
-        )
     write_offs = [
         item.kind for item in servicing.ledger.store.transactions_for(ORG, parent.loan_id) if item.kind == "write_off"
     ]
@@ -817,8 +816,8 @@ def _run(problems: list[str], gaps: list[str], numbers: list[str]) -> None:
         "no HTTP call was attempted; socket.create_connection and http.client request were blocked"
     )
     _expect(problems, "payment.accept" in mandates, f"payment.accept was not checked: {mandates}")
-    gaps.append(
-        "Remaining uncertainty: once a Laybye exists, a receipt pays due section 126 "
-        "amounts and the remainder goes to the Laybye. The partial-prepayment election "
-        "is not applied to that remainder. Locked §4 and §13 do not say which one runs first."
+    _expect(
+        problems,
+        parent.slices[0].remaining_cents == servicing.ledger.bucket_balance(parent, "principal"),
+        "the 1 May receipt prepaid principal that section 126 had not yet made due",
     )

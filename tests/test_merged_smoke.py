@@ -1052,7 +1052,7 @@ def _pin(smoke: Smoke) -> None:
             (("interest", 14_839), ("principal", 200_000), ("service", 13_800)),
         ),
         "collections": (200_000, 200_000, 200_000, 0, 4_123, True, 204_123),
-        "write_off": ("refused", "residual-above-threshold", 14_316),
+        "write_off": ("refused", "residual-not-exact", 14_316),
         "campaign": ("2026-05-04", "2026-05-10", "0.03", "1.9354838710", "0.05", "3.2258064516"),
     }
     for key, value in expected.items():
