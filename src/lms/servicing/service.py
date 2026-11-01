@@ -28,9 +28,11 @@ from lms.ledger.errors import LedgerError
 from lms.ledger.models import LoanAccount
 from lms.ledger.service import Ledger, _day_count, _prepayment, _repo_fall
 from lms.notifications.service import Notifications
+from lms.ports.decision_engine import require_short_term_rate_band
 from lms.regulatory.audit import AuditLog
 from lms.servicing.enigma import EnigmaStub
 from lms.servicing.errors import ServicingError
+from lms.validation import require_cents, require_positive_int, require_text
 from lms_config.calendar import value_date, value_instant
 from lms_config.exceptions import CalculationInputError
 from lms_config.locked import OrganisationSettings, ResolvedCreditSettings, resolve_customer_settings
@@ -94,6 +96,7 @@ class PaymentRecord:
     reversal_value_date: date | None = None
     reversal_recognised_at: datetime | None = None
     reversal_transaction_id: str | None = None
+    laybye_transaction_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,8 +143,23 @@ class Servicing:
         repos: tuple[RepoRate, ...] = (),
         rate_supplied_by_decision_engine: bool = False,
         short_term_rate_cap: Decimal | None = None,
+        application_number: str | None = None,
+        contractual_instalment_cents: int | None = None,
+        term_count: int | None = None,
+        short_term_rate_flag: str | None = None,
     ) -> AgreementRecord:
         """POST /v1/agreements. Freeze elections. Do not post to the ledger."""
+        if application_number is not None:
+            application_number = require_text(application_number, "application_number")
+        if contractual_instalment_cents is not None:
+            contractual_instalment_cents = require_cents(
+                contractual_instalment_cents, "contractual_instalment_cents"
+            )
+        if term_count is not None:
+            term_count = require_positive_int(term_count, "term_count")
+        if short_term_rate_flag is not None:
+            band = require_short_term_rate_band(short_term_rate_flag)
+            short_term_rate_flag = None if band is None else band.value
         fingerprint = _fingerprint(
             {
                 "organisation_id": organisation_id,
@@ -155,6 +173,10 @@ class Servicing:
                 "classification": product.classification,
                 "rate_supplied_by_decision_engine": rate_supplied_by_decision_engine,
                 "short_term_rate_cap": None if short_term_rate_cap is None else str(short_term_rate_cap),
+                "application_number": application_number,
+                "contractual_instalment_cents": contractual_instalment_cents,
+                "term_count": term_count,
+                "short_term_rate_flag": short_term_rate_flag,
             }
         )
         replay = self._replay("book", organisation_id, idempotency_key, fingerprint)
@@ -199,6 +221,10 @@ class Servicing:
             annual_equivalent_rate=disclosure,
             rate_supplied_by_decision_engine=rate_supplied_by_decision_engine,
             short_term_rate_cap=short_term_rate_cap,
+            contractual_instalment_cents=contractual_instalment_cents,
+            term_count=term_count,
+            short_term_rate_flag=short_term_rate_flag,
+            application_number=application_number,
         )
         self.agreements[record.agreement_id] = record
         self._remember("book", organisation_id, idempotency_key, fingerprint, record.agreement_id)
@@ -231,6 +257,12 @@ class Servicing:
         pre_disbursement_cents: int | None = None,
         pre_disbursement_at: datetime | None = None,
         grant_at: datetime | None = None,
+        rate_supplied_by_decision_engine: bool = False,
+        short_term_rate_cap: Decimal | None = None,
+        application_number: str | None = None,
+        contractual_instalment_cents: int | None = None,
+        term_count: int | None = None,
+        short_term_rate_flag: str | None = None,
     ) -> AgreementRecord:
         """Book a linked Laybye, take a pre-disbursement receipt, then grant.
 
@@ -252,6 +284,12 @@ class Servicing:
             quoted_disbursement=quoted_disbursement,
             idempotency_key=idempotency_key,
             repos=repos,
+            rate_supplied_by_decision_engine=rate_supplied_by_decision_engine,
+            short_term_rate_cap=short_term_rate_cap,
+            application_number=application_number,
+            contractual_instalment_cents=contractual_instalment_cents,
+            term_count=term_count,
+            short_term_rate_flag=short_term_rate_flag,
         )
         if record.ledger_loan_id is None:
             try:
@@ -514,6 +552,20 @@ class Servicing:
         if payment.ledger_transaction_id is None or payment.agreement_id is None:
             raise ServicingError("payment", "An allocated payment has no ledger transaction.")
         agreement = self._agreement(payment.agreement_id)
+        if payment.laybye_transaction_id is not None:
+            try:
+                laybye_reversal = self.ledger.reverse(
+                    organisation_id=payment.organisation_id,
+                    transaction_id=payment.laybye_transaction_id,
+                    recognised_at=recognised_at,
+                )
+            except LedgerError as exc:
+                raise _from_downstream(exc) from exc
+            if laybye_reversal.value_date != payment.value_date:
+                raise ServicingError(
+                    "value-date",
+                    "LOCKED_DECISIONS §1: a reversal must use the value date originally recognised.",
+                )
         try:
             reversal = self.ledger.reverse(
                 organisation_id=payment.organisation_id,
@@ -853,6 +905,7 @@ class Servicing:
         laybye_id = self.ledger._last_laybye_transaction_id
         if laybye_id is not None and transaction.kind == "payment":
             laybye_tx = self.ledger.store.get_transaction(payment.organisation_id, laybye_id)
+            payment.laybye_transaction_id = laybye_id
             payment.allocations = payment.allocations + (("laybye_hold", laybye_tx.amount_cents),)
         payment.status = "allocated"
         self._audit_payment(payment, transaction, laybye_id)
