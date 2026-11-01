@@ -166,6 +166,77 @@ def test_payments_go_to_the_loan_first_and_excess_to_the_laybye():
     assert ledger.bucket_balance(child, "laybye_hold") == 11_500
 
 
+def test_partial_prepayment_does_not_take_a_laybye_remainder():
+    """LOCKED_DECISIONS §4 and §13. The election applies only without a linked Laybye."""
+    later = date(2026, 12, 15)
+    paid_on = date(2026, 4, 2)
+    linked = Ledger()
+    parent, child = pair(linked, due=later)
+    grant_loan(
+        linked,
+        organisation_id="org-a",
+        parent_loan_id=parent.loan_id,
+        recognised_at=at(2026, 4, 1),
+        schedule=((later, 100_000),),
+    )
+    linked.levy_charge(
+        organisation_id="org-a",
+        loan_id=parent.loan_id,
+        bucket="interest",
+        cents=2_500,
+        due_on=paid_on,
+        recognised_at=at(2026, 4, 2, 8),
+        interest_cap_present=True,
+    )
+    hold_before = linked.bucket_balance(child, "laybye_hold")
+    allocation = allocate_receipt(
+        linked,
+        organisation_id="org-a",
+        parent_loan_id=parent.loan_id,
+        cents=4_000,
+        recognised_at=at(2026, 4, 2, 9),
+        attributed_due_on=paid_on,
+    )
+    assert allocation.loan_cents == 2_500
+    assert allocation.laybye_cents == 1_500
+    assert parent.slices[0].remaining_cents == 100_000
+    assert linked.bucket_balance(child, "laybye_hold") == hold_before + 1_500
+
+    bare = Ledger()
+    loan = bare.book(
+        organisation_id="org-a",
+        person_id="person-a",
+        product=micro_short_term(),
+        organisation=settings(),
+        recognised_at=at(2026, 4, 1),
+        cash_advanced_cents=100_000,
+        frequency="monthly",
+        schedule=((later, 100_000),),
+        identity_name="Ada Borrower",
+        identity_number="8001015800085",
+        service_address="1 Main Road, Cape Town",
+        initiation_fee_cents=0,
+    )
+    bare.levy_charge(
+        organisation_id="org-a",
+        loan_id=loan.loan_id,
+        bucket="interest",
+        cents=2_500,
+        due_on=paid_on,
+        recognised_at=at(2026, 4, 2, 8),
+        interest_cap_present=True,
+    )
+    bare.post_payment(
+        organisation_id="org-a",
+        loan_id=loan.loan_id,
+        cents=4_000,
+        recognised_at=at(2026, 4, 2, 9),
+        attributed_due_on=paid_on,
+    )
+    assert loan.slices[0].remaining_cents == 100_000 - 1_500
+    assert bare.bucket_balance(loan, "principal") == 100_000 - 1_500
+
+
 def test_due_principal_is_paid_before_the_laybye():
     ledger = Ledger()
     due = date(2026, 4, 2)

@@ -234,9 +234,9 @@ def allocate_receipt(
 
     Due amounts are whatever ``Ledger.section_126_cents`` reports from
     ``allocate_payment``. The receipt is posted by ``Ledger.post_payment``,
-    which credits any remainder to the Laybye when a child exists. This
-    does not apply the §13 partial-prepayment election to that remainder.
-    The lock does not say whether prepayment runs before the Laybye.
+    which credits any remainder to the Laybye when a child exists. The §13
+    partial-prepayment election applies only to a remainder that is not sent
+    to a linked Laybye. LOCKED_DECISIONS §4 and §13.
     """
     if cents <= 0:
         raise LaybyeError("payment", "A receipt must be positive.")

@@ -423,6 +423,35 @@ def test_same_day_capitalisation_is_applied_before_the_receipt(monkeypatch: pyte
     assert service_levies
     assert all(transaction.recognition_sequence < payment_tx.recognition_sequence for transaction in service_levies)
     assert may_accruals[0].memo_rands == Decimal("3.2258064516")
+    bills = [
+        transaction
+        for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id)
+        if transaction.kind == "interest_bill" and transaction.value_date == DUE
+    ]
+    assert len(bills) == 1
+    assert may_accruals[0].recognition_sequence < bills[0].recognition_sequence < payment_tx.recognition_sequence
+    memos = [
+        transaction.memo_rands or Decimal(0)
+        for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id)
+        if transaction.kind == "interest_accrual" and transaction.value_date <= DUE
+    ]
+    memos_before = [
+        transaction.memo_rands or Decimal(0)
+        for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id)
+        if transaction.kind == "interest_accrual" and transaction.value_date < DUE
+    ]
+    billed_before = sum(
+        entry.debit_cents
+        for transaction in svc.ledger.store.transactions_for(ORG, loan.loan_id)
+        if transaction.kind == "interest_bill" and transaction.value_date < DUE
+        for entry in transaction.entries
+        if entry.bucket == "interest"
+    )
+    bill_cents = sum(entry.debit_cents for entry in bills[0].entries if entry.bucket == "interest")
+    assert to_cents(sum(memos, Decimal(0))) > to_cents(sum(memos_before, Decimal(0)))
+    assert bill_cents == to_cents(sum(memos, Decimal(0))) - billed_before
+    due_interest = [charge for charge in loan.charges if charge.bucket == "interest" and charge.due_on == DUE]
+    assert due_interest
     assert may["loans"][0]["closing"]["interest"] == 0
     assert svc.ledger.bucket_balance(loan, "service") == 2_223
     assert svc.ledger.bucket_balance(loan, "principal") == CASH_CENTS
