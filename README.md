@@ -4,6 +4,8 @@ Post-origination loan management for South African credit providers. Read [docs/
 
 Servicing orchestration is `src/lms/servicing/`. It calls the calculation engine in `src/lms/calc/`, the configuration layer in `src/lms_config/`, and the ledger in `src/lms/ledger/`.
 
+The single-tenant AWS test deployment is described in [deploy/aws/README.md](deploy/aws/README.md).
+
 - [docs/servicing/primary-flows.md](docs/servicing/primary-flows.md)
 - [docs/servicing/implementation-design.md](docs/servicing/implementation-design.md)
 - [docs/servicing/implementation-note.md](docs/servicing/implementation-note.md)

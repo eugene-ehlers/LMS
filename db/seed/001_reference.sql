@@ -137,7 +137,10 @@ INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('SETTLEMENT_QUOTED', 'operational'),
   ('SETTLEMENT_REJECTED', 'operational'),
   ('SETTLEMENT_READVANCE', 'operational'),
-  ('IN_DUPLUM_CEILING', 'operational');
+  ('IN_DUPLUM_CEILING', 'operational')
+ON CONFLICT (code) DO NOTHING;
+-- 0010 and 0011 insert SETTLEMENT_READVANCE and IN_DUPLUM_CEILING.
+-- First start applies those migrations and then this seed, and keeps the row already stored.
 
 INSERT INTO lms.ref_audit_event_type (code, category) VALUES
   ('COLLECTION_CAMPAIGN_CHANGED', 'operational')

@@ -724,7 +724,15 @@ def build_app() -> StaffApp:
     return StaffApp(office, campaigns, access)
 
 
-def make_server(app: StaffApp, host: str, port: int) -> ThreadingHTTPServer:
+def make_server(app: StaffApp, host: str, port: int, front=None) -> ThreadingHTTPServer:
+    """Serve the staff screens.
+
+    ``front`` may handle a request before the staff screens. It receives
+    ``(method, path, form, session)`` and returns ``(status, content_type, body)``
+    or ``None`` to leave the request with the staff screens. ``/health`` never
+    opens a session.
+    """
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             self._go("GET")
@@ -737,6 +745,14 @@ def make_server(app: StaffApp, host: str, port: int) -> ThreadingHTTPServer:
             raw = self.rfile.read(length).decode("utf-8") if length else ""
             form = {key: values[-1] for key, values in parse_qs(raw, keep_blank_values=True).items()}
             split = urlsplit(self.path)
+            if split.path.rstrip("/") == "/health":
+                body = b"ok\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             query = {key: values[-1] for key, values in parse_qs(split.query, keep_blank_values=True).items()}
             cookies = _cookies(self.headers.get("Cookie", ""))
             token = cookies.get("staff_session", "")
@@ -744,10 +760,17 @@ def make_server(app: StaffApp, host: str, port: int) -> ThreadingHTTPServer:
             if fresh:
                 token = secrets.token_urlsafe(18)
                 app.sessions[token] = Session()
-            page = app.handle(app.sessions[token], method, split.path, form, query)
-            body = page.body.encode("utf-8")
-            self.send_response(page.status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            session = app.sessions[token]
+            handled = None if front is None else front(method, split.path, form, session)
+            if handled is None:
+                page = app.handle(session, method, split.path, form, query)
+                body = page.body.encode("utf-8")
+                status = page.status
+                content_type = "text/html; charset=utf-8"
+            else:
+                status, content_type, body = handled
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             if fresh:
                 self.send_header("Set-Cookie", f"staff_session={token}; HttpOnly; Path=/; SameSite=Lax")
